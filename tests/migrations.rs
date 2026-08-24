@@ -1,4 +1,6 @@
-use fleetd::{BlockDelivery, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage};
+use fleetd::{
+    ArmInvocation, BlockDelivery, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
+};
 use serde_json::json;
 use sqlx::{Connection, sqlite::SqliteConnectOptions};
 
@@ -96,16 +98,16 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
     assert!(!replayed.created);
     assert_eq!(created.message, replayed.message);
 
-    assert_blocking_works_after_migration(&store, &recipient.id, &created.message.id).await;
+    assert_managed_blocking_works_after_migration(&store, &recipient.id, &created.message.id).await;
 }
 
-async fn assert_blocking_works_after_migration(
+async fn assert_managed_blocking_works_after_migration(
     store: &fleetd::Store,
     recipient_id: &str,
     message_id: &str,
 ) {
     let batch = store
-        .claim_deliveries(
+        .reserve_invocations(
             recipient_id,
             ClaimDeliveries {
                 limit: 1,
@@ -113,13 +115,25 @@ async fn assert_blocking_works_after_migration(
             },
         )
         .await
-        .expect("claim delivery after migration");
+        .expect("reserve invocation after migration");
+    let invocation = batch.invocations.first().expect("one invocation");
+    store
+        .arm_invocation(
+            recipient_id,
+            &invocation.id,
+            ArmInvocation {
+                lease_token: invocation.lease_token.clone(),
+                fence_token: invocation.fence_token.clone(),
+            },
+        )
+        .await
+        .expect("arm invocation after migration");
     let (blocked, was_created) = store
         .block_delivery(
             recipient_id,
             message_id,
             BlockDelivery {
-                lease_token: batch.lease_token,
+                lease_token: invocation.lease_token.clone(),
                 reason: "migration smoke test".to_owned(),
             },
         )

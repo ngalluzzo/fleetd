@@ -60,7 +60,47 @@ cargo run -- --token-file .fleetd/weaver.token inbox claim \
   --agent Weaver_ID --limit 1 --lease-ms 300000
 ```
 
-After completing the work, it acknowledges the returned message and lease IDs:
+That low-level claim is appropriate for non-effectful or independently
+idempotent consumers. A managed harness controller uses an invocation
+reservation instead, which commits the lease and its durable execution record
+in one transaction:
+
+```sh
+cargo run -- --token-file .fleetd/weaver.token invocation reserve \
+  --agent Weaver_ID --limit 1 --lease-ms 300000
+```
+
+Immediately before sending an effectful prompt or tool request, the controller
+commits the returned write-ahead fence:
+
+```sh
+cargo run -- --token-file .fleetd/weaver.token invocation arm \
+  --agent Weaver_ID --invocation INVOCATION_ID \
+  --lease LEASE_TOKEN --fence FENCE_TOKEN
+```
+
+The effect must never be sent before `arm` succeeds. If the controller crashes
+before arming, fleetd proves that attempt `not_started` and may reclaim it. If
+it crashes after arming, lease recovery records `outcome_unknown` and blocks
+the delivery instead of executing it again. Operators can audit the ledger
+with `cargo run -- invocation list`.
+
+After a known successful turn, completion publishes the correlated result and
+acknowledges the input in one commit:
+
+```sh
+cargo run -- --token-file .fleetd/weaver.token invocation complete \
+  --agent Weaver_ID --invocation INVOCATION_ID \
+  --lease LEASE_TOKEN --fence FENCE_TOKEN \
+  --kind work.result/v1 --payload '{"status":"done"}'
+```
+
+The result is addressed to the input sender in the same channel. Its causation
+is the input message, its correlation is preserved, and an identical completion
+retry returns the original result without publishing or delivering it twice.
+
+For the low-level claim path, successful work is acknowledged with the returned
+message and lease IDs:
 
 ```sh
 cargo run -- --token-file .fleetd/weaver.token inbox ack --agent Weaver_ID \
@@ -100,11 +140,11 @@ and optional correlation and causation IDs.
 
 Every versioned API request requires an operator or agent-bound bearer
 credential. Administrative actions require the operator. Claim, acknowledge,
-retry, and block operations are restricted to the credential's agent; only the
-operator can inspect or resolve blocked work. Message attribution is
-constructed by the server rather than accepted from request data. Raw tokens
-are returned once and stored only in owner-readable files; SQLite contains
-cryptographic digests.
+retry, block, reservation, dispatch arming, and completion are restricted to
+the credential's agent; only the operator can inspect invocations or resolve
+blocked work. Message attribution is constructed by the server rather than
+accepted from request data. Raw tokens are returned once and stored only in
+owner-readable files; SQLite contains cryptographic digests.
 
 The daemon still rejects non-loopback listen addresses. Authentication is not a
 substitute for encrypted transport, so remote workers remain unsupported until
@@ -124,7 +164,8 @@ qualified against Codex and DSH; fleetd adds only durable invocation, fencing,
 deadline, and evidence semantics around the standard harness protocol. See
 [the harness execution architecture](docs/HARNESS_EXECUTION.md),
 [ADR 0004](docs/adr/0004-out-of-process-capability-plugins.md),
-[ADR 0005](docs/adr/0005-acp-harness-boundary.md), and the
+[ADR 0005](docs/adr/0005-acp-harness-boundary.md),
+[ADR 0008](docs/adr/0008-write-ahead-invocation-fence.md), and the
 [lifecycle v1 contract](docs/contracts/plugin-lifecycle-v1.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),

@@ -35,6 +35,17 @@ keeps retry policy outside harness stop reasons while giving the future worker
 controller a conservative kernel primitive. See
 [ADR 0007](adr/0007-durable-blocked-deliveries.md).
 
+Managed controllers claim through an outer invocation module rather than
+leasing and then recording intent in two writes. Reservation atomically creates
+the lease and invocation fence. A second write-ahead transition arms dispatch;
+the controller may perform an external effect only after it commits. Recovery
+can therefore distinguish a provably unstarted reservation from an armed
+attempt whose outcome is unknown. All claim paths apply that recovery before
+selecting work. Known success crosses the other crash boundary with one atomic
+completion: append the correlated idempotent result, snapshot its recipients,
+acknowledge the input, and terminalize the invocation. See
+[ADR 0008](adr/0008-write-ahead-invocation-fence.md).
+
 Agent-scoped idempotency keys make message publication safely retryable after a
 lost response. The original message and delivery snapshot are returned for an
 identical replay; conflicting key reuse fails closed. This lets a future worker
@@ -74,7 +85,8 @@ The next layer implements one generic ACP driver plugin and qualifies it
 against Codex and DSH. ACP remains the inner harness protocol; a narrow fleetd
 capability adds durable invocation identity, session fencing, deadlines, and
 evidence without exposing a generic protocol tunnel. An authenticated worker
-controller leases addressed messages, invokes that capability, posts
+controller reserves addressed messages, arms the write-ahead dispatch fence,
+invokes that capability, posts
 idempotent correlated responses, and settles the lease. Invocation, resumption,
 retry policy, and restart policy remain outside the messaging kernel. See the
 [harness execution architecture](HARNESS_EXECUTION.md) and

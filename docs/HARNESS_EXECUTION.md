@@ -152,8 +152,10 @@ default is rotation.
 ## Durable control records
 
 These are controller records in the authoritative node SQLite database, kept
-outside the messaging kernel module. This is a logical schema, not yet a
-migration.
+outside the messaging kernel module. The write-ahead invocation reservation is
+implemented by [ADR 0008](adr/0008-write-ahead-invocation-fence.md); profiles,
+plugin generations, session bindings, and the richer execution ledger remain a
+logical target rather than a migration.
 
 ### `harness_profiles`
 
@@ -215,6 +217,14 @@ One durable attempt to process a delivery:
 - terminal stop reason, execution certainty, retry advice, and admission
   decision;
 - deterministic result idempotency key and committed result message ID.
+
+The implemented foundation currently stores
+`reserved | dispatch_armed | terminal`, the delivery attempt and lease, a
+separate fence token, timestamps, terminal certainty, and terminal reason.
+`dispatch_armed` is the durable write-ahead point immediately before
+`turn.start`; the intermediate runtime states above arrive with the managed
+controller and do not weaken that ordering. Atomic completion also stores the
+committed result message reference while acknowledging the input delivery.
 
 ### `invocation_events`
 
@@ -287,6 +297,8 @@ sequenceDiagram
     P->>A: initialize, then session/new or session/load
     A-->>P: native session reference + effective capabilities
     P-->>C: session ready
+    C->>K: arm invocation dispatch fence
+    K-->>C: durable dispatch authorization
     C->>P: turn.start (invocation fence + prompt + policy)
     P->>A: session/prompt
     A-->>P: session/update events
@@ -363,7 +375,8 @@ a completed turn and verifies continuity.
 stateDiagram-v2
     [*] --> Reserved
     Reserved --> Opening
-    Opening --> Accepted: plugin accepted fenced turn
+    Opening --> DispatchArmed: durable write-ahead fence
+    DispatchArmed --> Accepted: plugin accepted fenced turn
     Accepted --> Running: first activity
     Running --> Cancelling: operator or budget requests cancellation
     Cancelling --> Draining
@@ -371,6 +384,7 @@ stateDiagram-v2
     Draining --> Terminal: cancelled response + terminal updates
     Reserved --> Terminal: failed before prompt write
     Opening --> Terminal: failed before prompt write
+    DispatchArmed --> Terminal: process/transport lost
     Accepted --> Terminal: process/transport lost
     Running --> Terminal: process/transport lost
     Draining --> Terminal: drain deadline expired
@@ -403,10 +417,11 @@ policy.
 
 The delivery API provides an explicit, durable `blocked` settlement. The active
 agent lease can park bounded ambiguity evidence, but only an operator can
-requeue or abandon the exact block record. This prevents automatic execution
-after lease expiry. A future controller still needs its invocation ledger to
-recover a crash that occurred before it recorded the block and to apply a
-versioned policy to the evidence.
+requeue or abandon the exact block record. The write-ahead invocation ledger
+also distinguishes an expired unarmed reservation from an armed dispatch: the
+former is safely reclaimable as `not_started`, while the latter is atomically
+parked as `outcome_unknown`. The future managed controller still applies the
+versioned policy and richer evidence around that primitive.
 
 ## Budgets are claims with enforcement strength
 
@@ -572,13 +587,10 @@ these prerequisites:
    continuously driven receiver with explicit backpressure. The ACP driver
    should coalesce token fragments into bounded ordered batches; it must not
    emit one fleet event per decoded token.
-4. **Durable invocation reservation.** Inbox claim and invocation creation
-   need one transaction in the embedded controller so a restart can distinguish
-   unstarted work from an unrecorded attempt.
-5. **Effective instance evidence.** Persist the lifecycle instance ID,
+4. **Effective instance evidence.** Persist the lifecycle instance ID,
    profile digest, inner executable identity, observed ACP initialize result,
    and exit evidence together; desired config alone is insufficient.
-6. **Bounded artifact capture.** Inner ACP frames may exceed fleetd's one-MiB
+5. **Bounded artifact capture.** Inner ACP frames may exceed fleetd's one-MiB
    outer frame. Add a content-addressed evidence sink or emit an explicit
    truncated prefix, full-byte count, and digest. Oversized data must never be
    silently dropped or smuggled through larger lifecycle frames.
@@ -586,12 +598,14 @@ these prerequisites:
 These are reliability requirements for the first vertical loop, not a request
 to expand the messaging kernel with harness semantics.
 
-Two required messaging foundations are already implemented: agent-scoped
-idempotent append in [ADR 0006](adr/0006-idempotent-message-append.md), and
-durable unknown-outcome parking in
-[ADR 0007](adr/0007-durable-blocked-deliveries.md). The controller can use a
-deterministic invocation-result key at the final commit boundary and park an
-ambiguous attempt without making it automatically claimable.
+Three required foundations are already implemented: agent-scoped idempotent
+append in [ADR 0006](adr/0006-idempotent-message-append.md), durable
+unknown-outcome parking in
+[ADR 0007](adr/0007-durable-blocked-deliveries.md), and atomic reservation plus
+dispatch arming in [ADR 0008](adr/0008-write-ahead-invocation-fence.md). The
+controller can use a deterministic invocation-result key at the final commit
+boundary, publishes that result and acknowledges the input atomically, and
+cannot automatically reclaim an armed ambiguous attempt.
 
 ## First implementation acceptance matrix
 

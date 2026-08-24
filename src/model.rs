@@ -213,6 +213,75 @@ pub struct ResolveDeliveryBlock {
     pub note: Option<String>,
 }
 
+/// Durable lifecycle state for one managed delivery attempt.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvocationState {
+    Reserved,
+    DispatchArmed,
+    Terminal,
+}
+
+/// What fleetd can prove about an invocation's external execution.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionCertainty {
+    NotStarted,
+    OutcomeKnown,
+    OutcomeUnknown,
+}
+
+/// One durable managed attempt reserved together with its inbox lease.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Invocation {
+    pub id: String,
+    pub agent_id: String,
+    pub message: Message,
+    pub delivery_attempt: i64,
+    pub lease_token: String,
+    pub lease_expires_at_ms: i64,
+    pub fence_token: String,
+    pub state: InvocationState,
+    pub reserved_at_ms: i64,
+    pub dispatch_armed_at_ms: Option<i64>,
+    pub terminal_at_ms: Option<i64>,
+    pub execution_certainty: Option<ExecutionCertainty>,
+    pub terminal_reason: Option<String>,
+    pub result_message_id: Option<String>,
+}
+
+/// A batch of delivery attempts atomically leased and durably reserved.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct InvocationBatch {
+    pub invocations: Vec<Invocation>,
+}
+
+/// Input for the write-ahead fence immediately before effectful dispatch.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArmInvocation {
+    pub lease_token: String,
+    pub fence_token: String,
+}
+
+/// Input for atomically publishing one result and acknowledging its invocation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompleteInvocation {
+    pub lease_token: String,
+    pub fence_token: String,
+    #[serde(default = "default_message_kind")]
+    pub kind: String,
+    pub payload: Value,
+}
+
+/// Durable result of completing one managed invocation.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct InvocationCompletion {
+    pub invocation: Invocation,
+    pub result: Message,
+}
+
 fn empty_object() -> Value {
     json!({})
 }

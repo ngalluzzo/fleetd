@@ -5,7 +5,7 @@ use crate::{
     error::FleetError,
     model::{
         BlockDelivery, BlockResolution, BlockedDelivery, ClaimBatch, ClaimDeliveries, Delivery,
-        ResolveDeliveryBlock, RetryDelivery,
+        ExecutionCertainty, ResolveDeliveryBlock, RetryDelivery,
     },
     store::{Store, message_from_row, now_ms},
 };
@@ -39,7 +39,8 @@ impl Store {
             .ok_or_else(|| FleetError::Invalid("lease expiry overflowed".to_owned()))?;
         let lease_token = Uuid::new_v4().to_string();
         ensure_agent(&self.pool, agent_id).await?;
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        crate::invocation::recover_expired_invocations(&mut transaction, agent_id, now).await?;
         sqlx::query(
             r"
             UPDATE agent_deliveries
@@ -112,6 +113,7 @@ impl Store {
     ) -> Result<(), FleetError> {
         validate_token(lease_token)?;
         let now = now_ms();
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let result = sqlx::query(
             r"
             UPDATE agent_deliveries
@@ -134,11 +136,23 @@ impl Store {
         .bind(message_id)
         .bind(lease_token)
         .bind(now)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
         if result.rows_affected() == 1 {
+            crate::invocation::terminalize_invocation(
+                &mut transaction,
+                agent_id,
+                message_id,
+                lease_token,
+                ExecutionCertainty::OutcomeKnown,
+                "acknowledged",
+                now,
+            )
+            .await?;
+            transaction.commit().await?;
             return Ok(());
         }
+        transaction.rollback().await?;
         settle_miss(
             &self.pool,
             agent_id,
@@ -171,6 +185,14 @@ impl Store {
         let available_at_ms = now
             .checked_add(retry_delay)
             .ok_or_else(|| FleetError::Invalid("retry time overflowed".to_owned()))?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        crate::invocation::ensure_retry_is_safe(
+            &mut transaction,
+            agent_id,
+            message_id,
+            &input.lease_token,
+        )
+        .await?;
         let result = sqlx::query(
             r"
             UPDATE agent_deliveries
@@ -196,11 +218,23 @@ impl Store {
         .bind(message_id)
         .bind(&input.lease_token)
         .bind(now)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
         if result.rows_affected() == 1 {
+            crate::invocation::terminalize_invocation(
+                &mut transaction,
+                agent_id,
+                message_id,
+                &input.lease_token,
+                ExecutionCertainty::NotStarted,
+                "retry",
+                now,
+            )
+            .await?;
+            transaction.commit().await?;
             return Ok(());
         }
+        transaction.rollback().await?;
         settle_miss(
             &self.pool,
             agent_id,
@@ -258,6 +292,16 @@ impl Store {
         if result.rows_affected() == 1 {
             let block_id =
                 insert_block_record(&mut transaction, agent_id, message_id, &input, now).await?;
+            crate::invocation::terminalize_invocation(
+                &mut transaction,
+                agent_id,
+                message_id,
+                &input.lease_token,
+                ExecutionCertainty::OutcomeUnknown,
+                "blocked",
+                now,
+            )
+            .await?;
             let blocked = blocked_delivery_by_id(&mut transaction, block_id).await?;
             transaction.commit().await?;
             return Ok((blocked, true));
@@ -369,7 +413,7 @@ impl Store {
     }
 }
 
-fn validate_claim(input: &ClaimDeliveries) -> Result<(), FleetError> {
+pub(crate) fn validate_claim(input: &ClaimDeliveries) -> Result<(), FleetError> {
     if input.limit == 0 || input.limit > MAX_CLAIM_LIMIT {
         return Err(FleetError::Invalid(format!(
             "claim limit must be between 1 and {MAX_CLAIM_LIMIT}"
@@ -447,7 +491,10 @@ fn validate_token(lease_token: &str) -> Result<(), FleetError> {
     Ok(())
 }
 
-async fn ensure_agent(pool: &sqlx::SqlitePool, agent_id: &str) -> Result<(), FleetError> {
+pub(crate) async fn ensure_agent(
+    pool: &sqlx::SqlitePool,
+    agent_id: &str,
+) -> Result<(), FleetError> {
     let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agents WHERE id = ?")
         .bind(agent_id)
         .fetch_one(pool)

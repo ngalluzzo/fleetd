@@ -106,6 +106,65 @@ unclaimable state and requires a zero retry delay. The resolution record is
 durable. Repeating an identical decision is idempotent, while a different
 second decision returns `409 Conflict`.
 
+### Managed invocation fence
+
+Effectful harness controllers use
+`POST /v1/agents/{agent_id}/invocations/reserve` instead of a raw claim. The
+request has the same bounded `limit` and `lease_duration_ms`, but fleetd creates
+one invocation row per leased delivery in the same immediate SQLite
+transaction. Each response contains the immutable input message, delivery
+attempt, lease and expiry, invocation ID, and a separate fence token.
+
+The invocation begins as `reserved`, which means fleetd has not authorized the
+controller to send an effectful request. Immediately before that send, the
+controller calls
+`POST /v1/agents/{agent_id}/invocations/{invocation_id}/arm` with both tokens.
+The call changes the state to `dispatch_armed` and must commit before the
+effect leaves the controller. An identical arm replay is idempotent while the
+lease is live. A stale lease or mismatched fence returns `409 Conflict`.
+
+Every inbox claim runs managed recovery first:
+
+- An expired `reserved` invocation becomes terminal with certainty
+  `not_started`; its delivery may be leased as a new attempt.
+- An expired `dispatch_armed` invocation becomes terminal with certainty
+  `outcome_unknown`; its delivery and recovery evidence are atomically moved to
+  the blocked queue.
+
+This is a write-ahead safety fence. The crash between the durable arm and the
+actual send may conservatively block work that never started, but no crash can
+make an armed attempt automatically execute again. A raw inbox claim creates no
+invocation record and therefore retains ordinary at-least-once semantics.
+
+Delivery settlement closes the matching invocation in the same transaction.
+Acknowledgement records `outcome_known`; retry before arming records
+`not_started`; block records `outcome_unknown`. Ordinary retry is rejected once
+dispatch is armed. Operators may inspect the latest records with
+`GET /v1/invocations`, optionally filtered by `?agent=...`. See
+[ADR 0008](adr/0008-write-ahead-invocation-fence.md).
+
+A known successful turn uses
+`POST /v1/agents/{agent_id}/invocations/{invocation_id}/complete`:
+
+```json
+{
+  "lease_token": "delivery-lease",
+  "fence_token": "invocation-fence",
+  "kind": "work.result/v1",
+  "payload": { "status": "done" }
+}
+```
+
+Completion requires a live `dispatch_armed` invocation. In one immediate
+transaction it appends a deterministic idempotent result, snapshots its
+delivery, acknowledges the input, and terminalizes the invocation as
+`outcome_known`. The result is sent directly to the input sender in the same
+channel, preserves the input correlation ID, and sets causation to the input
+message ID. The first completion returns `201 Created`; an identical replay,
+including after lease expiry or restart, returns the original invocation and
+message with `200 OK`. Changed result content returns `409 Conflict` and replay
+does not emit another live notification.
+
 Delivery is at-least-once. The stable message ID is the idempotency key for
 external effects; fleetd does not claim exactly-once execution across another
 system's boundary. Blocking prevents a known ambiguity from being retried
@@ -117,7 +176,8 @@ Every `/v1` HTTP request and WebSocket upgrade requires the header
 `Authorization: Bearer <token>`. Health checks remain public. Operator
 credentials administer agents, credentials, channels, membership, and blocked
 delivery resolution. Agent credentials send messages, access member channels,
-and claim or settle only their own inbox.
+claim or settle only their own inbox, and reserve, arm, or complete only their
+own invocations. Invocation inspection is operator-only.
 
 The message-send body deliberately has no `sender_id` field. Unknown fields are
 rejected, and the server writes the authenticated agent ID into the immutable

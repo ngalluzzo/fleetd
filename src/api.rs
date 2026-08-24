@@ -17,8 +17,9 @@ use crate::{
     auth::{AuthService, Principal},
     error::FleetError,
     model::{
-        AckDelivery, AddMember, BlockDelivery, ClaimDeliveries, CreateAgent, CreateChannel,
-        CreateMessage, Message, ResolveDeliveryBlock, RetryDelivery, SendMessage,
+        AckDelivery, AddMember, ArmInvocation, BlockDelivery, ClaimDeliveries, CompleteInvocation,
+        CreateAgent, CreateChannel, CreateMessage, Message, ResolveDeliveryBlock, RetryDelivery,
+        SendMessage,
     },
     store::Store,
 };
@@ -80,6 +81,19 @@ pub fn router(state: AppState) -> Router {
             "/v1/delivery-blocks/{block_id}/resolve",
             post(resolve_delivery_block),
         )
+        .route(
+            "/v1/agents/{agent_id}/invocations/reserve",
+            post(reserve_invocations),
+        )
+        .route(
+            "/v1/agents/{agent_id}/invocations/{invocation_id}/arm",
+            post(arm_invocation),
+        )
+        .route(
+            "/v1/agents/{agent_id}/invocations/{invocation_id}/complete",
+            post(complete_invocation),
+        )
+        .route("/v1/invocations", get(list_invocations))
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
     Router::new()
         .route("/health", get(health))
@@ -259,6 +273,71 @@ async fn resolve_delivery_block(
     require_operator(&principal)?;
     state.store.resolve_delivery_block(block_id, input).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn reserve_invocations(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path(agent_id): Path<String>,
+    Json(input): Json<ClaimDeliveries>,
+) -> Result<Json<crate::model::InvocationBatch>, FleetError> {
+    require_bound_agent(&principal, &agent_id)?;
+    Ok(Json(
+        state.store.reserve_invocations(&agent_id, input).await?,
+    ))
+}
+
+async fn arm_invocation(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path((agent_id, invocation_id)): Path<(String, String)>,
+    Json(input): Json<ArmInvocation>,
+) -> Result<Json<crate::model::Invocation>, FleetError> {
+    require_bound_agent(&principal, &agent_id)?;
+    Ok(Json(
+        state
+            .store
+            .arm_invocation(&agent_id, &invocation_id, input)
+            .await?,
+    ))
+}
+
+async fn complete_invocation(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path((agent_id, invocation_id)): Path<(String, String)>,
+    Json(input): Json<CompleteInvocation>,
+) -> Result<(StatusCode, Json<crate::model::InvocationCompletion>), FleetError> {
+    require_bound_agent(&principal, &agent_id)?;
+    let (completion, created) = state
+        .store
+        .complete_invocation(&agent_id, &invocation_id, input)
+        .await?;
+    if created {
+        let _unused = state.messages.send(completion.result.clone());
+    }
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(completion)))
+}
+
+#[derive(Deserialize)]
+struct InvocationQuery {
+    agent: Option<String>,
+}
+
+async fn list_invocations(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<InvocationQuery>,
+) -> Result<Json<Vec<crate::model::Invocation>>, FleetError> {
+    require_operator(&principal)?;
+    Ok(Json(
+        state.store.list_invocations(query.agent.as_deref()).await?,
+    ))
 }
 
 async fn append_message(

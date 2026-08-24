@@ -8,9 +8,9 @@ use std::{
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleetd::{
-    AckDelivery, AddMember, AppState, AuthService, BlockDelivery, BlockResolution, ClaimDeliveries,
-    CreateAgent, CreateChannel, IssuedCredential, MessagePage, RegisteredAgent,
-    ResolveDeliveryBlock, RetryDelivery, SendMessage, Store, router,
+    AckDelivery, AddMember, AppState, ArmInvocation, AuthService, BlockDelivery, BlockResolution,
+    ClaimDeliveries, CompleteInvocation, CreateAgent, CreateChannel, IssuedCredential, MessagePage,
+    RegisteredAgent, ResolveDeliveryBlock, RetryDelivery, SendMessage, Store, router,
 };
 use futures_util::StreamExt;
 use serde::Serialize;
@@ -47,6 +47,10 @@ enum Command {
     Inbox {
         #[command(subcommand)]
         command: InboxCommand,
+    },
+    Invocation {
+        #[command(subcommand)]
+        command: InvocationCommand,
     },
 }
 
@@ -190,6 +194,48 @@ enum InboxCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum InvocationCommand {
+    Reserve {
+        #[arg(long)]
+        agent: String,
+        #[arg(long, default_value_t = 1)]
+        limit: u32,
+        #[arg(long, default_value_t = 300_000)]
+        lease_ms: u64,
+    },
+    Arm {
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        invocation: String,
+        #[arg(long)]
+        lease: String,
+        #[arg(long)]
+        fence: String,
+    },
+    Complete {
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        invocation: String,
+        #[arg(long)]
+        lease: String,
+        #[arg(long)]
+        fence: String,
+        #[arg(long, default_value = "text")]
+        kind: String,
+        #[arg(long, conflicts_with = "payload")]
+        text: Option<String>,
+        #[arg(long)]
+        payload: Option<String>,
+    },
+    List {
+        #[arg(long)]
+        agent: Option<String>,
+    },
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum ResolutionArg {
     Requeue,
@@ -232,6 +278,13 @@ pub async fn run() -> MainResult<()> {
         }
         Command::Inbox { command } => {
             inbox_command(
+                &ApiClient::load(&cli.server, cli.token_file.as_deref())?,
+                command,
+            )
+            .await
+        }
+        Command::Invocation { command } => {
+            invocation_command(
                 &ApiClient::load(&cli.server, cli.token_file.as_deref())?,
                 command,
             )
@@ -491,6 +544,72 @@ async fn message_command(api: &ApiClient, command: MessageCommand) -> MainResult
         }
         MessageCommand::Watch { channel, after } => watch(api, &channel, after).await,
     }
+}
+
+async fn invocation_command(api: &ApiClient, command: InvocationCommand) -> MainResult<()> {
+    let response = match command {
+        InvocationCommand::Reserve {
+            agent,
+            limit,
+            lease_ms,
+        } => {
+            api.post(&format!("/v1/agents/{agent}/invocations/reserve"))
+                .json(&ClaimDeliveries {
+                    limit,
+                    lease_duration_ms: lease_ms,
+                })
+                .send()
+                .await?
+        }
+        InvocationCommand::Arm {
+            agent,
+            invocation,
+            lease,
+            fence,
+        } => {
+            api.post(&format!("/v1/agents/{agent}/invocations/{invocation}/arm"))
+                .json(&ArmInvocation {
+                    lease_token: lease,
+                    fence_token: fence,
+                })
+                .send()
+                .await?
+        }
+        InvocationCommand::Complete {
+            agent,
+            invocation,
+            lease,
+            fence,
+            kind,
+            text,
+            payload,
+        } => {
+            let payload = match (text, payload) {
+                (Some(text), None) => json!({ "text": text }),
+                (None, Some(payload)) => parse_json(&payload)?,
+                (None, None) => json!({}),
+                (Some(_), Some(_)) => {
+                    return Err("invocation result text and payload are mutually exclusive".into());
+                }
+            };
+            api.post(&format!(
+                "/v1/agents/{agent}/invocations/{invocation}/complete"
+            ))
+            .json(&CompleteInvocation {
+                lease_token: lease,
+                fence_token: fence,
+                kind,
+                payload,
+            })
+            .send()
+            .await?
+        }
+        InvocationCommand::List { agent } => {
+            let query = agent.map_or_else(String::new, |agent| format!("?agent={agent}"));
+            api.get(&format!("/v1/invocations{query}")).send().await?
+        }
+    };
+    print_response(response).await
 }
 
 async fn watch(api: &ApiClient, channel: &str, after: i64) -> MainResult<()> {

@@ -374,7 +374,7 @@ fn message_matches_input(message: &Message, channel_id: &str, input: &CreateMess
         && message.causation_id == input.causation_id
 }
 
-async fn insert_message(
+pub(crate) async fn insert_message(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     channel_id: &str,
     input: CreateMessage,

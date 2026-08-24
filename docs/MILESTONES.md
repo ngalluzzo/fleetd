@@ -13,6 +13,8 @@
 - [x] Out-of-process plugin lifecycle and exact capability negotiation.
 - A durable invocation ledger with session generations, owner fencing, and
   idempotent result append.
+- [x] Atomic delivery reservation and write-ahead invocation dispatch fence.
+- [x] Atomic idempotent result publication and input acknowledgement.
 - One generic ACP driver qualified against Codex and DSH.
 - A managed worker controller that consumes addressed messages and replies
   with correlation and causation intact.

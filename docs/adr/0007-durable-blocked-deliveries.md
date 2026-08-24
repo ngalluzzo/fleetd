@@ -49,5 +49,6 @@ adding harness semantics to the kernel.
 This is not exactly-once execution. A controller can still crash after an
 external effect and before recording a block. Durable invocation reservation
 and recovery policy must identify that window before a reclaimed delivery is
-executed again. Block reasons may also contain sensitive tool evidence, so
-adapters must redact them before submission.
+executed again; [ADR 0008](0008-write-ahead-invocation-fence.md) supplies that
+write-ahead boundary. Block reasons may also contain sensitive tool evidence,
+so adapters must redact them before submission.
