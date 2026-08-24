@@ -22,3 +22,10 @@ files are immutable after they have shipped; correct them with a new migration.
 Credential-bearing types must redact secrets from `Debug`. Authentication must
 remain read-only on the request hot path, and authorization changes require
 cross-principal integration tests.
+
+Plugin lifecycle changes must test both a conforming child process and the
+failure boundary they affect, such as malformed frames, timeouts, capability or
+identity mismatches, unexpected exits, or shutdown overruns. Keep lifecycle
+transport separate from domain capability contracts; a capability should be
+stabilized only after at least two implementations demonstrate the shared
+semantics.

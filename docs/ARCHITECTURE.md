@@ -38,11 +38,30 @@ inbox is the work guarantee. See
 - Harness execution and workflow policy live outside the kernel.
 - Git remains Git; fleetd will coordinate adapters instead of hosting it.
 
+## Plugin boundary
+
+Domain-specific code runs in separately versioned child processes rather than
+inside the kernel or as Rust dynamic libraries. A strict lifecycle transport
+launches an absolute executable without a shell, clears its environment, bounds
+JSON-RPC frames and request deadlines, validates its identity and exact
+capabilities, and terminates it on failed startup or shutdown overrun.
+
+The boundary isolates crashes and language/toolchain choices; it is not an
+operating-system security sandbox. Plugins receive only explicit opaque
+configuration and no fleetd bearer credentials. Capability adapters will
+mediate durable inbox work without granting plugins ambient access to kernel
+storage or authority. See
+[ADR 0004](adr/0004-out-of-process-capability-plugins.md) and the
+[lifecycle v1 contract](contracts/plugin-lifecycle-v1.md).
+
 ## Next boundary
 
-The next layer authenticates an inbox adapter as one agent. It leases addressed
-messages, invokes a harness, posts correlated responses, and settles the lease.
-Harness invocation and session resumption remain outside the messaging kernel.
+The next layer implements Codex and DSH plugins together, then extracts only
+their demonstrated common invocation and session-resumption semantics into a
+versioned harness capability. An authenticated adapter leases addressed
+messages, invokes that capability, posts correlated responses, and settles the
+lease. Invocation, resumption, retry policy, and restart policy remain outside
+the messaging kernel.
 
 ## Identity boundary
 

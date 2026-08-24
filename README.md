@@ -82,6 +82,20 @@ The daemon still rejects non-loopback listen addresses. Authentication is not a
 substitute for encrypted transport, so remote workers remain unsupported until
 TLS and enrollment are designed.
 
+## Plugin boundary
+
+Harnesses and other domain behavior run outside the daemon as child-process
+plugins. fleetd provides a small, versioned lifecycle over newline-framed
+JSON-RPC: initialize, negotiate exact capabilities, check readiness, and shut
+down within a deadline. It launches absolute executables directly with an empty
+environment and does not give plugins fleetd credentials.
+
+This is the isolation and negotiation foundation, not a generic `execute`
+contract or an automatic restart manager. The first Codex and DSH adapters will
+be built side by side so their shared behavior can earn a narrow harness
+capability contract. See [ADR 0004](docs/adr/0004-out-of-process-capability-plugins.md)
+and the [lifecycle v1 contract](docs/contracts/plugin-lifecycle-v1.md).
+
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [protocol](docs/PROTOCOL.md), and [milestones](docs/MILESTONES.md) for the
 intended boundaries and next slices.

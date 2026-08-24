@@ -5,6 +5,7 @@ pub mod auth;
 mod delivery;
 pub mod error;
 pub mod model;
+pub mod plugin;
 pub mod store;
 
 pub use api::{AppState, router};
@@ -14,5 +15,9 @@ pub use model::{
     AckDelivery, AddMember, Agent, Channel, ClaimBatch, ClaimDeliveries, CreateAgent,
     CreateChannel, CreateMessage, Delivery, IssuedCredential, Message, MessagePage,
     RegisteredAgent, RetryDelivery, SendMessage,
+};
+pub use plugin::{
+    Capability, PluginError, PluginExit, PluginIdentity, PluginManifest, PluginNotification,
+    PluginProcess, PluginSpec, ShutdownOutcome,
 };
 pub use store::Store;

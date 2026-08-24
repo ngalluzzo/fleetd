@@ -16,6 +16,13 @@ Read `VISION.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, and
   authenticated principal, not caller-supplied identity fields.
 - Keep network listeners on loopback until encrypted transport and enrollment
   are explicitly implemented.
+- Put domain behavior in out-of-process plugins with narrow, independently
+  versioned capabilities. Do not add a generic execution escape hatch.
+- Launch plugin executables directly without a shell. Plugin stdout is protocol
+  traffic only, and plugins must not receive fleetd credentials or ambient
+  environment variables.
+- Exercise a proposed capability in at least two real implementations before
+  treating its contract as stable.
 - Reuse Git, harnesses, parsers, and model servers instead of rebuilding them.
 - Run formatting, clippy with warnings denied, and all tests before claiming a
   change is complete.

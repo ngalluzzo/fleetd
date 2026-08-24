@@ -10,6 +10,7 @@
 ## M1 — Harness inbox
 
 - [x] Local bearer credentials bound to agent identities.
+- [x] Out-of-process plugin lifecycle and exact capability negotiation.
 - A generic adapter SDK.
 - Codex and DSH adapters that consume addressed messages and reply with
   correlation and causation intact.
