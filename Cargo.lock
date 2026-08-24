@@ -836,6 +836,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleetd-harness-codex"
+version = "0.1.0"
+dependencies = [
+ "fleetd",
+ "fleetd-acp-host",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "fleetd-harness-opencode"
 version = "0.1.0"
 dependencies = [

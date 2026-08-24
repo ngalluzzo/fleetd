@@ -1,0 +1,29 @@
+[package]
+name = "fleetd-harness-codex"
+version = "0.1.0"
+edition = "2024"
+description = "Codex harness plugin for fleetd"
+license = "MIT"
+autoexamples = false
+
+[[example]]
+name = "qualify-codex"
+path = "examples/qualify.rs"
+
+[dependencies]
+fleetd-acp-host = { path = "../../crates/acp-host" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+fleetd = { path = "../.." }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
