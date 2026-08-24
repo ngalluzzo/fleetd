@@ -23,6 +23,14 @@ qualification run. Without it, the process polls until `Ctrl-C`. Run only one
 seat for a given agent during this first slice; durable session fencing remains
 safe with competing processes, but they will produce avoidable retries.
 
+The semantic-neutral envelope adapter accepts every addressed message. Because
+successful settlement also publishes a result to the input sender, do not yet
+run mutually addressed envelope seats as an unbounded loop: they can consume
+generic completion results as new work. Use bounded `--once` runs or the strict
+capability-work adapter until a versioned inbound acceptance policy is
+available. This eligibility rule belongs at the adapter boundary, not in the
+messaging kernel.
+
 The worker configuration schema is versioned and rejects unknown fields. Each
 harness plugin then validates its own opaque configuration with a strict
 plugin-owned schema. Never put a fleetd bearer credential, provider key, or

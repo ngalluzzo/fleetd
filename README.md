@@ -213,9 +213,13 @@ For closed-loop delegation, opt a worker into the narrow
 `fleet.messaging.send` grant. Fleetd resolves the name to an ephemeral
 controller-owned MCP endpoint; the harness receives no fleet bearer. A real
 OpenCode turn has used it to commit an idempotent peer message with
-controller-derived attribution, correlation, and causation. See the
+controller-derived attribution, correlation, and causation. A bounded
+two-seat A -> B -> A run also preserved exact lineage and resumed A's native
+session after worker restart. It exposed the remaining need for versioned
+inbound acceptance before unbounded multi-seat operation. See the
 [worker guide](docs/WORKER.md) and
-[qualification record](docs/qualification/message-capability-opencode-2026-08-24.md).
+[single-hop qualification](docs/qualification/message-capability-opencode-2026-08-24.md)
+and [two-seat qualification](docs/qualification/two-seat-opencode-loop-2026-08-24.md).
 
 ## Capability work dogfood
 
