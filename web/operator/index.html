@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blocked deliveries | fleetd</title>
+  <link rel="stylesheet" href="/operator/operator.css">
+  <script src="/operator/operator.js" defer></script>
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">fleetd / operator</p>
+      <h1>blocked<span>/</span>deliveries</h1>
+      <p>Resolve work whose external outcome could not be proven.</p>
+    </div>
+    <form class="auth" id="operator-auth">
+      <label for="operator-token">Operator token</label>
+      <div class="auth-controls">
+        <input id="operator-token" name="token" type="password" autocomplete="off" required>
+        <button type="submit">Connect</button>
+      </div>
+      <p class="credential-note">Held in memory only. Cleared from this field after use.</p>
+    </form>
+  </header>
+
+  <main>
+    <div class="toolbar">
+      <div class="status" id="surface-status" role="status" aria-live="polite">
+        Loading the exact surface contract…
+      </div>
+      <button id="refresh-blocks" type="button" disabled>Refresh</button>
+    </div>
+    <div class="table-wrap" hidden>
+      <table id="delivery-blocks">
+        <caption>Unresolved blocked deliveries</caption>
+        <thead><tr id="column-headings"></tr></thead>
+        <tbody id="block-rows"></tbody>
+      </table>
+      <div class="empty" id="empty-state" hidden>No unresolved deliveries.</div>
+    </div>
+  </main>
+
+  <template id="block-row"><tr></tr></template>
+</body>
+</html>

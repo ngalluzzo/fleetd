@@ -241,9 +241,20 @@ The command emits an exact `CapabilityCandidate` or an explicit unable result.
 The candidate is still unverified; GOOIR runs the separately identified named
 suite before admitting any facts. Fleetd's checked-in attempt fixture and
 GOOIR's matching candidate fixture have the same RFC 8785/SHA-256 identity.
+
+The first generated product surface is served at `/operator/`. It loads
+`/operator/contract.json`, which is byte-for-byte the web target IR carried by
+the GOOIR request, and derives its columns, actions, selector, and API bindings
+from that contract. The operator token is held only in JavaScript memory. The
+HTML, CSS, script, and contract are separate same-origin assets under a
+restrictive Content Security Policy; the routes stay outside the versioned
+OpenAPI document because they are an adapter over that API, not new kernel
+operations.
+
 See the [capability work contract](docs/contracts/capability-work-v1.md) and
 [ADR 0012](docs/adr/0012-capability-needs-become-durable-work.md) plus
-[ADR 0013](docs/adr/0013-raw-attempts-lift-to-unverified-candidates.md).
+[ADR 0013](docs/adr/0013-raw-attempts-lift-to-unverified-candidates.md) and
+[ADR 0014](docs/adr/0014-gooir-derived-operator-surface.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [API contract](docs/API_CONTRACT.md), [protocol](docs/PROTOCOL.md), and

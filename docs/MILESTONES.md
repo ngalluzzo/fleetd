@@ -31,8 +31,10 @@
   durable, owner-fenced provider attempt.
 - [x] Persist exact semantic-provider context and strictly lift a raw attempt
   into a content-addressed candidate or explicit unable result.
-- Implement the first real independently identified conformance provider and
-  return its admitted result to the GOOIR graph.
+- [x] Implement the first real independently identified conformance provider
+  and a GOOIR-derived blocked-delivery web artifact.
+- Return the exact durable candidate through conformance and re-plan the GOOIR
+  graph with its admitted fact.
 - Versioned task, progress, result, review, and approval contracts.
 - Dependency scheduling expressed outside the messaging kernel.
 - A complete author-reviewer loop exercised on fleetd itself.
@@ -46,6 +48,7 @@
 
 ## M4 — Operator surface
 
-- A small web dashboard backed exclusively by the public API.
+- [x] First small web surface backed exclusively by the public API, with its
+  columns, actions, selector, and bindings derived from exact GOOIR target IR.
 - Fleet health, blocked work, message traces, and model throughput.
 - Remote workers only after authenticated transport is complete.

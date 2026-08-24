@@ -92,7 +92,10 @@ pub fn router(state: AppState) -> Router {
     let protected =
         protected.route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
     let public: Router<AppState> = public_contract().into();
-    public.merge(protected).with_state(state)
+    public
+        .merge(crate::operator_surface::routes())
+        .merge(protected)
+        .with_state(state)
 }
 
 /// Returns the exact `OpenAPI` document collected from the registered handlers.

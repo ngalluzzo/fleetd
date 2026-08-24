@@ -1,0 +1,36 @@
+{
+  "actions": [
+    {
+      "control": "submit_button",
+      "semantic": {
+        "name": "requeue",
+        "outcome": "pending"
+      }
+    },
+    {
+      "control": "submit_button",
+      "semantic": {
+        "name": "abandon",
+        "outcome": "dead"
+      }
+    }
+  ],
+  "authority": "operator",
+  "binding": {
+    "list_method": "GET",
+    "list_path": "/v1/delivery-blocks",
+    "resolve_method": "POST",
+    "resolve_path_template": "/v1/delivery-blocks/{block_id}/resolve",
+    "selector_parameter": "block_id"
+  },
+  "record_type": "BlockedDelivery",
+  "selector_field": "block_id",
+  "table_columns": [
+    "block_id",
+    "agent_id",
+    "message",
+    "attempt",
+    "reason",
+    "blocked_at_ms"
+  ]
+}

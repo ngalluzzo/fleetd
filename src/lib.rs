@@ -7,6 +7,7 @@ mod delivery;
 pub mod error;
 mod invocation;
 pub mod model;
+mod operator_surface;
 pub mod plugin;
 pub mod session_binding;
 pub mod store;

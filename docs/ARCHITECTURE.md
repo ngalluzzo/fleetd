@@ -139,6 +139,14 @@ decides whether any candidate facts enter its graph. See
 [capability work v1 contract](contracts/capability-work-v1.md), plus
 [ADR 0013](adr/0013-raw-attempts-lift-to-unverified-candidates.md).
 
+The first admitted-output target is a browser adapter for blocked-delivery
+review. Its static `/operator/contract.json` is the exact web target IR from
+the capability request; the script derives fields, actions, selectors, and API
+paths from that document. It does not introduce a second hand-written UI API.
+Static assets are public so the browser can bootstrap, while all underlying
+data and effects remain behind the existing operator-authenticated API. See
+[ADR 0014](adr/0014-gooir-derived-operator-surface.md).
+
 ## Identity boundary
 
 The local operator token file is authoritative for node administration and is
