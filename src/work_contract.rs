@@ -935,7 +935,7 @@ fn body_digest(body: &CapabilityWorkBody) -> Result<String, WorkContractError> {
     canonical_digest(body)
 }
 
-fn canonical_digest(value: &impl Serialize) -> Result<String, WorkContractError> {
+pub(crate) fn canonical_digest(value: &impl Serialize) -> Result<String, WorkContractError> {
     let bytes = serde_json_canonicalizer::to_vec(value)
         .map_err(|error| WorkContractError::Serialization(error.to_string()))?;
     let digest = Sha256::digest(bytes);

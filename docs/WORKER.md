@@ -84,6 +84,19 @@ descriptor beside raw terminal evidence so a later strict lift does not trust
 an agent to report its own identity. The extracted candidate still does not
 establish that the named conformance suite passed.
 
+Set `adapter.kind` to `repository_inspection_v1` for the first concrete
+specialization; see
+[`worker.inspection.opencode.example.json`](../examples/worker.inspection.opencode.example.json).
+The adapter requires one exact inspection provider and one absolute Git
+executable. `working_directory` must be the canonical top level of a clean,
+isolated checkout whose `HEAD` equals the request revision. The preflight runs
+before dispatch arming, and the same clean-revision check runs during report
+conformance. Evidence paths must be normalized, fall inside the brief's path
+scope, and name valid line ranges in exact Git objects. This constrains admitted
+evidence, not harness filesystem reads, so do not place secrets in the worktree
+or treat the adapter as an operating-system sandbox. See the
+[repository-inspection contract](contracts/repository-inspection-v1.md).
+
 The lease must cover the configured wall timeout, cancellation drain timeout,
 and a 60-second settlement margin. Permission requests are denied by the
 controller, tool use is observed and cancelled at the configured budget, token

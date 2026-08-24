@@ -14,8 +14,9 @@ use fleetd::{
     ClaimDeliveries, CompleteInvocation, ContinuousHarnessWorker, ContinuousWorkerConfig,
     CreateAgent, CreateChannel, EnvelopeTurnAdapter, InboundAcceptance, Invocation,
     IssuedCredential, Message, MessagePage, PluginSpec, PreparedTurn, RegisteredAgent,
-    ResolveDeliveryBlock, RetryDelivery, SendMessage, Store, ToolBudget, TurnAdapter, TurnPolicy,
-    extract_capability_message, router,
+    RepositoryInspectionBrief, RepositoryInspectionTurnAdapter, ResolveDeliveryBlock,
+    RetryDelivery, SendMessage, Store, ToolBudget, TurnAdapter, TurnPolicy,
+    bind_repository_inspection, conform_repository_inspection, extract_capability_message, router,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -281,6 +282,22 @@ enum WorkCommand {
         #[arg(long = "attempt-message")]
         attempt_message: PathBuf,
     },
+    /// Bind a typed repository-inspection brief to a capability request.
+    InspectBind {
+        #[arg(long)]
+        brief: PathBuf,
+    },
+    /// Strictly lift and conform one repository-inspection attempt.
+    InspectExtract {
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long = "attempt-message")]
+        attempt_message: PathBuf,
+        #[arg(long = "repository-root")]
+        repository_root: PathBuf,
+        #[arg(long = "git-executable")]
+        git_executable: PathBuf,
+    },
 }
 
 #[derive(Args)]
@@ -332,6 +349,10 @@ enum WorkerAdapterConfig {
     CapabilityWorkV1 {
         providers: Vec<CapabilityProviderDescriptor>,
     },
+    RepositoryInspectionV1 {
+        provider: CapabilityProviderDescriptor,
+        git_executable: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -344,6 +365,7 @@ struct InboundAcceptanceConfig {
 enum ConfiguredTurnAdapter {
     Envelope(EnvelopeTurnAdapter),
     CapabilityWorkV1(CapabilityWorkTurnAdapter),
+    RepositoryInspectionV1(RepositoryInspectionTurnAdapter),
 }
 
 impl TurnAdapter for ConfiguredTurnAdapter {
@@ -351,6 +373,7 @@ impl TurnAdapter for ConfiguredTurnAdapter {
         match self {
             Self::Envelope(adapter) => adapter.inbound_acceptance(),
             Self::CapabilityWorkV1(adapter) => adapter.inbound_acceptance(),
+            Self::RepositoryInspectionV1(adapter) => adapter.inbound_acceptance(),
         }
     }
 
@@ -358,6 +381,7 @@ impl TurnAdapter for ConfiguredTurnAdapter {
         match self {
             Self::Envelope(adapter) => adapter.prepare(invocation),
             Self::CapabilityWorkV1(adapter) => adapter.prepare(invocation),
+            Self::RepositoryInspectionV1(adapter) => adapter.prepare(invocation),
         }
     }
 }
@@ -522,6 +546,38 @@ async fn work_command(
                 CapabilityAttemptProjection::Unable(unable) => print_json(&unable),
             }
         }
+        WorkCommand::InspectBind { brief } => {
+            let brief: RepositoryInspectionBrief = serde_json::from_slice(&fs::read(&brief)?)?;
+            print_json(&bind_repository_inspection(brief)?)
+        }
+        WorkCommand::InspectExtract {
+            request,
+            attempt_message,
+            repository_root,
+            git_executable,
+        } => {
+            let request: CapabilityWorkRequest = serde_json::from_slice(&fs::read(&request)?)?;
+            let attempt: Message = serde_json::from_slice(&fs::read(&attempt_message)?)?;
+            match extract_capability_message(&request, &attempt)? {
+                CapabilityAttemptProjection::Candidate(candidate) => {
+                    let report = conform_repository_inspection(
+                        &request,
+                        &candidate,
+                        &repository_root,
+                        &git_executable,
+                    )?;
+                    print_json(&json!({
+                        "status": "conformant_candidate",
+                        "candidate": candidate,
+                        "report": report,
+                    }))
+                }
+                CapabilityAttemptProjection::Unable(unable) => print_json(&json!({
+                    "status": "unable",
+                    "unable": unable,
+                })),
+            }
+        }
     }
 }
 
@@ -606,6 +662,17 @@ impl WorkerFileConfig {
                     })?,
                 ))
             }
+            WorkerAdapterConfig::RepositoryInspectionV1 {
+                provider,
+                git_executable,
+            } => Ok(ConfiguredTurnAdapter::RepositoryInspectionV1(
+                RepositoryInspectionTurnAdapter::new(
+                    provider.clone(),
+                    self.working_directory.clone(),
+                    git_executable.clone(),
+                )
+                .map_err(|error| format!("worker adapter configuration is invalid: {error}"))?,
+            )),
         }
     }
 
@@ -1347,6 +1414,50 @@ mod tests {
         let mut invalid = value;
         invalid["adapter"]["surprise"] = json!(true);
         assert!(serde_json::from_value::<WorkerFileConfig>(invalid).is_err());
+    }
+
+    #[test]
+    fn repository_inspection_adapter_binds_exact_provider_git_and_workspace() {
+        let value = json!({
+            "schema_version": 2,
+            "agent_id": "agent-id",
+            "working_directory": env!("CARGO_MANIFEST_DIR"),
+            "adapter": {
+                "kind": "repository_inspection_v1",
+                "provider": {
+                    "id": {
+                        "package": "dev.fleetd.provider",
+                        "name": "fixture_inspector",
+                        "version": "0.1.0"
+                    },
+                    "capability": {
+                        "package": "dev.fleetd.capability",
+                        "name": "inspect_repository",
+                        "version": "0.1.0"
+                    },
+                    "implementation_digest": format!("sha256:{}", "a".repeat(64))
+                },
+                "git_executable": std::env::current_exe().expect("current test executable")
+            },
+            "plugin": {
+                "id": "mock.harness",
+                "executable": "/usr/bin/python3"
+            }
+        });
+        let desired: WorkerFileConfig =
+            serde_json::from_value(value.clone()).expect("parse inspection adapter");
+        assert!(matches!(
+            desired
+                .turn_adapter()
+                .expect("configure inspection adapter"),
+            ConfiguredTurnAdapter::RepositoryInspectionV1(_)
+        ));
+
+        let mut mismatch = value;
+        mismatch["adapter"]["provider"]["capability"]["name"] = json!("other");
+        let mismatch: WorkerFileConfig =
+            serde_json::from_value(mismatch).expect("parse mismatched provider");
+        assert!(mismatch.turn_adapter().is_err());
     }
 
     #[test]

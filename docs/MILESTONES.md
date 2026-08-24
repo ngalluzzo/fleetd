@@ -44,6 +44,8 @@
   GOOIR graph with its admitted fact.
 - [x] Preserve ACP assistant-message boundaries and lift a model's final
   structured result without discarding its progress transcript.
+- [x] Delegate one exact-revision repository inspection through a specialized
+  capability adapter and validate its complete report and Git citations.
 - Versioned task, progress, result, review, and approval contracts.
 - Dependency scheduling expressed outside the messaging kernel.
 - A complete author-reviewer loop exercised on fleetd itself.

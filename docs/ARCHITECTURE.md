@@ -168,6 +168,18 @@ candidate facts enter its graph. See
 [ADR 0013](adr/0013-raw-attempts-lift-to-unverified-candidates.md), and
 [ADR 0015](adr/0015-protocol-bounded-structured-results.md).
 
+Repository inspection is the first useful brownfield specialization of this
+boundary. Its exact brief fact binds one Git commit, bounded path scopes, and
+question IDs; its report fact carries an exact answer set and source locations.
+The semantic adapter reuses the generic request and attempt machinery, verifies
+a clean checkout at the requested `HEAD` before dispatch, and adds no Git
+meaning to the kernel. After strict lift, the named suite reads every citation
+from exact Git objects and validates scope and line ranges. That establishes a
+structurally conformant candidate, not the truth of natural-language claims.
+The path scope is an admissible-evidence rule rather than a filesystem sandbox.
+See [ADR 0018](adr/0018-repository-inspection-specializes-capability-work.md)
+and the [v1 contract](contracts/repository-inspection-v1.md).
+
 The first admitted-output target is a browser adapter for blocked-delivery
 review. Its static `/operator/contract.json` is the exact web target IR from
 the capability request; the script derives fields, actions, selectors, and API

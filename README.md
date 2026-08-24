@@ -206,7 +206,9 @@ remain the next reliability boundaries. See
 [ADR 0010](docs/adr/0010-durable-session-bindings-and-owner-epochs.md),
 [ADR 0011](docs/adr/0011-vendor-owned-harness-plugins.md),
 [ADR 0016](docs/adr/0016-invocation-scoped-message-capability.md),
-[ADR 0017](docs/adr/0017-adapters-declare-inbound-acceptance.md), and the
+[ADR 0017](docs/adr/0017-adapters-declare-inbound-acceptance.md),
+[ADR 0018](docs/adr/0018-repository-inspection-specializes-capability-work.md),
+and the
 [historical reference qualification](docs/qualification/acp-driver-2026-08-24.md)
 and [OpenCode plugin qualification](docs/qualification/opencode-plugin-2026-08-24.md).
 
@@ -276,6 +278,41 @@ See the [capability request contract](docs/contracts/capability-work-v1.md),
 The complete first qualification, including rejected attempts, exact evidence
 identities, admission, re-planning, and browser validation, is recorded in
 [the runnable-web qualification](docs/qualification/gooir-runnable-web-2026-08-24.md).
+
+### Repository-inspection dogfood
+
+The first useful software-work specialization delegates bounded questions
+about one exact clean Git revision without inventing a generic task or command
+runner. Start from a typed brief:
+
+```json
+{
+  "schema_version": 1,
+  "repository_id": "dev.fleetd/fleetd",
+  "revision": "EXACT_COMMIT_ID",
+  "path_scope": ["src", "docs"],
+  "questions": [{"id": "one-question", "prompt": "What does this revision establish?"}]
+}
+```
+
+Bind and submit it through the existing capability-work path, then run an
+isolated seat using
+[`examples/worker.inspection.opencode.example.json`](examples/worker.inspection.opencode.example.json):
+
+```sh
+cargo run -- work inspect-bind --brief /tmp/inspection-brief.json \
+  > /tmp/inspection-request.json
+cargo run -- --token-file .fleetd/requester.token work submit \
+  --channel CHANNEL_ID --to INSPECTOR_AGENT_ID \
+  --request /tmp/inspection-request.json
+```
+
+`work inspect-extract` first performs the generic strict lift, then checks the
+exact report shape, clean revision, path scope, and every cited Git line range.
+It emits `conformant_candidate`, not accepted natural-language truth. See the
+[contract](docs/contracts/repository-inspection-v1.md),
+[ADR 0018](docs/adr/0018-repository-inspection-specializes-capability-work.md),
+and [OpenCode qualification](docs/qualification/repository-inspection-opencode-2026-08-24.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [API contract](docs/API_CONTRACT.md), [protocol](docs/PROTOCOL.md), and

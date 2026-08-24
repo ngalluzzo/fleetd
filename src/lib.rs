@@ -10,6 +10,7 @@ mod invocation;
 pub mod model;
 mod operator_surface;
 pub mod plugin;
+pub mod repository_inspection;
 pub mod session_binding;
 pub mod store;
 pub mod work_contract;
@@ -42,6 +43,14 @@ pub use plugin::{
     ResolvedMcpGrant, ResolvedMcpHttpHeader, RuntimeIdentity, SessionPersistence, ShutdownOutcome,
     StartTurn, StartTurnResult, ToolBudget, TurnEvent, TurnPolicy, TurnSource, TurnTerminal,
     harness_acp_capability,
+};
+pub use repository_inspection::{
+    InspectionDisposition, REPOSITORY_INSPECTION_SUITE, RepositoryInspectionAnswer,
+    RepositoryInspectionBrief, RepositoryInspectionError, RepositoryInspectionEvidence,
+    RepositoryInspectionQuestion, RepositoryInspectionReport, RepositoryInspectionTurnAdapter,
+    bind_repository_inspection, conform_repository_inspection, inspection_brief,
+    repository_inspection_brief_fact, repository_inspection_capability,
+    repository_inspection_report_fact,
 };
 pub use session_binding::{
     AcquireSessionBinding, BoundInvocation, SessionAcquisition, SessionAcquisitionMode,
