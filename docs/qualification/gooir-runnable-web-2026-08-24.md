@@ -105,12 +105,55 @@ derived all six target columns plus actions, presented the memory-only token
 boundary, and reported no console errors. The independent runtime test—not a
 candidate-authored test—exercised both consequential resolution effects.
 
-## Follow-up finding
+## Original follow-up finding
 
-OpenCode ACP currently exposes progress text and the final response as one
+Fleetd's ACP host exposed OpenCode progress text and the final response as one
 aggregated assistant message for a tool-using turn. A strict JSON-only result
-contract is therefore ergonomic only when the model emits no earlier prose.
+contract was therefore ergonomic only when the model emitted no earlier prose.
 Fleetd must not relax extraction to “find JSON somewhere in the text.” The
 next adapter/harness slice should introduce an explicit structured result
 channel or preserve trustworthy final-message boundaries while retaining the
-complete raw transcript as evidence.
+complete captured assistant transcript as evidence.
+
+## Structured-result closure
+
+Fleetd commit `bd05a76fd043846ac3473e667e39c7c0b0d6351b` closes that
+finding without relaxing JSON extraction. The ACP host now preserves the
+protocol's `messageId`, capability workers publish
+`work.capability.attempt/v2`, and the strict lift independently recomputes the
+final-message selection and JSON parse from the retained assistant transcript.
+
+The first live v2 turn used the same exact request and the real
+`fleetd.harness.opencode` plugin with `opencode/gpt-5.6-sol`. OpenCode emitted
+four assistant messages with four distinct IDs across 1,069 ordered turn
+events. The fourth message contained the result. Fleetd retained all four and
+recorded `last_identified_assistant_message`; it did not scan the preceding
+progress prose. The durable attempt was
+`534fe975-ada3-4f64-bea9-ef12ab3f8fb1`, with evidence digest
+`sha256:78927fde4971446a4d91854cb910b39e91fcfb396f08c9eb26386584bba9699f`.
+Strict extraction produced candidate
+`sha256:70173b065b3b99d4b0bdee80d030d12103039ed8012baa27b0720592e07c5a74`,
+and the independent suite passed and replanned to zero needs.
+
+After committing and rebuilding, a second request exercised durable session
+adoption rather than a fresh lane. Binding generation 1 resumed under owner
+epoch 2 and completed without retry or block. That turn used one identified
+assistant message, so the controller recorded `only_assistant_message`:
+
+- attempt: `87039e77-0eb6-4d6a-ac44-51c65ae1a032`;
+- invocation: `4ba8ef0f-90d1-4d64-b980-103d580d436a`;
+- attempt evidence:
+  `sha256:7c55d49821ce6f924e82499a2265d30bc384c229696854397e9dd4616effbd8d`;
+- candidate:
+  `sha256:40ff89fc4775c3f938fd26e8d8dfa217da0eac7ee923c05e7244db164d71af81`;
+- conformance result:
+  `sha256:8816a3416403a8b9f60e2735359da7f11840ba653085daa06fb832e34b54ced9`;
+- admitted fact:
+  `sha256:cceb15462108f1acedf673684de592c514176e278ec0bd3cf2924e65ed56b7f8`;
+- re-plan: zero steps, zero needs, executable.
+
+The resumed turn reported a cumulative context value of 56,005 and cost of
+USD 0.214638. These remain provider claims, not Fleetd-measured throughput.
+Durable tool, reasoning, permission, and plan event fragments are still a
+separate evidence boundary; this closure is specifically the assistant-result
+boundary.
