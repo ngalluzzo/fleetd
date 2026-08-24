@@ -210,9 +210,19 @@ async fn append_message(
     Json(input): Json<SendMessage>,
 ) -> Result<(StatusCode, Json<Message>), FleetError> {
     let input: CreateMessage = input.attributed_to(require_agent(&principal)?);
-    let message = state.store.append_message(&channel_id, input).await?;
-    let _unused = state.messages.send(message.clone());
-    Ok((StatusCode::CREATED, Json(message)))
+    let result = state
+        .store
+        .append_message_idempotent(&channel_id, input)
+        .await?;
+    if result.created {
+        let _unused = state.messages.send(result.message.clone());
+    }
+    let status = if result.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(result.message)))
 }
 
 #[derive(Deserialize)]

@@ -164,6 +164,7 @@ async fn sender_attribution_and_inbox_access_are_bound_to_the_agent_credential()
             Some(&server.operator_token),
         )
         .json(&SendMessage {
+            idempotency_key: None,
             recipient_id: Some(bob.agent.id.clone()),
             kind: "text".to_owned(),
             payload: json!({ "text": "operator impersonation" }),
@@ -236,6 +237,7 @@ async fn channel_history_scopes_direct_messages_to_their_participants() {
             Some(&alice.credential.token),
         )
         .json(&SendMessage {
+            idempotency_key: None,
             recipient_id: None,
             kind: "text".to_owned(),
             payload: json!({ "text": "standup" }),
@@ -288,6 +290,86 @@ async fn channel_history_scopes_direct_messages_to_their_participants() {
     assert_eq!(operator_page.messages, vec![direct, broadcast]);
 }
 
+#[tokio::test]
+async fn message_idempotency_is_agent_scoped_and_survives_credential_rotation() {
+    let server = TestServer::start().await;
+    let alice = server.register("idempotent-alice").await;
+    let bob = server.register("idempotent-bob").await;
+    let channel = server.channel(&[&alice.agent.id, &bob.agent.id]).await;
+    let input = SendMessage {
+        idempotency_key: Some("invocation/abc/result".to_owned()),
+        recipient_id: Some(bob.agent.id.clone()),
+        kind: "agent.output/v1".to_owned(),
+        payload: json!({ "text": "stable output" }),
+        correlation_id: Some("work-abc".to_owned()),
+        causation_id: Some("request-abc".to_owned()),
+    };
+
+    let first_response = post_message(&server, &channel.id, &alice.credential.token, &input).await;
+    assert_eq!(first_response.status(), reqwest::StatusCode::CREATED);
+    let first: Message = first_response.json().await.expect("first message");
+
+    let duplicate_response =
+        post_message(&server, &channel.id, &alice.credential.token, &input).await;
+    assert_eq!(duplicate_response.status(), reqwest::StatusCode::OK);
+    let duplicate: Message = duplicate_response.json().await.expect("duplicate message");
+    assert_eq!(duplicate, first);
+
+    let replacement: IssuedCredential = server
+        .post(
+            &format!("/v1/agents/{}/credentials/rotate", alice.agent.id),
+            Some(&server.operator_token),
+        )
+        .send()
+        .await
+        .expect("rotate credential")
+        .error_for_status()
+        .expect("rotation response")
+        .json()
+        .await
+        .expect("replacement credential");
+    let after_rotation = post_message(&server, &channel.id, &replacement.token, &input).await;
+    assert_eq!(after_rotation.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        after_rotation
+            .json::<Message>()
+            .await
+            .expect("message after rotation"),
+        first
+    );
+
+    let mut conflicting = input.clone();
+    conflicting.payload = json!({ "text": "changed output" });
+    let conflict = post_message(&server, &channel.id, &replacement.token, &conflicting).await;
+    assert_eq!(conflict.status(), reqwest::StatusCode::CONFLICT);
+
+    let other_scope = post_message(
+        &server,
+        &channel.id,
+        &bob.credential.token,
+        &SendMessage {
+            idempotency_key: input.idempotency_key,
+            recipient_id: Some(alice.agent.id),
+            kind: input.kind,
+            payload: input.payload,
+            correlation_id: input.correlation_id,
+            causation_id: input.causation_id,
+        },
+    )
+    .await;
+    assert_eq!(other_scope.status(), reqwest::StatusCode::CREATED);
+
+    let batch: ClaimBatch = claim(&server, &bob.agent.id, &bob.credential.token)
+        .await
+        .error_for_status()
+        .expect("claim result delivery")
+        .json()
+        .await
+        .expect("claim body");
+    assert_eq!(batch.deliveries.len(), 1);
+    assert_eq!(batch.deliveries[0].message, first);
+}
+
 async fn send_message(
     server: &TestServer,
     channel_id: &str,
@@ -300,6 +382,7 @@ async fn send_message(
             Some(&sender.credential.token),
         )
         .json(&SendMessage {
+            idempotency_key: None,
             recipient_id: Some(recipient_id.to_owned()),
             kind: "review.requested/v1".to_owned(),
             payload: json!({ "commit": "4aa4cd1" }),
@@ -314,6 +397,20 @@ async fn send_message(
         .json()
         .await
         .expect("message body")
+}
+
+async fn post_message(
+    server: &TestServer,
+    channel_id: &str,
+    token: &str,
+    input: &SendMessage,
+) -> reqwest::Response {
+    server
+        .post(&format!("/v1/channels/{channel_id}/messages"), Some(token))
+        .json(input)
+        .send()
+        .await
+        .expect("message response")
 }
 
 async fn claim(server: &TestServer, agent_id: &str, token: &str) -> reqwest::Response {

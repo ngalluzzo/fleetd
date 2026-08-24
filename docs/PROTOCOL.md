@@ -21,6 +21,25 @@ All messages share one immutable envelope:
 `id` is the stable event identity. `kind` and `payload` form an open sum: the
 kernel transports unknown contracts without interpreting or rewriting them.
 
+## Idempotent append
+
+The authenticated message-send request accepts an optional
+`idempotency_key`. It is transport metadata and does not appear in the immutable
+message envelope.
+
+Keys must contain a non-whitespace character, must not exceed 256 bytes, and are
+scoped to the stable authenticated agent ID across the node. The first use
+returns `201 Created`. Retrying an identical
+channel, recipient, kind, payload, correlation ID, and causation ID returns the
+original message with `200 OK` and does not create another delivery or live
+notification. Reusing the key for different content returns `409 Conflict`.
+
+The scope survives credential rotation and daemon restart. Different agents
+may use the same key independently. An exact replay remains valid after a
+membership change because it creates no new effect; the first use always
+requires current sender and recipient membership. See
+[ADR 0006](adr/0006-idempotent-message-append.md).
+
 A channel message with no recipient is visible to every member. A direct
 message is visible only to its sender, its recipient, and an operator; HTTP
 history and WebSocket streams enforce this against the authenticated

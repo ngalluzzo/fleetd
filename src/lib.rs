@@ -20,4 +20,4 @@ pub use plugin::{
     Capability, PluginError, PluginExit, PluginIdentity, PluginManifest, PluginNotification,
     PluginProcess, PluginSpec, ShutdownOutcome,
 };
-pub use store::Store;
+pub use store::{AppendMessageResult, Store};

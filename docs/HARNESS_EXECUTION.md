@@ -573,22 +573,23 @@ these prerequisites:
 4. **Durable invocation reservation.** Inbox claim and invocation creation
    need one transaction in the embedded controller so a restart can distinguish
    unstarted work from an unrecorded attempt.
-5. **Idempotent message append.** The current send API allocates a fresh
-   message ID on every request. Correlated results require an agent-scoped
-   idempotency key with identical-replay and conflicting-reuse behavior.
-6. **Unknown-outcome parking.** The current delivery states cannot explicitly
+5. **Unknown-outcome parking.** The current delivery states cannot explicitly
    park an ambiguous effect for operator or policy review. Do not run
    unattended effectful work until that state exists.
-7. **Effective instance evidence.** Persist the lifecycle instance ID,
+6. **Effective instance evidence.** Persist the lifecycle instance ID,
    profile digest, inner executable identity, observed ACP initialize result,
    and exit evidence together; desired config alone is insufficient.
-8. **Bounded artifact capture.** Inner ACP frames may exceed fleetd's one-MiB
+7. **Bounded artifact capture.** Inner ACP frames may exceed fleetd's one-MiB
    outer frame. Add a content-addressed evidence sink or emit an explicit
    truncated prefix, full-byte count, and digest. Oversized data must never be
    silently dropped or smuggled through larger lifecycle frames.
 
 These are reliability requirements for the first vertical loop, not a request
 to expand the messaging kernel with harness semantics.
+
+Agent-scoped idempotent message append is already implemented by
+[ADR 0006](adr/0006-idempotent-message-append.md); the controller can use a
+deterministic invocation-result key when it reaches the final commit boundary.
 
 ## First implementation acceptance matrix
 

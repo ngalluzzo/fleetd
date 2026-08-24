@@ -91,6 +91,7 @@ pub struct Message {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CreateMessage {
     pub sender_id: String,
+    pub idempotency_key: Option<String>,
     pub recipient_id: Option<String>,
     #[serde(default = "default_message_kind")]
     pub kind: String,
@@ -104,6 +105,7 @@ pub struct CreateMessage {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SendMessage {
+    pub idempotency_key: Option<String>,
     pub recipient_id: Option<String>,
     #[serde(default = "default_message_kind")]
     pub kind: String,
@@ -118,6 +120,7 @@ impl SendMessage {
     pub fn attributed_to(self, sender_id: impl Into<String>) -> CreateMessage {
         CreateMessage {
             sender_id: sender_id.into(),
+            idempotency_key: self.idempotency_key,
             recipient_id: self.recipient_id,
             kind: self.kind,
             payload: self.payload,

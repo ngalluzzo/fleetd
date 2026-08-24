@@ -13,6 +13,15 @@ use crate::{
     model::{Agent, Channel, CreateAgent, CreateChannel, CreateMessage, Message, MessagePage},
 };
 
+const MAX_IDEMPOTENCY_KEY_LENGTH: usize = 256;
+
+/// The durable result of appending a message with optional idempotency.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppendMessageResult {
+    pub message: Message,
+    pub created: bool,
+}
+
 static MIGRATOR: Migrator = sqlx::migrate!();
 
 /// SQLite-backed durable state for the coordination kernel.
@@ -200,87 +209,69 @@ impl Store {
         channel_id: &str,
         input: CreateMessage,
     ) -> Result<Message, FleetError> {
+        Ok(self
+            .append_message_idempotent(channel_id, input)
+            .await?
+            .message)
+    }
+
+    /// Appends one immutable message or returns the existing identical message
+    /// for an agent-scoped idempotency key.
+    ///
+    /// `created` is false only when the same sender previously used the key for
+    /// an identical message. Reusing a key for different content is a conflict.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid input, unknown entities, invalid membership,
+    /// conflicting idempotency-key reuse, or a persistence failure.
+    pub async fn append_message_idempotent(
+        &self,
+        channel_id: &str,
+        input: CreateMessage,
+    ) -> Result<AppendMessageResult, FleetError> {
         if input.kind.trim().is_empty() {
             return Err(FleetError::Invalid(
                 "message kind must not be empty".to_owned(),
             ));
         }
-        let mut transaction = self.pool.begin().await?;
-        ensure_exists(&mut transaction, "channels", "channel", channel_id).await?;
-        ensure_member(&mut transaction, channel_id, &input.sender_id).await?;
-        if let Some(recipient_id) = &input.recipient_id {
-            ensure_member(&mut transaction, channel_id, recipient_id).await?;
-        }
-        let id = Uuid::new_v4().to_string();
-        let created_at_ms = now_ms();
-        let payload_json = serde_json::to_string(&input.payload)?;
-        let result = sqlx::query(
-            r"
-            INSERT INTO messages (
-                id, channel_id, sender_id, recipient_id, kind, payload_json,
-                correlation_id, causation_id, created_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ",
-        )
-        .bind(&id)
-        .bind(channel_id)
-        .bind(&input.sender_id)
-        .bind(&input.recipient_id)
-        .bind(&input.kind)
-        .bind(payload_json)
-        .bind(&input.correlation_id)
-        .bind(&input.causation_id)
-        .bind(created_at_ms)
-        .execute(&mut *transaction)
-        .await?;
-        let message_seq = result.last_insert_rowid();
-        if let Some(recipient_id) = &input.recipient_id {
-            sqlx::query(
+        validate_idempotency_key(input.idempotency_key.as_deref())?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+
+        if let Some(idempotency_key) = &input.idempotency_key {
+            let existing = sqlx::query(
                 r"
-                INSERT INTO agent_deliveries (
-                    message_seq, agent_id, available_at_ms, created_at_ms
-                ) VALUES (?, ?, ?, ?)
+                SELECT seq, id, channel_id, sender_id, recipient_id, kind, payload_json,
+                       correlation_id, causation_id, created_at_ms
+                FROM messages
+                WHERE sender_id = ? AND idempotency_key = ?
                 ",
             )
-            .bind(message_seq)
-            .bind(recipient_id)
-            .bind(created_at_ms)
-            .bind(created_at_ms)
-            .execute(&mut *transaction)
-            .await?;
-        } else {
-            sqlx::query(
-                r"
-                INSERT INTO agent_deliveries (
-                    message_seq, agent_id, available_at_ms, created_at_ms
-                )
-                SELECT ?, agent_id, ?, ?
-                FROM channel_members
-                WHERE channel_id = ? AND agent_id != ?
-                ",
-            )
-            .bind(message_seq)
-            .bind(created_at_ms)
-            .bind(created_at_ms)
-            .bind(channel_id)
             .bind(&input.sender_id)
-            .execute(&mut *transaction)
+            .bind(idempotency_key)
+            .fetch_optional(&mut *transaction)
             .await?;
+            if let Some(row) = existing {
+                let message = message_from_row(&row)?;
+                if !message_matches_input(&message, channel_id, &input) {
+                    return Err(FleetError::Conflict(
+                        "idempotency key was already used for a different message".to_owned(),
+                    ));
+                }
+                transaction.commit().await?;
+                return Ok(AppendMessageResult {
+                    message,
+                    created: false,
+                });
+            }
         }
-        let message = Message {
-            seq: message_seq,
-            id,
-            channel_id: channel_id.to_owned(),
-            sender_id: input.sender_id,
-            recipient_id: input.recipient_id,
-            kind: input.kind,
-            payload: input.payload,
-            correlation_id: input.correlation_id,
-            causation_id: input.causation_id,
-            created_at_ms,
-        };
+
+        let message = insert_message(&mut transaction, channel_id, input).await?;
         transaction.commit().await?;
-        Ok(message)
+        Ok(AppendMessageResult {
+            message,
+            created: true,
+        })
     }
 
     /// Reads a page of channel messages strictly after the supplied cursor.
@@ -354,6 +345,134 @@ impl Store {
             next_cursor,
         })
     }
+}
+
+fn validate_idempotency_key(idempotency_key: Option<&str>) -> Result<(), FleetError> {
+    let Some(idempotency_key) = idempotency_key else {
+        return Ok(());
+    };
+    if idempotency_key.trim().is_empty() {
+        return Err(FleetError::Invalid(
+            "idempotency key must not be empty".to_owned(),
+        ));
+    }
+    if idempotency_key.len() > MAX_IDEMPOTENCY_KEY_LENGTH {
+        return Err(FleetError::Invalid(format!(
+            "idempotency key must not exceed {MAX_IDEMPOTENCY_KEY_LENGTH} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn message_matches_input(message: &Message, channel_id: &str, input: &CreateMessage) -> bool {
+    message.channel_id == channel_id
+        && message.sender_id == input.sender_id
+        && message.recipient_id == input.recipient_id
+        && message.kind == input.kind
+        && message.payload == input.payload
+        && message.correlation_id == input.correlation_id
+        && message.causation_id == input.causation_id
+}
+
+async fn insert_message(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    channel_id: &str,
+    input: CreateMessage,
+) -> Result<Message, FleetError> {
+    ensure_exists(transaction, "channels", "channel", channel_id).await?;
+    ensure_member(transaction, channel_id, &input.sender_id).await?;
+    if let Some(recipient_id) = &input.recipient_id {
+        ensure_member(transaction, channel_id, recipient_id).await?;
+    }
+    let id = Uuid::new_v4().to_string();
+    let created_at_ms = now_ms();
+    let payload_json = serde_json::to_string(&input.payload)?;
+    let result = sqlx::query(
+        r"
+        INSERT INTO messages (
+            id, channel_id, sender_id, idempotency_key, recipient_id, kind,
+            payload_json, correlation_id, causation_id, created_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ",
+    )
+    .bind(&id)
+    .bind(channel_id)
+    .bind(&input.sender_id)
+    .bind(&input.idempotency_key)
+    .bind(&input.recipient_id)
+    .bind(&input.kind)
+    .bind(payload_json)
+    .bind(&input.correlation_id)
+    .bind(&input.causation_id)
+    .bind(created_at_ms)
+    .execute(&mut **transaction)
+    .await?;
+    let message_seq = result.last_insert_rowid();
+    insert_delivery_snapshot(
+        transaction,
+        channel_id,
+        &input.sender_id,
+        input.recipient_id.as_deref(),
+        message_seq,
+        created_at_ms,
+    )
+    .await?;
+    Ok(Message {
+        seq: message_seq,
+        id,
+        channel_id: channel_id.to_owned(),
+        sender_id: input.sender_id,
+        recipient_id: input.recipient_id,
+        kind: input.kind,
+        payload: input.payload,
+        correlation_id: input.correlation_id,
+        causation_id: input.causation_id,
+        created_at_ms,
+    })
+}
+
+async fn insert_delivery_snapshot(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    channel_id: &str,
+    sender_id: &str,
+    recipient_id: Option<&str>,
+    message_seq: i64,
+    created_at_ms: i64,
+) -> Result<(), FleetError> {
+    if let Some(recipient_id) = recipient_id {
+        sqlx::query(
+            r"
+            INSERT INTO agent_deliveries (
+                message_seq, agent_id, available_at_ms, created_at_ms
+            ) VALUES (?, ?, ?, ?)
+            ",
+        )
+        .bind(message_seq)
+        .bind(recipient_id)
+        .bind(created_at_ms)
+        .bind(created_at_ms)
+        .execute(&mut **transaction)
+        .await?;
+    } else {
+        sqlx::query(
+            r"
+            INSERT INTO agent_deliveries (
+                message_seq, agent_id, available_at_ms, created_at_ms
+            )
+            SELECT ?, agent_id, ?, ?
+            FROM channel_members
+            WHERE channel_id = ? AND agent_id != ?
+            ",
+        )
+        .bind(message_seq)
+        .bind(created_at_ms)
+        .bind(created_at_ms)
+        .bind(channel_id)
+        .bind(sender_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_name(entity: &str, name: &str) -> Result<(), FleetError> {

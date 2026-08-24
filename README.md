@@ -46,8 +46,12 @@ Then send a durable message from another:
 
 ```sh
 cargo run -- --token-file .fleetd/piler.token message send \
-  --channel CHANNEL_ID --to Weaver_ID --text 'review commit 5fe343f'
+  --channel CHANNEL_ID --to Weaver_ID --text 'review commit 5fe343f' \
+  --idempotency-key invocation/example/result
 ```
+
+The key is optional. An identical retry returns the original message instead
+of creating another delivery; conflicting reuse fails with `409 Conflict`.
 
 Weaver's adapter can atomically lease the message:
 

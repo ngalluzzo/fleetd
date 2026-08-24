@@ -102,6 +102,8 @@ enum MessageCommand {
     Send {
         #[arg(long)]
         channel: String,
+        #[arg(long)]
+        idempotency_key: Option<String>,
         #[arg(long = "to")]
         recipient: Option<String>,
         #[arg(long, default_value = "text")]
@@ -366,6 +368,7 @@ async fn message_command(api: &ApiClient, command: MessageCommand) -> MainResult
     match command {
         MessageCommand::Send {
             channel,
+            idempotency_key,
             recipient,
             kind,
             text,
@@ -384,6 +387,7 @@ async fn message_command(api: &ApiClient, command: MessageCommand) -> MainResult
             let response = api
                 .post(&format!("/v1/channels/{channel}/messages"))
                 .json(&SendMessage {
+                    idempotency_key,
                     recipient_id: recipient,
                     kind,
                     payload,

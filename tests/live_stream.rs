@@ -49,6 +49,7 @@ async fn websocket_replays_history_then_delivers_live_messages() {
             &channel.id,
             CreateMessage {
                 sender_id: sender.id.clone(),
+                idempotency_key: None,
                 recipient_id: Some(receiver.id.clone()),
                 kind: "text".to_owned(),
                 payload: json!({ "text": "before connect" }),
@@ -78,6 +79,7 @@ async fn websocket_replays_history_then_delivers_live_messages() {
     assert_eq!(replayed, history);
 
     let live_input = SendMessage {
+        idempotency_key: None,
         recipient_id: Some(sender.id.clone()),
         kind: "text".to_owned(),
         payload: json!({ "text": "after connect" }),
@@ -152,6 +154,7 @@ async fn streams_do_not_leak_direct_messages_between_other_members() {
         &channel.id,
         &author_credential.token,
         &SendMessage {
+            idempotency_key: None,
             recipient_id: Some(recipient),
             kind: "text".to_owned(),
             payload: json!({ "text": "only for recipient" }),
@@ -167,6 +170,7 @@ async fn streams_do_not_leak_direct_messages_between_other_members() {
         &channel.id,
         &author_credential.token,
         &SendMessage {
+            idempotency_key: None,
             recipient_id: None,
             kind: "text".to_owned(),
             payload: json!({ "text": "for everyone" }),

@@ -56,6 +56,7 @@ async fn send(
             channel_id,
             CreateMessage {
                 sender_id: sender_id.to_owned(),
+                idempotency_key: None,
                 recipient_id,
                 kind: "text".to_owned(),
                 payload: json!({ "text": text }),

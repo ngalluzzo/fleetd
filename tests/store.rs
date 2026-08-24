@@ -40,6 +40,7 @@ async fn messages_are_durable_ordered_and_cursor_addressable() {
             &channel.id,
             CreateMessage {
                 sender_id: piler.id.clone(),
+                idempotency_key: None,
                 recipient_id: Some(weaver.id.clone()),
                 kind: "review.requested/v1".to_owned(),
                 payload: json!({ "commit": "5fe343f" }),
@@ -54,6 +55,7 @@ async fn messages_are_durable_ordered_and_cursor_addressable() {
             &channel.id,
             CreateMessage {
                 sender_id: weaver.id,
+                idempotency_key: None,
                 recipient_id: Some(piler.id),
                 kind: "review.completed/v1".to_owned(),
                 payload: json!({ "verdict": "approve" }),
@@ -163,6 +165,123 @@ async fn direct_messages_are_scoped_to_their_sender_and_recipient() {
     assert_eq!(second_page.messages, vec![later_broadcast]);
 }
 
+#[tokio::test]
+async fn message_idempotency_is_concurrent_durable_and_conflict_detecting() {
+    let (directory, store) = test_store().await;
+    let piler = agent(&store, "piler-idempotency").await;
+    let weaver = agent(&store, "weaver-idempotency").await;
+    let channel = store
+        .create_channel(CreateChannel {
+            name: "idempotent-results".to_owned(),
+            metadata: json!({}),
+            member_ids: vec![piler.id.clone(), weaver.id.clone()],
+        })
+        .await
+        .expect("create channel");
+    let input = CreateMessage {
+        sender_id: piler.id.clone(),
+        idempotency_key: Some("invocation/123/result".to_owned()),
+        recipient_id: Some(weaver.id.clone()),
+        kind: "agent.output/v1".to_owned(),
+        payload: json!({ "text": "one durable result" }),
+        correlation_id: Some("work-123".to_owned()),
+        causation_id: Some("request-123".to_owned()),
+    };
+
+    let (first, second) = tokio::join!(
+        store.append_message_idempotent(&channel.id, input.clone()),
+        store.append_message_idempotent(&channel.id, input.clone()),
+    );
+    let first = first.expect("first append");
+    let second = second.expect("second append");
+    assert_eq!(first.message, second.message);
+    assert_ne!(first.created, second.created);
+
+    let delivery = store
+        .claim_deliveries(
+            &weaver.id,
+            fleetd::ClaimDeliveries {
+                limit: 10,
+                lease_duration_ms: 10_000,
+            },
+        )
+        .await
+        .expect("claim recipient delivery");
+    assert_eq!(delivery.deliveries.len(), 1);
+    assert_eq!(delivery.deliveries[0].message, first.message);
+
+    let mut conflicting = input.clone();
+    conflicting.payload = json!({ "text": "different result" });
+    let error = store
+        .append_message_idempotent(&channel.id, conflicting)
+        .await
+        .expect_err("different content must conflict");
+    assert!(matches!(error, FleetError::Conflict(_)));
+
+    let same_key_other_agent = store
+        .append_message_idempotent(
+            &channel.id,
+            CreateMessage {
+                sender_id: weaver.id,
+                idempotency_key: input.idempotency_key.clone(),
+                recipient_id: Some(piler.id),
+                kind: input.kind.clone(),
+                payload: input.payload.clone(),
+                correlation_id: input.correlation_id.clone(),
+                causation_id: input.causation_id.clone(),
+            },
+        )
+        .await
+        .expect("same key in another agent scope");
+    assert!(same_key_other_agent.created);
+    assert_ne!(same_key_other_agent.message.id, first.message.id);
+
+    drop(store);
+    let reopened = Store::open(directory.path().join("fleetd.db"))
+        .await
+        .expect("reopen store");
+    let replay = reopened
+        .append_message_idempotent(&channel.id, input)
+        .await
+        .expect("replay after restart");
+    assert!(!replay.created);
+    assert_eq!(replay.message, first.message);
+}
+
+#[tokio::test]
+async fn idempotency_keys_are_bounded() {
+    let (_directory, store) = test_store().await;
+    let sender = agent(&store, "bounded-key-sender").await;
+    let receiver = agent(&store, "bounded-key-receiver").await;
+    let channel = store
+        .create_channel(CreateChannel {
+            name: "bounded-keys".to_owned(),
+            metadata: json!({}),
+            member_ids: vec![sender.id.clone(), receiver.id.clone()],
+        })
+        .await
+        .expect("create channel");
+
+    for key in ["   ".to_owned(), "x".repeat(257)] {
+        let error = store
+            .append_message_idempotent(
+                &channel.id,
+                CreateMessage {
+                    sender_id: sender.id.clone(),
+                    idempotency_key: Some(key),
+                    recipient_id: Some(receiver.id.clone()),
+                    kind: "text".to_owned(),
+                    payload: json!({ "text": "invalid key" }),
+                    correlation_id: None,
+                    causation_id: None,
+                },
+            )
+            .await
+            .expect_err("invalid key must fail");
+        assert!(matches!(error, FleetError::Invalid(_)));
+    }
+}
+
 async fn agent(store: &Store, name: &str) -> fleetd::Agent {
     store
         .create_agent(CreateAgent {
@@ -185,6 +304,7 @@ async fn append_text(
             channel_id,
             CreateMessage {
                 sender_id: sender_id.to_owned(),
+                idempotency_key: None,
                 recipient_id: recipient_id.map(str::to_owned),
                 kind: "text".to_owned(),
                 payload: json!({ "text": text }),
@@ -223,6 +343,7 @@ async fn non_members_cannot_send_or_receive_in_a_channel() {
         .expect("create channel");
     let message = CreateMessage {
         sender_id: outsider.id.clone(),
+        idempotency_key: None,
         recipient_id: Some(member.id),
         kind: "text".to_owned(),
         payload: json!({ "text": "hello" }),

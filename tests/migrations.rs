@@ -1,3 +1,5 @@
+use fleetd::{CreateAgent, CreateChannel, CreateMessage};
+use serde_json::json;
 use sqlx::{Connection, sqlite::SqliteConnectOptions};
 
 #[tokio::test]
@@ -57,4 +59,40 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].id, "legacy-agent");
     assert_eq!(agents[0].metadata["harness"], "dsh");
+
+    let recipient = store
+        .create_agent(CreateAgent {
+            name: "weaver".to_owned(),
+            metadata: json!({}),
+        })
+        .await
+        .expect("create recipient after migration");
+    let channel = store
+        .create_channel(CreateChannel {
+            name: "migrated-channel".to_owned(),
+            metadata: json!({}),
+            member_ids: vec!["legacy-agent".to_owned(), recipient.id.clone()],
+        })
+        .await
+        .expect("create channel after migration");
+    let input = CreateMessage {
+        sender_id: "legacy-agent".to_owned(),
+        idempotency_key: Some("migration/result".to_owned()),
+        recipient_id: Some(recipient.id),
+        kind: "agent.output/v1".to_owned(),
+        payload: json!({ "text": "survived" }),
+        correlation_id: None,
+        causation_id: None,
+    };
+    let created = store
+        .append_message_idempotent(&channel.id, input.clone())
+        .await
+        .expect("append idempotent message after migration");
+    let replayed = store
+        .append_message_idempotent(&channel.id, input)
+        .await
+        .expect("replay idempotent message after migration");
+    assert!(created.created);
+    assert!(!replayed.created);
+    assert_eq!(created.message, replayed.message);
 }
