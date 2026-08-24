@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -17,14 +17,16 @@ use fleetd::{
     AcceptedResult, AssistantMessage, Binding, CancelTurn, CloseSession, CloseSessionResult,
     DescribeResult, DriverIdentity, EffectiveEnforcement, ExecutionFence,
     HarnessExecutionCertainty, HarnessLimits, OpenSession, OpenSessionMode, OpenSessionResult,
-    PermissionOutcome, PermissionResolution, RuntimeIdentity, SessionPersistence, StartTurn,
-    StartTurnResult, TurnEvent, TurnTerminal,
+    PermissionOutcome, PermissionResolution, ResolvedMcpEndpoint, RuntimeIdentity,
+    SessionPersistence, StartTurn, StartTurnResult, TurnEvent, TurnTerminal,
 };
+use http::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use url::Url;
 use uuid::Uuid;
 
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
@@ -285,6 +287,7 @@ struct SessionState {
     binding: Binding,
     cwd: String,
     additional_directories: Vec<String>,
+    mcp_grants: Vec<String>,
     active: Option<ActiveTurn>,
 }
 
@@ -524,11 +527,7 @@ async fn open_session(
     request: OpenSession,
     load_session: bool,
 ) -> Result<OpenSessionResult, DriverError> {
-    if !request.mcp_grants.is_empty() {
-        return Err(DriverError::Protocol(
-            "MCP grants are not implemented by this driver profile".to_owned(),
-        ));
-    }
+    let mcp_servers = resolve_mcp_servers(&request)?;
     let directories = request
         .additional_directories
         .iter()
@@ -539,7 +538,7 @@ async fn open_session(
             let raw_request = json!({
                 "cwd": request.working_directory,
                 "additionalDirectories": directories,
-                "mcpServers": []
+                "mcpServers": mcp_servers
             });
             let response = connection
                 .send_request(RawNewSessionRequest(raw_request))
@@ -564,7 +563,7 @@ async fn open_session(
                 "sessionId": session_ref,
                 "cwd": request.working_directory,
                 "additionalDirectories": directories,
-                "mcpServers": []
+                "mcpServers": mcp_servers
             });
             let response = connection
                 .send_request(RawLoadSessionRequest(raw_request))
@@ -578,7 +577,8 @@ async fn open_session(
     if let Some(existing) = state.sessions.get(&session_ref)
         && (existing.binding != request.binding
             || existing.cwd != request.working_directory
-            || existing.additional_directories != request.additional_directories)
+            || existing.additional_directories != request.additional_directories
+            || existing.mcp_grants != request.mcp_grants)
     {
         return Err(DriverError::Protocol(
             "session reference already belongs to incompatible binding state".to_owned(),
@@ -586,12 +586,14 @@ async fn open_session(
     }
     let effective_working_directory = request.working_directory.clone();
     let effective_additional_directories = request.additional_directories.clone();
+    let effective_mcp_grants = request.mcp_grants.clone();
     state.sessions.insert(
         session_ref.clone(),
         SessionState {
             binding: request.binding,
             cwd: request.working_directory,
             additional_directories: request.additional_directories,
+            mcp_grants: request.mcp_grants,
             active: None,
         },
     );
@@ -602,9 +604,111 @@ async fn open_session(
         effective_config: json!({
             "working_directory": effective_working_directory,
             "additional_directories": effective_additional_directories,
+            "mcp_grants": effective_mcp_grants,
         }),
         raw_session_result: bound_json(raw_result, MAX_FRAME_BYTES / 2),
     })
+}
+
+fn resolve_mcp_servers(request: &OpenSession) -> Result<Vec<Value>, DriverError> {
+    let mut requested = BTreeSet::new();
+    for name in &request.mcp_grants {
+        if name.trim().is_empty() || name.len() > 256 {
+            return Err(DriverError::Protocol(
+                "MCP grant names must contain between 1 and 256 bytes".to_owned(),
+            ));
+        }
+        if !requested.insert(name.as_str()) {
+            return Err(DriverError::Protocol(format!(
+                "duplicate MCP grant name: {name}"
+            )));
+        }
+    }
+    let mut resolved = BTreeMap::new();
+    for grant in &request.resolved_mcp_grants {
+        if !requested.contains(grant.name.as_str()) {
+            return Err(DriverError::Protocol(format!(
+                "resolved MCP endpoint was not requested: {}",
+                grant.name
+            )));
+        }
+        if resolved.insert(grant.name.as_str(), grant).is_some() {
+            return Err(DriverError::Protocol(format!(
+                "duplicate resolved MCP grant: {}",
+                grant.name
+            )));
+        }
+    }
+    if requested.len() != resolved.len() {
+        return Err(DriverError::Protocol(
+            "every requested MCP grant must have one resolved endpoint".to_owned(),
+        ));
+    }
+
+    request
+        .mcp_grants
+        .iter()
+        .map(|name| {
+            let grant = resolved
+                .get(name.as_str())
+                .expect("resolved and requested MCP grant sets match");
+            match &grant.endpoint {
+                ResolvedMcpEndpoint::Http { url, headers } => {
+                    validate_loopback_mcp_url(url)?;
+                    if headers.len() > 16 {
+                        return Err(DriverError::Protocol(
+                            "resolved MCP HTTP endpoints may have at most 16 headers".to_owned(),
+                        ));
+                    }
+                    let mut header_names = BTreeSet::new();
+                    for header in headers {
+                        let parsed_name =
+                            HeaderName::from_bytes(header.name.as_bytes()).map_err(|_| {
+                                DriverError::Protocol("invalid MCP HTTP header name".to_owned())
+                            })?;
+                        HeaderValue::from_str(&header.value).map_err(|_| {
+                            DriverError::Protocol("invalid MCP HTTP header value".to_owned())
+                        })?;
+                        if header.value.len() > 4_096 {
+                            return Err(DriverError::Protocol(
+                                "MCP HTTP header values must not exceed 4,096 bytes".to_owned(),
+                            ));
+                        }
+                        if !header_names.insert(parsed_name.as_str().to_owned()) {
+                            return Err(DriverError::Protocol(
+                                "duplicate MCP HTTP header name".to_owned(),
+                            ));
+                        }
+                    }
+                    Ok(json!({
+                        "type": "http",
+                        "name": name,
+                        "url": url,
+                        "headers": headers,
+                    }))
+                }
+            }
+        })
+        .collect()
+}
+
+fn validate_loopback_mcp_url(raw: &str) -> Result<(), DriverError> {
+    let url = Url::parse(raw)
+        .map_err(|_| DriverError::Protocol("resolved MCP URL is invalid".to_owned()))?;
+    if url.scheme() != "http"
+        || url.host_str() != Some("127.0.0.1")
+        || url.port().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(DriverError::Protocol(
+            "resolved MCP URL must be an explicit 127.0.0.1 HTTP endpoint without credentials, query, or fragment"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 async fn start_turn(
@@ -1254,4 +1358,75 @@ fn now_ms_i64() -> i64 {
 
 fn acp_error(error: impl std::fmt::Display) -> agent_client_protocol::Error {
     agent_client_protocol::Error::internal_error().data(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use fleetd::{ResolvedMcpGrant, ResolvedMcpHttpHeader};
+
+    use super::*;
+
+    #[test]
+    fn mcp_resolution_requires_an_exact_requested_loopback_endpoint() {
+        let mut request = open_request();
+        request.mcp_grants = vec!["fleet.messaging.send".to_owned()];
+        assert!(resolve_mcp_servers(&request).is_err());
+
+        request.resolved_mcp_grants = vec![ResolvedMcpGrant {
+            name: "fleet.messaging.send".to_owned(),
+            endpoint: ResolvedMcpEndpoint::Http {
+                url: "https://example.com/mcp".to_owned(),
+                headers: Vec::new(),
+            },
+        }];
+        assert!(resolve_mcp_servers(&request).is_err());
+
+        request.resolved_mcp_grants[0].endpoint = ResolvedMcpEndpoint::Http {
+            url: "http://127.0.0.1:49152/mcp".to_owned(),
+            headers: vec![ResolvedMcpHttpHeader {
+                name: "x-fleetd-capability-token".to_owned(),
+                value: "narrow-token".to_owned(),
+            }],
+        };
+        let servers = resolve_mcp_servers(&request).expect("valid resolution");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0]["type"], "http");
+        assert_eq!(servers[0]["name"], "fleet.messaging.send");
+    }
+
+    #[test]
+    fn mcp_resolution_rejects_duplicate_or_unrequested_grants() {
+        let mut request = open_request();
+        request.mcp_grants = vec![
+            "fleet.messaging.send".to_owned(),
+            "fleet.messaging.send".to_owned(),
+        ];
+        assert!(resolve_mcp_servers(&request).is_err());
+
+        request.mcp_grants = vec!["fleet.messaging.send".to_owned()];
+        request.resolved_mcp_grants = vec![ResolvedMcpGrant {
+            name: "fleet.messaging.read".to_owned(),
+            endpoint: ResolvedMcpEndpoint::Http {
+                url: "http://127.0.0.1:49152/mcp".to_owned(),
+                headers: Vec::new(),
+            },
+        }];
+        assert!(resolve_mcp_servers(&request).is_err());
+    }
+
+    fn open_request() -> OpenSession {
+        OpenSession {
+            binding: Binding {
+                binding_id: "binding".to_owned(),
+                binding_generation: 1,
+                owner_epoch: 1,
+            },
+            mode: OpenSessionMode::Create,
+            working_directory: "/tmp".to_owned(),
+            additional_directories: Vec::new(),
+            mcp_grants: Vec::new(),
+            resolved_mcp_grants: Vec::new(),
+            profile_digest: "sha256:profile".to_owned(),
+        }
+    }
 }

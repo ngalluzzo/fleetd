@@ -102,16 +102,32 @@ commit as result publication.
 The worker opens SQLite directly as a trusted local controller. It is neither
 part of the public HTTP API nor embedded in the messaging kernel. Persisted
 invocation-event fragments and explicit runtime-generation evidence remain the
-next controller boundary. Codex has passed one real end-to-end turn; DSH has
-passed initialization but still requires an approved credential path for
-session and turn qualification. Invocation, resumption, retry policy, and
-restart policy remain outside the messaging kernel. See the
+next controller boundary.
+
+An optional `fleet.messaging.send` grant gives a turn one narrow
+`publish_durable_message` capability through a controller-owned loopback MCP
+endpoint. Its random token is not a fleet bearer and grants no inbox, operator,
+or arbitrary database access. Activation follows the durable dispatch fence;
+revocation waits for every accepted append and precedes terminal settlement.
+The broker derives sender and channel from the invocation, carries or
+establishes correlation from the source message, fixes causation to that
+message, and makes `(invocation, operation_id)` the durable idempotency scope.
+SQLite membership and append transactions remain authoritative. A real
+OpenCode turn has exercised this path end to end.
+
+Codex has passed one real end-to-end turn; DSH has passed initialization but
+still requires an approved credential path for session and turn qualification.
+Invocation, resumption, retry policy, and restart policy remain outside the
+messaging kernel. See the
 [harness execution architecture](HARNESS_EXECUTION.md),
 [worker operations guide](WORKER.md),
 [ADR 0005](adr/0005-acp-harness-boundary.md),
 [ADR 0011](adr/0011-vendor-owned-harness-plugins.md),
-[ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md), and the
-[OpenCode plugin qualification](qualification/opencode-plugin-2026-08-24.md).
+[ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md),
+[ADR 0016](adr/0016-invocation-scoped-message-capability.md),
+[OpenCode plugin qualification](qualification/opencode-plugin-2026-08-24.md),
+and the
+[message-capability qualification](qualification/message-capability-opencode-2026-08-24.md).
 
 ## Capability work boundary
 

@@ -24,6 +24,9 @@
   plugin restart and durable native-session adoption.
 - [x] Delivery leases, acknowledgement, retry, and restart resumption.
 - [x] Durable unknown-outcome parking with operator-only resolution.
+- [x] First invocation-scoped outbound message capability: a real OpenCode
+  turn committed an idempotent, attributed peer message through a
+  controller-owned MCP endpoint without receiving a fleet bearer credential.
 
 ## M2 — Work contracts
 

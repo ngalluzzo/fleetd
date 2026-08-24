@@ -1,14 +1,56 @@
 #![cfg(unix)]
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use fleetd::{
     AcquireSessionBinding, Capability, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
-    ManagedHarnessController, ManagedTurn, ManagedTurnOutcome, OpenSession, OpenSessionMode,
-    PluginProcess, PluginSpec, PromptBlock, SessionAcquisitionMode, SessionBindingState,
-    SessionPersistence, Store, ToolBudget, TurnPolicy, TurnResultCapture,
+    Invocation, InvocationState, ManagedHarnessController, ManagedTurn, ManagedTurnCapability,
+    ManagedTurnOutcome, OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock,
+    SessionAcquisitionMode, SessionBindingState, SessionPersistence, Store, ToolBudget, TurnPolicy,
+    TurnResultCapture,
 };
+use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
+
+struct RecordingCapability {
+    store: Store,
+    activated_after_arm: Arc<AtomicBool>,
+    deactivated: Arc<AtomicBool>,
+}
+
+impl ManagedTurnCapability for RecordingCapability {
+    fn activate<'a>(&'a self, invocation: &'a Invocation) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let armed = self
+                .store
+                .list_invocations(Some(&invocation.agent_id))
+                .await
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .find(|candidate| candidate.id == invocation.id)
+                .is_some_and(|candidate| candidate.state == InvocationState::DispatchArmed);
+            self.activated_after_arm.store(armed, Ordering::SeqCst);
+            if armed {
+                Ok(())
+            } else {
+                Err("capability activated before dispatch arm".to_owned())
+            }
+        })
+    }
+
+    fn deactivate<'a>(&'a self, _invocation_id: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            self.deactivated.store(true, Ordering::SeqCst);
+        })
+    }
+}
 
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_harness_plugin.py")
@@ -135,6 +177,7 @@ async fn open_harness(
             working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
             additional_directories: Vec::new(),
             mcp_grants: Vec::new(),
+            resolved_mcp_grants: Vec::new(),
             profile_digest: description.profile_digest,
         })
         .await
@@ -152,6 +195,13 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
     let agent_id = invocation.agent_id.clone();
     let invocation_id = invocation.id.clone();
     let (mut harness, session_ref, binding) = open_harness(&store, &agent_id, "healthy").await;
+    let activated_after_arm = Arc::new(AtomicBool::new(false));
+    let deactivated = Arc::new(AtomicBool::new(false));
+    let capability: Arc<dyn ManagedTurnCapability> = Arc::new(RecordingCapability {
+        store: store.clone(),
+        activated_after_arm: Arc::clone(&activated_after_arm),
+        deactivated: Arc::clone(&deactivated),
+    });
     let outcome = ManagedHarnessController::new(&store)
         .run(
             &mut harness,
@@ -163,6 +213,7 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
                     text: "perform managed work".to_owned(),
                 }],
                 policy: policy(),
+                capabilities: vec![capability],
                 result_kind: "work.result/v1".to_owned(),
                 result_capture: TurnResultCapture::Transcript,
                 result_context: json!({"adapter": "fixture"}),
@@ -170,6 +221,8 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
         )
         .await
         .expect("run managed turn");
+    assert!(activated_after_arm.load(Ordering::SeqCst));
+    assert!(deactivated.load(Ordering::SeqCst));
     let ManagedTurnOutcome::Completed(completion) = outcome else {
         panic!("expected completion");
     };
@@ -222,6 +275,7 @@ async fn managed_controller_parks_post_arm_protocol_ambiguity() {
                     text: "perform ambiguous work".to_owned(),
                 }],
                 policy: policy(),
+                capabilities: Vec::new(),
                 result_kind: "work.result/v1".to_owned(),
                 result_capture: TurnResultCapture::Transcript,
                 result_context: Value::Null,

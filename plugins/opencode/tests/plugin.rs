@@ -58,6 +58,7 @@ async fn opencode_is_a_distinct_typed_harness_plugin() {
             working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
             additional_directories: Vec::new(),
             mcp_grants: Vec::new(),
+            resolved_mcp_grants: Vec::new(),
             profile_digest: description.profile_digest,
         })
         .await

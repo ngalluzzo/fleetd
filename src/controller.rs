@@ -1,7 +1,8 @@
 //! Managed harness control flow above the messaging kernel.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
+use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use thiserror::Error;
 
@@ -20,6 +21,9 @@ pub struct ManagedTurn {
     pub session_ref: String,
     pub prompt: Vec<PromptBlock>,
     pub policy: TurnPolicy,
+    /// Narrow controller-owned capabilities activated only after the durable
+    /// invocation fence and revoked before settlement.
+    pub capabilities: Vec<Arc<dyn ManagedTurnCapability>>,
     pub result_kind: String,
     /// Adapter-selected result representation. The raw assistant transcript is
     /// always retained; structured capture only identifies and parses one
@@ -27,6 +31,21 @@ pub struct ManagedTurn {
     pub result_capture: TurnResultCapture,
     /// Adapter-owned immutable context copied into the raw result evidence.
     pub result_context: serde_json::Value,
+}
+
+/// Invocation-scoped authority made available to a harness turn.
+///
+pub trait ManagedTurnCapability: Send + Sync {
+    /// Activates this capability for one already-armed invocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded diagnostic when the capability cannot establish the
+    /// exact invocation scope.
+    fn activate<'a>(&'a self, invocation: &'a Invocation) -> BoxFuture<'a, Result<(), String>>;
+
+    /// Revokes the exact invocation if it is still active.
+    fn deactivate<'a>(&'a self, invocation_id: &'a str) -> BoxFuture<'a, ()>;
 }
 
 /// How a turn adapter asks the controller to expose terminal output. This is
@@ -96,6 +115,7 @@ impl<'store> ManagedHarnessController<'store> {
             session_ref,
             prompt,
             policy,
+            capabilities,
             result_kind,
             result_capture,
             result_context,
@@ -112,6 +132,19 @@ impl<'store> ManagedHarnessController<'store> {
                 },
             )
             .await?;
+
+        for (activated, capability) in capabilities.iter().enumerate() {
+            if let Err(error) = capability.activate(&invocation).await {
+                deactivate_capabilities(&capabilities[..activated], &invocation.id).await;
+                return self
+                    .block_after_arm(
+                        &invocation,
+                        &binding,
+                        format!("invocation capability activation failed: {error}"),
+                    )
+                    .await;
+            }
+        }
 
         let fence = crate::ExecutionFence {
             binding_id: binding.binding_id.clone(),
@@ -135,15 +168,17 @@ impl<'store> ManagedHarnessController<'store> {
             policy: policy.clone(),
         };
         if let Err(error) = harness.start_turn(&request).await {
+            deactivate_capabilities(&capabilities, &invocation.id).await;
             return self
                 .block_after_arm(&invocation, &binding, format!("turn start failed: {error}"))
                 .await;
         }
 
-        let terminal = match self
+        let terminal_result = self
             .await_terminal(harness, &invocation, &binding, &fence, &policy)
-            .await?
-        {
+            .await;
+        deactivate_capabilities(&capabilities, &invocation.id).await;
+        let terminal = match terminal_result? {
             TerminalDrain::Terminal(terminal) => *terminal,
             TerminalDrain::Blocked(blocked) => return Ok(ManagedTurnOutcome::Blocked(blocked)),
         };
@@ -347,6 +382,15 @@ impl<'store> ManagedHarnessController<'store> {
             )
             .await?;
         Ok(blocked)
+    }
+}
+
+async fn deactivate_capabilities(
+    capabilities: &[Arc<dyn ManagedTurnCapability>],
+    invocation_id: &str,
+) {
+    for capability in capabilities.iter().rev() {
+        capability.deactivate(invocation_id).await;
     }
 }
 

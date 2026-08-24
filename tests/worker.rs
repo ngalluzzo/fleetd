@@ -579,3 +579,40 @@ async fn adapter_failure_releases_only_the_unarmed_reservation() {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn worker_rejects_unknown_or_duplicate_mcp_grants_before_startup() {
+    let fixture = fixture(0).await;
+    let mut config = worker_config(
+        &fixture.receiver_id,
+        "healthy",
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+    );
+    config.mcp_grants = vec!["fleet.messaging.unknown".to_owned()];
+    let error = ContinuousHarnessWorker::new(
+        &fixture.store,
+        config,
+        EnvelopeTurnAdapter::new("work.result/v1"),
+    )
+    .err()
+    .expect("unknown grant must fail");
+    assert!(matches!(error, ContinuousWorkerError::InvalidConfig(_)));
+
+    let mut config = worker_config(
+        &fixture.receiver_id,
+        "healthy",
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+    );
+    config.mcp_grants = vec![
+        fleetd::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
+        fleetd::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
+    ];
+    let error = ContinuousHarnessWorker::new(
+        &fixture.store,
+        config,
+        EnvelopeTurnAdapter::new("work.result/v1"),
+    )
+    .err()
+    .expect("duplicate grant must fail");
+    assert!(matches!(error, ContinuousWorkerError::InvalidConfig(_)));
+}

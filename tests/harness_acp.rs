@@ -89,6 +89,7 @@ async fn typed_harness_client_runs_one_fenced_turn() {
             working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
             additional_directories: Vec::new(),
             mcp_grants: Vec::new(),
+            resolved_mcp_grants: Vec::new(),
             profile_digest: "sha256:profile".to_owned(),
         })
         .await

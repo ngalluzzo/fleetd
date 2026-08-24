@@ -621,12 +621,23 @@ The first vertical slice now implements:
    open session lane, and repeats until cancelled. Plugin or harness failure
    starts a fresh process generation after bounded backoff. Compatible ready
    lanes are natively resumed under a higher owner epoch.
+9. **Invocation-scoped peer messaging.** The optional
+   `fleet.messaging.send` grant resolves to a controller-owned loopback MCP
+   server built with the official Rust SDK. The controller activates it only
+   after dispatch arming and revokes it before settlement. The tool derives
+   sender, channel, correlation, causation, and idempotency from the active
+   invocation; it accepts only an operation ID, exact peer, kind, and bounded
+   JSON payload. The durable store remains the authority for membership and
+   atomic append.
 
 The inner turn controller deliberately requires an already-reserved invocation
 and a session acquired through the durable binding API. The continuous worker
 owns reservation, native create/resume, and opaque-reference recording before
-it invokes that controller. Invocation-event storage, persistent runtime
-generation evidence, and a capability broker are not implemented yet.
+it invokes that controller. Invocation-event storage and persistent
+runtime-generation evidence are not implemented yet. The first capability
+broker slice implements durable outbound peer messages only; inbox reads,
+dependency waiting, reviews, approvals, and other semantic operations remain
+separately versioned capabilities or work contracts.
 
 These are reliability requirements for the first vertical loop, not a request
 to expand the messaging kernel with harness semantics.
@@ -677,7 +688,10 @@ turn and a second vendor-owned plugin are still required. See the
 [qualification record](qualification/acp-driver-2026-08-24.md). These partial
 results and the
 [OpenCode plugin checkpoint](qualification/opencode-plugin-2026-08-24.md) do
-not stabilize the capability or satisfy the matrix above.
+not stabilize the capability or satisfy the matrix above. The later
+[real OpenCode message-capability checkpoint](qualification/message-capability-opencode-2026-08-24.md)
+does prove that one real model can discover the MCP tool and commit an
+attributed peer message through the continuous worker.
 
 ## Deliberate exclusions
 

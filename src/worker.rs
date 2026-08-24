@@ -1,7 +1,7 @@
 //! Continuous harness worker orchestration above the durable controller.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -9,15 +9,17 @@ use std::{
 
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
     AcquireSessionBinding, FleetError, HarnessAcpClient, Invocation, ManagedHarnessController,
-    ManagedTurn, ManagedTurnError, ManagedTurnOutcome, OpenSession, OpenSessionMode, PluginError,
-    PluginProcess, PluginSpec, PromptBlock, RetryDelivery, SessionAcquisitionMode, Store,
-    TurnPolicy, TurnResultCapture,
+    ManagedTurn, ManagedTurnCapability, ManagedTurnError, ManagedTurnOutcome,
+    MessageCapabilityBroker, OpenSession, OpenSessionMode, PUBLISH_DURABLE_MESSAGE_GRANT,
+    PluginError, PluginProcess, PluginSpec, PromptBlock, RetryDelivery, SessionAcquisitionMode,
+    Store, TurnPolicy, TurnResultCapture,
     plugin::Binding,
     work_contract::{
         CAPABILITY_WORK_ATTEMPT_V2_KIND, CAPABILITY_WORK_REQUEST_KIND,
@@ -265,6 +267,8 @@ pub enum ContinuousWorkerError {
     InvalidConfig(String),
     #[error("turn adapter rejected a reserved message: {0}")]
     Adapter(String),
+    #[error("capability broker failed: {0}")]
+    CapabilityBroker(#[from] crate::CapabilityBrokerError),
     #[error("failed to safely release an unarmed reservation after {context}: {source}")]
     PreArmSettlement {
         context: String,
@@ -332,17 +336,35 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 "maximum settled turns must be greater than zero".to_owned(),
             ));
         }
+        let broker = if self
+            .config
+            .mcp_grants
+            .iter()
+            .any(|grant| grant == PUBLISH_DURABLE_MESSAGE_GRANT)
+        {
+            Some(MessageCapabilityBroker::start(self.store.clone()).await?)
+        } else {
+            None
+        };
         let mut report = WorkerReport::default();
-        while !cancellation.is_cancelled() && !limit_reached(&report, max_settled_turns) {
+        let outcome = loop {
+            if cancellation.is_cancelled() || limit_reached(&report, max_settled_turns) {
+                break Ok(report);
+            }
             let exit = self
-                .run_generation(&cancellation, max_settled_turns, &mut report)
+                .run_generation(
+                    &cancellation,
+                    max_settled_turns,
+                    &mut report,
+                    broker.as_ref(),
+                )
                 .await;
             match exit {
-                GenerationExit::Stopped => break,
-                GenerationExit::Fatal(error) => return Err(error),
+                GenerationExit::Stopped => break Ok(report),
+                GenerationExit::Fatal(error) => break Err(error),
                 GenerationExit::Restart(reason) => {
                     if cancellation.is_cancelled() || limit_reached(&report, max_settled_turns) {
-                        break;
+                        break Ok(report);
                     }
                     report.operational_restarts = report.operational_restarts.saturating_add(1);
                     tracing::warn!(
@@ -351,12 +373,15 @@ impl<'store> ContinuousHarnessWorker<'store> {
                         "worker plugin generation will restart"
                     );
                     if wait_or_cancel(&cancellation, self.config.restart_backoff).await {
-                        break;
+                        break Ok(report);
                     }
                 }
             }
+        };
+        if let Some(broker) = broker {
+            broker.shutdown().await;
         }
-        Ok(report)
+        outcome
     }
 
     async fn run_generation(
@@ -364,6 +389,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
         cancellation: &CancellationToken,
         max_settled_turns: Option<u64>,
         report: &mut WorkerReport,
+        broker: Option<&MessageCapabilityBroker>,
     ) -> GenerationExit {
         let process = match PluginProcess::start(self.config.plugin.clone()).await {
             Ok(process) => process,
@@ -392,19 +418,24 @@ impl<'store> ContinuousHarnessWorker<'store> {
         };
         let generation = GenerationIdentity {
             owner_instance_id: Uuid::new_v4().to_string(),
-            compatibility_digest: self
-                .config
-                .compatibility_digest
-                .as_deref()
-                .unwrap_or(&description.profile_digest)
-                .to_owned(),
+            compatibility_digest: worker_compatibility_digest(
+                self.config
+                    .compatibility_digest
+                    .as_deref()
+                    .unwrap_or(&description.profile_digest),
+                &self.config.mcp_grants,
+            ),
             profile_digest: description.profile_digest,
+        };
+        let context = GenerationContext {
+            identity: &generation,
+            broker,
         };
         let mut sessions = HashMap::<LaneIdentity, OpenedSession>::new();
         let exit = self
             .drive_generation(
                 &mut harness,
-                &generation,
+                &context,
                 &mut sessions,
                 cancellation,
                 max_settled_turns,
@@ -417,7 +448,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
     async fn drive_generation(
         &self,
         harness: &mut HarnessAcpClient,
-        generation: &GenerationIdentity,
+        context: &GenerationContext<'_>,
         sessions: &mut HashMap<LaneIdentity, OpenedSession>,
         cancellation: &CancellationToken,
         max_settled_turns: Option<u64>,
@@ -467,7 +498,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 key: prepared.lane_key.clone(),
             };
             let opened = match self
-                .resolve_lane(harness, &invocation, lane, generation, sessions, report)
+                .resolve_lane(harness, &invocation, lane, context, sessions, report)
                 .await
             {
                 Ok(Some(opened)) => opened,
@@ -477,8 +508,23 @@ impl<'store> ContinuousHarnessWorker<'store> {
             if cancellation.is_cancelled() {
                 return self.stop_unarmed(&invocation, report).await;
             }
+            let opened_turn = OpenedTurn {
+                session: opened,
+                capabilities: context
+                    .broker
+                    .map(MessageCapabilityBroker::turn_capability)
+                    .into_iter()
+                    .collect(),
+            };
             if let Some(exit) = self
-                .execute_turn(&controller, harness, invocation, prepared, opened, report)
+                .execute_turn(
+                    &controller,
+                    harness,
+                    invocation,
+                    prepared,
+                    opened_turn,
+                    report,
+                )
                 .await
             {
                 return exit;
@@ -521,24 +567,14 @@ impl<'store> ContinuousHarnessWorker<'store> {
         harness: &HarnessAcpClient,
         invocation: &Invocation,
         lane: LaneIdentity,
-        generation: &GenerationIdentity,
+        context: &GenerationContext<'_>,
         sessions: &mut HashMap<LaneIdentity, OpenedSession>,
         report: &mut WorkerReport,
     ) -> Result<Option<OpenedSession>, GenerationExit> {
         if let Some(opened) = sessions.get(&lane) {
             return Ok(Some(opened.clone()));
         }
-        match self
-            .open_lane(
-                harness,
-                invocation,
-                &lane,
-                &generation.owner_instance_id,
-                &generation.profile_digest,
-                &generation.compatibility_digest,
-            )
-            .await
-        {
+        match self.open_lane(harness, invocation, &lane, context).await {
             Ok(opened) => {
                 sessions.insert(lane, opened.clone());
                 Ok(Some(opened))
@@ -568,7 +604,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
         harness: &mut HarnessAcpClient,
         invocation: Invocation,
         prepared: PreparedTurn,
-        opened: OpenedSession,
+        opened: OpenedTurn,
         report: &mut WorkerReport,
     ) -> Option<GenerationExit> {
         let result = controller
@@ -576,10 +612,11 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 harness,
                 ManagedTurn {
                     invocation: invocation.clone(),
-                    binding: opened.binding,
-                    session_ref: opened.session_ref,
+                    binding: opened.session.binding,
+                    session_ref: opened.session.session_ref,
                     prompt: prepared.prompt,
                     policy: self.config.turn_policy.clone(),
+                    capabilities: opened.capabilities,
                     result_kind: prepared.result_kind,
                     result_capture: prepared.result_capture,
                     result_context: prepared.result_context,
@@ -673,9 +710,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
         harness: &HarnessAcpClient,
         invocation: &Invocation,
         lane: &LaneIdentity,
-        owner_instance_id: &str,
-        profile_digest: &str,
-        compatibility_digest: &str,
+        context: &GenerationContext<'_>,
     ) -> Result<OpenedSession, LaneOpenError> {
         let additional_directories = self
             .config
@@ -691,9 +726,9 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 AcquireSessionBinding {
                     lane_policy: lane.policy.clone(),
                     lane_key: lane.key.clone(),
-                    owner_instance_id: owner_instance_id.to_owned(),
-                    profile_digest: profile_digest.to_owned(),
-                    compatibility_digest: compatibility_digest.to_owned(),
+                    owner_instance_id: context.identity.owner_instance_id.clone(),
+                    profile_digest: context.identity.profile_digest.clone(),
+                    compatibility_digest: context.identity.compatibility_digest.clone(),
                     working_directory: working_directory.clone(),
                     additional_directories: additional_directories.clone(),
                 },
@@ -714,7 +749,12 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 working_directory,
                 additional_directories,
                 mcp_grants: self.config.mcp_grants.clone(),
-                profile_digest: profile_digest.to_owned(),
+                resolved_mcp_grants: context
+                    .broker
+                    .map(MessageCapabilityBroker::resolved_grant)
+                    .into_iter()
+                    .collect(),
+                profile_digest: context.identity.profile_digest.clone(),
             })
             .await
             .map_err(LaneOpenError::Plugin)?;
@@ -774,10 +814,20 @@ struct OpenedSession {
     session_ref: String,
 }
 
+struct OpenedTurn {
+    session: OpenedSession,
+    capabilities: Vec<Arc<dyn ManagedTurnCapability>>,
+}
+
 struct GenerationIdentity {
     owner_instance_id: String,
     profile_digest: String,
     compatibility_digest: String,
+}
+
+struct GenerationContext<'a> {
+    identity: &'a GenerationIdentity,
+    broker: Option<&'a MessageCapabilityBroker>,
 }
 
 enum GenerationExit {
@@ -820,6 +870,15 @@ fn validate_config(config: &ContinuousWorkerConfig) -> Result<(), ContinuousWork
     validate_directory("working directory", &config.working_directory)?;
     for directory in &config.additional_directories {
         validate_directory("additional directory", directory)?;
+    }
+    let mut mcp_grants = BTreeSet::new();
+    for grant in &config.mcp_grants {
+        if grant != PUBLISH_DURABLE_MESSAGE_GRANT {
+            return invalid(format!("unsupported MCP grant: {grant}"));
+        }
+        if !mcp_grants.insert(grant) {
+            return invalid(format!("duplicate MCP grant: {grant}"));
+        }
     }
     if config
         .compatibility_digest
@@ -914,6 +973,20 @@ fn invalid<T>(message: impl Into<String>) -> Result<T, ContinuousWorkerError> {
 
 fn duration_ms(duration: Duration) -> Option<u64> {
     u64::try_from(duration.as_millis()).ok()
+}
+
+fn worker_compatibility_digest(base: &str, mcp_grants: &[String]) -> String {
+    if mcp_grants.is_empty() {
+        return base.to_owned();
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"fleetd-worker-compatibility-v1\0");
+    digest.update(base.as_bytes());
+    for grant in mcp_grants {
+        digest.update(b"\0");
+        digest.update(grant.as_bytes());
+    }
+    format!("sha256:{:x}", digest.finalize())
 }
 
 fn limit_reached(report: &WorkerReport, limit: Option<u64>) -> bool {

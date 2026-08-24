@@ -38,6 +38,22 @@ use it as a production vendor adapter. By default the worker resumes only an
 exact observed profile digest. Set `compatibility_digest` only after a
 separately qualified set of profiles has proven native-session compatibility.
 
+`mcp_grants` is an allowlist of semantic capability names, not MCP commands,
+URLs, or credentials. The current worker accepts either no grants or exactly
+`fleet.messaging.send`. When enabled, it starts a random-port `127.0.0.1`
+Streamable HTTP endpoint and supplies its ephemeral token only in the resolved
+ACP session setup. The desired-state file, SQLite catalog, effective-config
+evidence, and logs never receive that token. Unknown or duplicate grant names
+fail configuration validation before a plugin starts.
+
+The exposed `publish_durable_message` tool requires `operation_id`,
+`recipient_id`, `kind`, and `payload`. It is direct-message only, rejects
+self-send, permits at most eight committed messages per invocation, and caps
+the encoded payload at 64 KiB. Exact retries reuse the operation ID and return
+the same committed message. The agent cannot choose sender, channel,
+correlation, causation, or the durable idempotency key. See the
+[OpenCode qualification](qualification/message-capability-opencode-2026-08-24.md).
+
 ## Turn and lane behavior
 
 The built-in adapter passes the full immutable fleetd message envelope and its
@@ -75,6 +91,9 @@ bounds are validated before a process starts.
   uncertain.
 - After a completed or blocked turn, result settlement is already committed in
   SQLite before the next reservation.
+- Invocation capabilities are activated only after dispatch arming. Revocation
+  serializes behind any accepted durable append and completes before result or
+  block settlement.
 - Plugin generations restart with bounded backoff. Their in-memory session
   cache is discarded; compatible ready bindings are reacquired under a higher
   owner epoch and natively resumed.

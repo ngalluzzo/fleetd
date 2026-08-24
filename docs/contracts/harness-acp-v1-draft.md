@@ -95,7 +95,22 @@ Request:
   },
   "working_directory": "/absolute/worktree",
   "additional_directories": [],
-  "mcp_grants": ["fleet.messaging.read", "fleet.messaging.send"],
+  "mcp_grants": ["fleet.messaging.send"],
+  "resolved_mcp_grants": [
+    {
+      "name": "fleet.messaging.send",
+      "endpoint": {
+        "type": "http",
+        "url": "http://127.0.0.1:49152/mcp",
+        "headers": [
+          {
+            "name": "x-fleetd-capability-token",
+            "value": "ephemeral-redacted-value"
+          }
+        ]
+      }
+    }
+  ],
   "profile_digest": "sha256:..."
 }
 ```
@@ -137,8 +152,13 @@ reported as session-replay evidence during open; they are not invocation
 events or candidate output for the next turn.
 
 `mcp_grants` contains names, not credentials or arbitrary child commands. The
-effective immutable profile resolves each name to a controller-approved MCP
-sidecar definition.
+effective immutable profile resolves each name to one controller-approved MCP
+definition in `resolved_mcp_grants`. This second field is derived
+controller-to-driver data, never operator-authored desired state. The current
+host accepts only explicit `127.0.0.1` HTTP endpoints, rejects missing,
+duplicate, or unrequested resolutions, and redacts header values from debug
+output. Ephemeral capability tokens are not fleet bearer credentials and are
+not persisted in session-binding or effective-config evidence.
 
 ## `harness.acp.turn.start`
 

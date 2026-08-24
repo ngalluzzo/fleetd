@@ -204,9 +204,18 @@ remain the next reliability boundaries. See
 [ADR 0008](docs/adr/0008-write-ahead-invocation-fence.md),
 [ADR 0009](docs/adr/0009-typed-acp-driver-and-process-ownership.md),
 [ADR 0010](docs/adr/0010-durable-session-bindings-and-owner-epochs.md),
-[ADR 0011](docs/adr/0011-vendor-owned-harness-plugins.md), and the
+[ADR 0011](docs/adr/0011-vendor-owned-harness-plugins.md),
+[ADR 0016](docs/adr/0016-invocation-scoped-message-capability.md), and the
 [historical reference qualification](docs/qualification/acp-driver-2026-08-24.md)
 and [OpenCode plugin qualification](docs/qualification/opencode-plugin-2026-08-24.md).
+
+For closed-loop delegation, opt a worker into the narrow
+`fleet.messaging.send` grant. Fleetd resolves the name to an ephemeral
+controller-owned MCP endpoint; the harness receives no fleet bearer. A real
+OpenCode turn has used it to commit an idempotent peer message with
+controller-derived attribution, correlation, and causation. See the
+[worker guide](docs/WORKER.md) and
+[qualification record](docs/qualification/message-capability-opencode-2026-08-24.md).
 
 ## Capability work dogfood
 

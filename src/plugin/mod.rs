@@ -10,8 +10,9 @@ pub use harness_acp::{
     DescribeResult, DriverIdentity, EffectiveEnforcement, ExecutionFence, HarnessAcpClient,
     HarnessAcpNotification, HarnessExecutionCertainty, HarnessLimits, OpenSession, OpenSessionMode,
     OpenSessionResult, PermissionOutcome, PermissionRequested, PermissionResolution, PromptBlock,
-    RuntimeIdentity, SessionPersistence, StartTurn, StartTurnResult, ToolBudget, TurnEvent,
-    TurnPolicy, TurnSource, TurnTerminal, capability as harness_acp_capability,
+    ResolvedMcpEndpoint, ResolvedMcpGrant, ResolvedMcpHttpHeader, RuntimeIdentity,
+    SessionPersistence, StartTurn, StartTurnResult, ToolBudget, TurnEvent, TurnPolicy, TurnSource,
+    TurnTerminal, capability as harness_acp_capability,
 };
 pub use protocol::{Capability, PluginIdentity, PluginManifest, PluginNotification};
 pub use supervisor::{PluginError, PluginExit, PluginProcess, PluginSpec, ShutdownOutcome};

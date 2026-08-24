@@ -43,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             working_directory: arguments.cwd,
             additional_directories: Vec::new(),
             mcp_grants: Vec::new(),
+            resolved_mcp_grants: Vec::new(),
             profile_digest,
         })
         .await?;

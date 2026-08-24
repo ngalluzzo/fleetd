@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod capability_broker;
 pub mod controller;
 mod delivery;
 pub mod error;
@@ -16,8 +17,12 @@ pub mod worker;
 
 pub use api::{AppState, openapi_document, router};
 pub use auth::{AuthService, OperatorBootstrap, Principal};
+pub use capability_broker::{
+    CapabilityBrokerError, MessageCapabilityBroker, PUBLISH_DURABLE_MESSAGE_GRANT,
+};
 pub use controller::{
-    ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnOutcome, TurnResultCapture,
+    ManagedHarnessController, ManagedTurn, ManagedTurnCapability, ManagedTurnError,
+    ManagedTurnOutcome, TurnResultCapture,
 };
 pub use error::{ErrorResponse, FleetError};
 pub use model::{
@@ -33,9 +38,10 @@ pub use plugin::{
     HarnessAcpClient, HarnessAcpNotification, HarnessExecutionCertainty, HarnessLimits,
     OpenSession, OpenSessionMode, OpenSessionResult, PermissionOutcome, PermissionRequested,
     PermissionResolution, PluginError, PluginExit, PluginIdentity, PluginManifest,
-    PluginNotification, PluginProcess, PluginSpec, PromptBlock, RuntimeIdentity,
-    SessionPersistence, ShutdownOutcome, StartTurn, StartTurnResult, ToolBudget, TurnEvent,
-    TurnPolicy, TurnSource, TurnTerminal, harness_acp_capability,
+    PluginNotification, PluginProcess, PluginSpec, PromptBlock, ResolvedMcpEndpoint,
+    ResolvedMcpGrant, ResolvedMcpHttpHeader, RuntimeIdentity, SessionPersistence, ShutdownOutcome,
+    StartTurn, StartTurnResult, ToolBudget, TurnEvent, TurnPolicy, TurnSource, TurnTerminal,
+    harness_acp_capability,
 };
 pub use session_binding::{
     AcquireSessionBinding, BoundInvocation, SessionAcquisition, SessionAcquisitionMode,

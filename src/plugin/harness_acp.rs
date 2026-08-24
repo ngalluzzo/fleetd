@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -81,7 +81,47 @@ pub struct OpenSession {
     pub additional_directories: Vec<String>,
     #[serde(default)]
     pub mcp_grants: Vec<String>,
+    /// Controller-resolved, capability-scoped endpoints for the requested
+    /// grant names. These are trusted controller-to-driver data, never worker
+    /// configuration supplied as arbitrary child commands.
+    #[serde(default)]
+    pub resolved_mcp_grants: Vec<ResolvedMcpGrant>,
     pub profile_digest: String,
+}
+
+/// One controller-approved MCP endpoint resolving an exact semantic grant.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ResolvedMcpGrant {
+    pub name: String,
+    pub endpoint: ResolvedMcpEndpoint,
+}
+
+/// Transport for one controller-approved MCP grant.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResolvedMcpEndpoint {
+    Http {
+        url: String,
+        #[serde(default)]
+        headers: Vec<ResolvedMcpHttpHeader>,
+    },
+}
+
+/// An HTTP header whose value is redacted from Rust debug output.
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ResolvedMcpHttpHeader {
+    pub name: String,
+    pub value: String,
+}
+
+impl fmt::Debug for ResolvedMcpHttpHeader {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResolvedMcpHttpHeader")
+            .field("name", &self.name)
+            .field("value", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
