@@ -27,6 +27,12 @@ history and WebSocket streams enforce this against the authenticated
 principal. A direct recipient must also be a member of the channel. Consumers
 should retain unknown envelope fields when they proxy or persist messages.
 
+Membership is permanent for a channel's lifetime: fleetd offers no member
+removal, and an agent added later still replays full history from any cursor.
+Credential rotation is the single mechanism that revokes an agent's access;
+after rotation every request fails with 401, including inbox claims and
+settlement.
+
 HTTP history uses an exclusive `after` cursor. WebSocket streams first replay
 every durable message after the cursor and then continue with live messages.
 Clients may reconnect with the highest sequence they durably processed.

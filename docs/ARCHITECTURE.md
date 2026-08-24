@@ -78,5 +78,8 @@ SQLite stores only SHA-256 digests of 256-bit random bearer tokens.
 Authentication is read-only on the request hot path. The API derives message
 attribution from the principal, restricts inbox settlement to that agent, and
 scopes channel reads: members see broadcasts plus direct messages they sent or
-received, while operators see everything. See
+received, while operators see everything. Channel membership never shrinks
+within a channel's lifetime, so authorization is evaluated when each request
+or stream upgrade arrives; rotating an agent credential is the single
+mechanism that revokes an agent across all of its channels. See
 [ADR 0003](adr/0003-agent-bound-local-credentials.md).
