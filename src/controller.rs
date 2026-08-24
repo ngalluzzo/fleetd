@@ -179,7 +179,7 @@ impl<'store> ManagedHarnessController<'store> {
             .await;
         deactivate_capabilities(&capabilities, &invocation.id).await;
         let terminal = match terminal_result? {
-            TerminalDrain::Terminal(terminal) => *terminal,
+            TerminalDrain::Terminal(terminal) => terminal,
             TerminalDrain::Blocked(blocked) => return Ok(ManagedTurnOutcome::Blocked(blocked)),
         };
         self.settle_terminal(
@@ -207,7 +207,10 @@ impl<'store> ManagedHarnessController<'store> {
         )
         .await
         {
-            Ok(Ok(terminal)) => Ok(TerminalDrain::Terminal(Box::new(terminal))),
+            Ok(Ok(terminal)) => Ok(TerminalDrain::Terminal(TerminalEvidence {
+                terminal: Box::new(terminal),
+                host_stop_reason: None,
+            })),
             Ok(Err(error)) => {
                 self.blocked_drain(
                     invocation,
@@ -232,7 +235,10 @@ impl<'store> ManagedHarnessController<'store> {
                 )
                 .await
                 {
-                    Ok(Ok(terminal)) => Ok(TerminalDrain::Terminal(Box::new(terminal))),
+                    Ok(Ok(terminal)) => Ok(TerminalDrain::Terminal(TerminalEvidence {
+                        terminal: Box::new(terminal),
+                        host_stop_reason: Some(HostStopReason::WallDeadline),
+                    })),
                     Ok(Err(error)) => {
                         self.blocked_drain(
                             invocation,
@@ -261,8 +267,13 @@ impl<'store> ManagedHarnessController<'store> {
         result_kind: String,
         result_capture: TurnResultCapture,
         result_context: serde_json::Value,
-        terminal: crate::TurnTerminal,
+        terminal_evidence: TerminalEvidence,
     ) -> Result<ManagedTurnOutcome, ManagedTurnError> {
+        let TerminalEvidence {
+            terminal,
+            host_stop_reason,
+        } = terminal_evidence;
+        let terminal = *terminal;
         if terminal.execution_certainty == HarnessExecutionCertainty::OutcomeUnknown
             || !terminal.session_quiescent
         {
@@ -274,48 +285,13 @@ impl<'store> ManagedHarnessController<'store> {
             return Ok(ManagedTurnOutcome::Blocked(Box::new(blocked)));
         }
 
-        let transcript_complete = terminal
-            .assistant_messages
-            .iter()
-            .all(|message| message.complete);
-        let payload = match result_capture {
-            TurnResultCapture::Transcript => {
-                let status = if terminal.stop_reason == "end_turn" && transcript_complete {
-                    "completed"
-                } else {
-                    "failed"
-                };
-                json!({
-                    "status": status,
-                    "invocation_id": invocation.id,
-                    "stop_reason": terminal.stop_reason,
-                    "output_complete": transcript_complete,
-                    "assistant_messages": terminal.assistant_messages,
-                    "usage": terminal.usage,
-                    "session_persistence": terminal.session_persistence,
-                    "result_context": result_context,
-                })
-            }
-            TurnResultCapture::FinalAssistantJson => {
-                let status = if terminal.stop_reason == "end_turn" {
-                    "completed"
-                } else {
-                    "failed"
-                };
-                let structured_result = capture_final_assistant_json(&terminal.assistant_messages);
-                json!({
-                    "status": status,
-                    "invocation_id": invocation.id,
-                    "stop_reason": terminal.stop_reason,
-                    "transcript_complete": transcript_complete,
-                    "assistant_messages": terminal.assistant_messages,
-                    "structured_result": structured_result,
-                    "usage": terminal.usage,
-                    "session_persistence": terminal.session_persistence,
-                    "result_context": result_context,
-                })
-            }
-        };
+        let payload = terminal_payload(
+            &invocation.id,
+            result_capture,
+            &result_context,
+            &terminal,
+            host_stop_reason,
+        );
         let (completion, _created) = self
             .store
             .complete_session_invocation(
@@ -383,6 +359,74 @@ impl<'store> ManagedHarnessController<'store> {
             .await?;
         Ok(blocked)
     }
+}
+
+fn terminal_payload(
+    invocation_id: &str,
+    result_capture: TurnResultCapture,
+    result_context: &Value,
+    terminal: &crate::TurnTerminal,
+    host_stop_reason: Option<HostStopReason>,
+) -> Value {
+    let transcript_complete = terminal
+        .assistant_messages
+        .iter()
+        .all(|message| message.complete);
+    let terminal_stop_reason = terminal.stop_reason.clone();
+    let effective_stop_reason = host_stop_reason.map_or_else(
+        || terminal_stop_reason.clone(),
+        |reason| reason.as_str().to_owned(),
+    );
+    let host_stopped = host_stop_reason.is_some();
+    let runtime_stop_reason = if host_stopped {
+        terminal
+            .runtime_stop_reason
+            .clone()
+            .or_else(|| Some(terminal_stop_reason.clone()))
+    } else {
+        terminal.runtime_stop_reason.clone()
+    };
+    let terminal_success = !host_stopped
+        && runtime_stop_reason.is_none()
+        && terminal_stop_reason == "end_turn"
+        && transcript_complete;
+    let mut payload = match result_capture {
+        TurnResultCapture::Transcript => json!({
+            "status": if terminal_success { "completed" } else { "failed" },
+            "invocation_id": invocation_id,
+            "stop_reason": effective_stop_reason,
+            "output_complete": transcript_complete,
+            "assistant_messages": terminal.assistant_messages,
+            "usage": terminal.usage,
+            "session_persistence": terminal.session_persistence,
+            "result_context": result_context,
+        }),
+        TurnResultCapture::FinalAssistantJson => {
+            let structured_result = capture_final_assistant_json(&terminal.assistant_messages);
+            let structured_captured = structured_result["status"] == "captured";
+            json!({
+                "status": if terminal_success && structured_captured { "completed" } else { "failed" },
+                "invocation_id": invocation_id,
+                "stop_reason": effective_stop_reason,
+                "transcript_complete": transcript_complete,
+                "assistant_messages": terminal.assistant_messages,
+                "structured_result": structured_result,
+                "usage": terminal.usage,
+                "session_persistence": terminal.session_persistence,
+                "result_context": result_context,
+            })
+        }
+    };
+    if let Some(runtime_stop_reason) = runtime_stop_reason {
+        payload
+            .as_object_mut()
+            .expect("managed result payloads are objects")
+            .insert(
+                "runtime_stop_reason".to_owned(),
+                Value::String(runtime_stop_reason),
+            );
+    }
+    payload
 }
 
 async fn deactivate_capabilities(
@@ -461,8 +505,26 @@ fn select_final_assistant_message(
     Ok((final_message, "last_identified_assistant_message"))
 }
 
+#[derive(Clone, Copy)]
+enum HostStopReason {
+    WallDeadline,
+}
+
+impl HostStopReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::WallDeadline => "host_wall_deadline",
+        }
+    }
+}
+
+struct TerminalEvidence {
+    terminal: Box<crate::TurnTerminal>,
+    host_stop_reason: Option<HostStopReason>,
+}
+
 enum TerminalDrain {
-    Terminal(Box<crate::TurnTerminal>),
+    Terminal(TerminalEvidence),
     Blocked(Box<BlockedDelivery>),
 }
 

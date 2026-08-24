@@ -60,10 +60,36 @@ the JSON value parsed from one protocol-bounded final message:
 }
 ```
 
-`status` describes the harness turn, not semantic success. A known, quiescent
-`end_turn` may therefore be completed while `structured_result` is
-`unavailable` with one closed reason such as `ambiguous_message_boundary` or
-`malformed_final_json`.
+`status` describes successful result transport, not semantic conformance. It is
+`completed` only when the runtime reports `end_turn`, every retained assistant
+message is complete, and the protocol-bounded final JSON value is captured.
+Malformed, absent, incomplete, or ambiguous structured output produces
+`status: failed` while retaining one closed `structured_result` reason such as
+`ambiguous_message_boundary` or `malformed_final_json`.
+
+When a host layer cancels a turn whose terminal state later becomes known and
+quiescent, the attempt is durably settled but cannot inherit the runtime's
+success claim. Its effective `stop_reason` is the enforcing layer's reason,
+such as `wall_deadline`, `idle_deadline`, or the outer controller's
+`host_wall_deadline`, and the runtime's terminal claim is retained separately:
+
+```json
+{
+  "status": "failed",
+  "stop_reason": "host_wall_deadline",
+  "runtime_stop_reason": "end_turn",
+  "structured_result": {
+    "status": "unavailable",
+    "reason": "malformed_final_json"
+  }
+}
+```
+
+`runtime_stop_reason` is absent on turns the host did not stop. The strict lift
+rejects every failed attempt and any payload carrying host-stop provenance,
+even if a runtime claimed `end_turn`. A provider may still return the semantic
+response status `unable` inside successfully captured JSON; that is a complete,
+explicit negative result rather than a transport failure.
 
 ## Boundary rules
 
@@ -98,4 +124,3 @@ The durable attempt retains the complete captured assistant transcript. Tool,
 reasoning, permission, and plan event persistence remains a separate runtime
 evidence slice; v2 does not falsely claim that terminal assistant messages are
 the complete execution trace.
-

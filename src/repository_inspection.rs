@@ -3,8 +3,7 @@
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Component, Path, PathBuf},
-    process::Command,
+    path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +14,9 @@ use crate::{
     CapabilityCandidate, CapabilityProviderDescriptor, CapabilityWorkBody, CapabilityWorkRequest,
     CapabilityWorkTurnAdapter, ExactIdentity, FactAcceptance, FactCoverage, FactRequirement,
     InboundAcceptance, Invocation, PreparedTurn, TurnAdapter, WorkContractError,
+    repository_git::{
+        RepositoryGitError, git_output, path_is_in_scope, validate_relative_path, validate_revision,
+    },
     work_contract::{BoundFact, canonical_digest},
 };
 
@@ -32,7 +34,6 @@ const MAX_CONCLUSION_BYTES: usize = 8_192;
 const MAX_OBSERVATION_BYTES: usize = 4_096;
 const MAX_LIMITATIONS: usize = 32;
 const MAX_LINE_SPAN: u32 = 200;
-const MAX_GIT_OUTPUT_BYTES: usize = 2 * 1_024 * 1_024;
 
 #[must_use]
 pub fn repository_inspection_capability() -> ExactIdentity {
@@ -140,16 +141,7 @@ impl RepositoryInspectionTurnAdapter {
         if provider.capability != repository_inspection_capability() {
             return Err(RepositoryInspectionError::ProviderCapabilityMismatch);
         }
-        if !git_executable.is_absolute() || !git_executable.is_file() {
-            return Err(RepositoryInspectionError::InvalidGitExecutable(
-                git_executable,
-            ));
-        }
-        if !repository_root.is_absolute() || !repository_root.is_dir() {
-            return Err(RepositoryInspectionError::InvalidRepositoryRoot(
-                repository_root,
-            ));
-        }
+        crate::repository_git::validate_git_inputs(&repository_root, &git_executable)?;
         let repository_root = fs::canonicalize(repository_root)?;
         let delegate = CapabilityWorkTurnAdapter::new([provider])
             .map_err(RepositoryInspectionError::Adapter)?;
@@ -473,119 +465,11 @@ fn validate_clean_checkout(
     git_executable: &Path,
     brief: &RepositoryInspectionBrief,
 ) -> Result<(), RepositoryInspectionError> {
-    validate_git_inputs(repository_root, git_executable)?;
-    validate_repository_root(repository_root, git_executable)?;
-    let observed_revision = git_text(
+    crate::repository_git::validate_clean_checkout(
         repository_root,
         git_executable,
-        ["rev-parse", "--verify", "HEAD^{commit}"],
+        &brief.revision,
     )?;
-    if observed_revision.trim() != brief.revision {
-        return Err(RepositoryInspectionError::RevisionMismatch {
-            expected: brief.revision.clone(),
-            actual: observed_revision.trim().to_owned(),
-        });
-    }
-    let status = git_text(
-        repository_root,
-        git_executable,
-        ["status", "--porcelain=v1", "--untracked-files=all"],
-    )?;
-    if !status.trim().is_empty() {
-        return Err(RepositoryInspectionError::DirtyCheckout);
-    }
-    Ok(())
-}
-
-fn validate_repository_root(
-    repository_root: &Path,
-    git_executable: &Path,
-) -> Result<(), RepositoryInspectionError> {
-    let top_level = git_text(
-        repository_root,
-        git_executable,
-        ["rev-parse", "--show-toplevel"],
-    )?;
-    let configured_root = fs::canonicalize(repository_root)?;
-    let observed_root = fs::canonicalize(top_level.trim())?;
-    if observed_root != configured_root {
-        return Err(RepositoryInspectionError::RepositoryRootMismatch);
-    }
-    Ok(())
-}
-
-fn validate_git_inputs(
-    repository_root: &Path,
-    git_executable: &Path,
-) -> Result<(), RepositoryInspectionError> {
-    if !repository_root.is_absolute() || !repository_root.is_dir() {
-        return Err(RepositoryInspectionError::InvalidRepositoryRoot(
-            repository_root.to_path_buf(),
-        ));
-    }
-    if !git_executable.is_absolute() || !git_executable.is_file() {
-        return Err(RepositoryInspectionError::InvalidGitExecutable(
-            git_executable.to_path_buf(),
-        ));
-    }
-    Ok(())
-}
-
-fn git_text<const N: usize>(
-    repository_root: &Path,
-    git_executable: &Path,
-    arguments: [&str; N],
-) -> Result<String, RepositoryInspectionError> {
-    let output = git_output(repository_root, git_executable, arguments)?;
-    String::from_utf8(output).map_err(|_| RepositoryInspectionError::NonUtf8GitOutput)
-}
-
-fn git_output<I, S>(
-    repository_root: &Path,
-    git_executable: &Path,
-    arguments: I,
-) -> Result<Vec<u8>, RepositoryInspectionError>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    let output = Command::new(git_executable)
-        .env_clear()
-        .env("LC_ALL", "C")
-        .arg("-C")
-        .arg(repository_root)
-        .args(arguments)
-        .output()?;
-    if output.stdout.len() > MAX_GIT_OUTPUT_BYTES || output.stderr.len() > MAX_GIT_OUTPUT_BYTES {
-        return Err(RepositoryInspectionError::GitOutputTooLarge);
-    }
-    if !output.status.success() {
-        let mut diagnostic = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        if diagnostic.len() > MAX_OBSERVATION_BYTES {
-            let mut end = MAX_OBSERVATION_BYTES;
-            while !diagnostic.is_char_boundary(end) {
-                end -= 1;
-            }
-            diagnostic.truncate(end);
-        }
-        return Err(RepositoryInspectionError::GitFailed {
-            status: output.status.code(),
-            diagnostic,
-        });
-    }
-    Ok(output.stdout)
-}
-
-fn validate_revision(revision: &str) -> Result<(), RepositoryInspectionError> {
-    if !matches!(revision.len(), 40 | 64)
-        || !revision
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(RepositoryInspectionError::InvalidRevision(
-            revision.to_owned(),
-        ));
-    }
     Ok(())
 }
 
@@ -615,33 +499,6 @@ fn validate_text(
     Ok(())
 }
 
-fn validate_relative_path(value: &str, allow_dot: bool) -> Result<(), RepositoryInspectionError> {
-    if allow_dot && value == "." {
-        return Ok(());
-    }
-    let path = Path::new(value);
-    let normalized = path.components().collect::<PathBuf>();
-    if value.is_empty()
-        || value.contains('\\')
-        || path.is_absolute()
-        || normalized.as_os_str() != std::ffi::OsStr::new(value)
-        || !path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_)))
-    {
-        return Err(RepositoryInspectionError::InvalidPath(value.to_owned()));
-    }
-    Ok(())
-}
-
-fn path_is_in_scope(path: &str, scope: &str) -> bool {
-    scope == "."
-        || path == scope
-        || path
-            .strip_prefix(scope)
-            .is_some_and(|remainder| remainder.starts_with('/'))
-}
-
 #[derive(Debug, Error)]
 pub enum RepositoryInspectionError {
     #[error("repository inspection schema version {0} is unsupported")]
@@ -654,26 +511,12 @@ pub enum RepositoryInspectionError {
     InvalidCount(&'static str),
     #[error("duplicate {0}")]
     Duplicate(&'static str),
-    #[error("invalid repository-relative path {0}")]
-    InvalidPath(String),
-    #[error("invalid Git revision {0}")]
-    InvalidRevision(String),
     #[error("repository inspection request shape does not match the exact capability")]
     RequestShapeMismatch,
     #[error("repository inspection input identity does not match its payload and derivation")]
     InputIdentityMismatch,
     #[error("configured provider does not implement repository inspection")]
     ProviderCapabilityMismatch,
-    #[error("invalid absolute Git executable: {0}")]
-    InvalidGitExecutable(PathBuf),
-    #[error("invalid absolute repository root: {0}")]
-    InvalidRepositoryRoot(PathBuf),
-    #[error("configured repository root does not equal Git's top-level directory")]
-    RepositoryRootMismatch,
-    #[error("repository checkout is dirty")]
-    DirtyCheckout,
-    #[error("repository revision mismatch: expected {expected}, observed {actual}")]
-    RevisionMismatch { expected: String, actual: String },
     #[error("repository inspection report shape is invalid")]
     ReportShapeMismatch,
     #[error("repository inspection report does not bind the exact request")]
@@ -686,15 +529,8 @@ pub enum RepositoryInspectionError {
     InvalidLineRange { path: String, start: u32, end: u32 },
     #[error("repository source is not UTF-8: {0}")]
     NonUtf8Source(String),
-    #[error("Git output is not UTF-8")]
-    NonUtf8GitOutput,
-    #[error("Git output exceeded the inspection bound")]
-    GitOutputTooLarge,
-    #[error("Git failed with status {status:?}: {diagnostic}")]
-    GitFailed {
-        status: Option<i32>,
-        diagnostic: String,
-    },
+    #[error(transparent)]
+    Git(#[from] RepositoryGitError),
     #[error("repository inspection adapter is invalid: {0}")]
     Adapter(String),
     #[error(transparent)]
@@ -874,7 +710,9 @@ mod tests {
         non_normal_path.path_scope = vec!["src//nested".to_owned()];
         assert!(matches!(
             bind_repository_inspection(non_normal_path),
-            Err(RepositoryInspectionError::InvalidPath(_))
+            Err(RepositoryInspectionError::Git(
+                RepositoryGitError::InvalidPath(_)
+            ))
         ));
     }
 
@@ -968,7 +806,9 @@ mod tests {
         fs::write(fixture.root.join("src/lib.rs"), "changed\n").expect("dirty source");
         assert!(matches!(
             conform_repository_inspection(&request, &candidate, &fixture.root, &fixture.git),
-            Err(RepositoryInspectionError::DirtyCheckout)
+            Err(RepositoryInspectionError::Git(
+                RepositoryGitError::DirtyCheckout
+            ))
         ));
     }
 
@@ -981,13 +821,17 @@ mod tests {
         fs::write(fixture.root.join("src/lib.rs"), "changed\n").expect("dirty source");
         assert!(matches!(
             validate_clean_checkout(&fixture.root, &fixture.git, &exact),
-            Err(RepositoryInspectionError::DirtyCheckout)
+            Err(RepositoryInspectionError::Git(
+                RepositoryGitError::DirtyCheckout
+            ))
         ));
 
         let wrong = brief(&"f".repeat(40));
         assert!(matches!(
             validate_clean_checkout(&fixture.root, &fixture.git, &wrong),
-            Err(RepositoryInspectionError::RevisionMismatch { .. })
+            Err(RepositoryInspectionError::Git(
+                RepositoryGitError::RevisionMismatch { .. }
+            ))
         ));
     }
 }

@@ -1,11 +1,12 @@
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf};
 
 use fleetd_acp_host::{DriverConfig, DriverError, PluginDefinition, RuntimeConfig, serve};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 const PLUGIN_ID: &str = "fleetd.harness.opencode";
+const OPENCODE_POLICY_VERSION: u32 = 2;
 const ALLOWED_ENVIRONMENT: &[&str] = &["HOME", "OPENCODE_CONFIG_CONTENT", "PATH", "TERM", "TMPDIR"];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -20,6 +21,18 @@ struct OpenCodeConfig {
     term: Option<String>,
     #[serde(default)]
     tmpdir: Option<PathBuf>,
+    #[serde(default)]
+    openai_compatible: Option<LoopbackOpenAiCompatible>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LoopbackOpenAiCompatible {
+    provider_id: String,
+    provider_name: String,
+    base_url: String,
+    model_id: String,
+    model_name: String,
 }
 
 #[tokio::main]
@@ -53,6 +66,25 @@ fn prepare_config(value: Value) -> Result<DriverConfig, DriverError> {
         )));
     }
     let profile_digest = profile_digest(&config, &executable)?;
+    let mut opencode_config = json!({
+        "model": config.model,
+        "permission": {"task": "deny"}
+    });
+    if let Some(provider) = &config.openai_compatible {
+        let mut providers = Map::new();
+        providers.insert(
+            provider.provider_id.clone(),
+            json!({
+                "npm": "@ai-sdk/openai-compatible",
+                "name": provider.provider_name,
+                "options": {"baseURL": provider.base_url},
+                "models": {
+                    provider.model_id.clone(): {"name": provider.model_name}
+                }
+            }),
+        );
+        opencode_config["provider"] = Value::Object(providers);
+    }
     let mut environment = BTreeMap::from([
         (
             "HOME".to_owned(),
@@ -60,7 +92,7 @@ fn prepare_config(value: Value) -> Result<DriverConfig, DriverError> {
         ),
         (
             "OPENCODE_CONFIG_CONTENT".to_owned(),
-            json!({"model": config.model}).to_string(),
+            opencode_config.to_string(),
         ),
         ("PATH".to_owned(), config.path),
     ]);
@@ -94,6 +126,7 @@ fn validate_config(config: &OpenCodeConfig) -> Result<(), DriverError> {
             "OpenCode expected_version must not be empty".to_owned(),
         ));
     }
+    validate_bounded("model", &config.model, 1_024)?;
     let Some((provider, model)) = config.model.split_once('/') else {
         return Err(DriverError::InvalidConfig(
             "OpenCode model must use provider/model form".to_owned(),
@@ -123,6 +156,66 @@ fn validate_config(config: &OpenCodeConfig) -> Result<(), DriverError> {
             tmpdir.display()
         )));
     }
+    if let Some(provider) = &config.openai_compatible {
+        validate_provider_identifier("provider_id", &provider.provider_id)?;
+        validate_bounded("provider_name", &provider.provider_name, 128)?;
+        validate_bounded("model_id", &provider.model_id, 512)?;
+        validate_bounded("model_name", &provider.model_name, 256)?;
+        validate_loopback_base_url(&provider.base_url)?;
+        if config.model != format!("{}/{}", provider.provider_id, provider.model_id) {
+            return Err(DriverError::InvalidConfig(
+                "OpenCode model route must exactly match openai_compatible provider_id/model_id"
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_provider_identifier(field: &str, value: &str) -> Result<(), DriverError> {
+    validate_bounded(field, value, 128)?;
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(DriverError::InvalidConfig(format!(
+            "OpenCode {field} contains unsupported characters"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_bounded(field: &str, value: &str, limit: usize) -> Result<(), DriverError> {
+    if value.trim().is_empty() || value.len() > limit || value.chars().any(char::is_control) {
+        return Err(DriverError::InvalidConfig(format!(
+            "OpenCode {field} must contain between 1 and {limit} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_loopback_base_url(value: &str) -> Result<(), DriverError> {
+    validate_bounded("base_url", value, 2_048)?;
+    let Some(rest) = value.strip_prefix("http://") else {
+        return Err(DriverError::InvalidConfig(
+            "OpenCode compatible base_url must use loopback HTTP".to_owned(),
+        ));
+    };
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let address: SocketAddr = authority.parse().map_err(|_| {
+        DriverError::InvalidConfig(
+            "OpenCode compatible base_url must contain an explicit loopback IP and port".to_owned(),
+        )
+    })?;
+    if !address.ip().is_loopback()
+        || path.contains('?')
+        || path.contains('#')
+        || value.contains('@')
+    {
+        return Err(DriverError::InvalidConfig(
+            "OpenCode compatible base_url must be a credential-free loopback HTTP URL".to_owned(),
+        ));
+    }
     Ok(())
 }
 
@@ -132,6 +225,7 @@ fn profile_digest(config: &OpenCodeConfig, executable: &PathBuf) -> Result<Strin
     let material = json!({
         "plugin": PLUGIN_ID,
         "plugin_version": env!("CARGO_PKG_VERSION"),
+        "policy_version": OPENCODE_POLICY_VERSION,
         "executable": executable,
         "executable_digest": executable_digest,
         "expected_version": config.expected_version,
@@ -140,6 +234,7 @@ fn profile_digest(config: &OpenCodeConfig, executable: &PathBuf) -> Result<Strin
         "path": config.path,
         "term": config.term,
         "tmpdir": config.tmpdir,
+        "openai_compatible": config.openai_compatible,
     });
     let encoded = serde_json::to_vec(&material)?;
     Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
@@ -173,7 +268,7 @@ mod tests {
         assert_eq!(prepared.runtime.args, ["acp"]);
         assert_eq!(
             prepared.runtime.environment["OPENCODE_CONFIG_CONTENT"],
-            r#"{"model":"zai-coding-plan/glm-5.3"}"#
+            r#"{"model":"zai-coding-plan/glm-5.3","permission":{"task":"deny"}}"#
         );
     }
 
@@ -183,6 +278,57 @@ mod tests {
         let second = prepare_config(value("minimax/minimax-m2.5")).expect("second config");
 
         assert_ne!(first.profile_digest, second.profile_digest);
+    }
+
+    #[test]
+    fn owns_a_typed_credential_free_loopback_provider() {
+        let mut input = value("fleet-local//models/qwen-27b");
+        input["openai_compatible"] = json!({
+            "provider_id": "fleet-local",
+            "provider_name": "Fleet local inference",
+            "base_url": "http://127.0.0.1:18082/v1",
+            "model_id": "/models/qwen-27b",
+            "model_name": "Qwen 27B"
+        });
+
+        let prepared = prepare_config(input).expect("valid loopback provider");
+        let effective: serde_json::Value =
+            serde_json::from_str(&prepared.runtime.environment["OPENCODE_CONFIG_CONTENT"])
+                .expect("effective OpenCode config");
+
+        assert_eq!(effective["model"], "fleet-local//models/qwen-27b");
+        assert_eq!(
+            effective["provider"]["fleet-local"]["options"]["baseURL"],
+            "http://127.0.0.1:18082/v1"
+        );
+        assert_eq!(
+            effective["provider"]["fleet-local"]["npm"],
+            "@ai-sdk/openai-compatible"
+        );
+        assert_eq!(effective["permission"]["task"], "deny");
+    }
+
+    #[test]
+    fn rejects_remote_or_mismatched_compatible_providers() {
+        let mut remote = value("fleet-local/qwen");
+        remote["openai_compatible"] = json!({
+            "provider_id": "fleet-local",
+            "provider_name": "remote",
+            "base_url": "https://models.example/v1",
+            "model_id": "qwen",
+            "model_name": "Qwen"
+        });
+        assert!(prepare_config(remote).is_err());
+
+        let mut mismatch = value("fleet-local/other");
+        mismatch["openai_compatible"] = json!({
+            "provider_id": "fleet-local",
+            "provider_name": "local",
+            "base_url": "http://127.0.0.1:18082/v1",
+            "model_id": "qwen",
+            "model_name": "Qwen"
+        });
+        assert!(prepare_config(mismatch).is_err());
     }
 
     #[test]

@@ -836,7 +836,10 @@ async fn monitor_prompt(
         tokio::select! {
             response = &mut response_task => {
                 break match response {
-                    Ok(Ok(response)) => PromptOutcome::Known(response.0),
+                    Ok(Ok(response)) => PromptOutcome::Known {
+                        response: response.0,
+                        host_stop_reason: None,
+                    },
                     Ok(Err(error)) => PromptOutcome::Unknown(json!({"error": error.to_string()})),
                     Err(error) => PromptOutcome::Unknown(json!({"join_error": error.to_string()})),
                 };
@@ -868,7 +871,10 @@ async fn monitor_prompt(
 }
 
 enum PromptOutcome {
-    Known(Value),
+    Known {
+        response: Value,
+        host_stop_reason: Option<String>,
+    },
     Unknown(Value),
 }
 
@@ -881,7 +887,10 @@ async fn cancel_and_drain(
 ) -> PromptOutcome {
     let _unused = connection.send_notification(CancelNotification::new(session_ref.to_owned()));
     match tokio::time::timeout(drain_timeout, &mut *response).await {
-        Ok(Ok(Ok(response))) => PromptOutcome::Known(response.0),
+        Ok(Ok(Ok(response))) => PromptOutcome::Known {
+            response: response.0,
+            host_stop_reason: Some(reason.to_owned()),
+        },
         Ok(Ok(Err(error))) => PromptOutcome::Unknown(json!({
             "cancel_reason": reason,
             "error": error.to_string(),
@@ -922,18 +931,27 @@ async fn emit_terminal(
             .filter(|(_, pending)| pending.fence == active.fence)
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
-        let (raw_response, certainty, quiescent, stop_reason) = match outcome {
-            PromptOutcome::Known(response) => {
-                let stop = response
+        let (raw_response, certainty, quiescent, stop_reason, runtime_stop_reason) = match outcome {
+            PromptOutcome::Known {
+                response,
+                host_stop_reason,
+            } => {
+                let runtime_stop = response
                     .get("stopReason")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown")
                     .to_owned();
+                let (stop_reason, runtime_stop_reason) = if let Some(host_stop) = host_stop_reason {
+                    (host_stop, Some(runtime_stop))
+                } else {
+                    (runtime_stop, None)
+                };
                 (
                     response,
                     HarnessExecutionCertainty::OutcomeKnown,
                     true,
-                    stop,
+                    stop_reason,
+                    runtime_stop_reason,
                 )
             }
             PromptOutcome::Unknown(evidence) => (
@@ -941,6 +959,7 @@ async fn emit_terminal(
                 HarnessExecutionCertainty::OutcomeUnknown,
                 false,
                 "outcome_unknown".to_owned(),
+                None,
             ),
         };
         let last_event_seq = active.next_event_seq.saturating_sub(1);
@@ -950,6 +969,7 @@ async fn emit_terminal(
                 fence: active.fence,
                 last_event_seq,
                 stop_reason,
+                runtime_stop_reason,
                 execution_certainty: certainty,
                 session_quiescent: quiescent,
                 session_persistence: if quiescent {

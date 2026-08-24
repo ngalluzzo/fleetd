@@ -5,6 +5,7 @@ from pathlib import Path
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "healthy"
 marker_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+active_fence = None
 
 
 def send(payload):
@@ -127,6 +128,9 @@ for line in sys.stdin:
             },
         )
         fence = dict(params["fence"])
+        if mode == "cancel-end-turn":
+            active_fence = fence
+            continue
         if mode == "wrong-fence":
             fence["owner_epoch"] += 1
         assistant_messages = []
@@ -207,6 +211,24 @@ for line in sys.stdin:
         )
     elif method == "harness.acp.turn.cancel":
         result(request, {"accepted": True})
+        if mode == "cancel-end-turn":
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "harness.acp.turn.terminal",
+                    "params": {
+                        "fence": active_fence,
+                        "last_event_seq": 0,
+                        "stop_reason": "end_turn",
+                        "execution_certainty": "outcome_known",
+                        "session_quiescent": True,
+                        "session_persistence": "runtime_claimed",
+                        "assistant_messages": [],
+                        "usage": {},
+                        "raw_prompt_response": {"stopReason": "end_turn"},
+                    },
+                }
+            )
     elif method == "harness.acp.permission.resolve":
         result(request, {"accepted": True})
     elif method == "harness.acp.session.close":

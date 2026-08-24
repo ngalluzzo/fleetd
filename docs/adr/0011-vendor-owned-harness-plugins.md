@@ -48,6 +48,14 @@ are rejected. Provider authentication remains OpenCode-owned state reached
 through its explicit home directory; fleetd neither stores nor forwards raw
 provider keys.
 
+For credential-free local inference, the same plugin may construct one typed
+OpenAI-compatible provider whose address must be explicit loopback HTTP and
+whose route must exactly match the selected model. That provider description
+and the plugin policy version are profile material. The current policy denies
+OpenCode's nested `task` agent because its activity is not surfaced through the
+parent ACP tool and budget evidence; this is an OpenCode integration decision,
+not a rule in the worker or shared host.
+
 The `fleetd.acp-reference` executable remains a development and qualification
 fixture. It accepts a generic ACP runtime description but permits only portable
 process settings. It is not the production integration point for Codex, DSH,

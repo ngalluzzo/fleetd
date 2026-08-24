@@ -10,8 +10,11 @@ def send(payload):
 
 
 config = json.loads(os.environ["OPENCODE_CONFIG_CONTENT"])
-if config != {"model": "zai-coding-plan/glm-5.3"}:
-    raise RuntimeError("typed OpenCode model route was not applied")
+if config != {
+    "model": "zai-coding-plan/glm-5.3",
+    "permission": {"task": "deny"},
+}:
+    raise RuntimeError("typed OpenCode model route and policy were not applied")
 
 for line in sys.stdin:
     message = json.loads(line)

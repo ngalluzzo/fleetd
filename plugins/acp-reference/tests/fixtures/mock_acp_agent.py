@@ -1,5 +1,6 @@
 import json
 import sys
+import time
 
 
 def send(payload):
@@ -49,6 +50,11 @@ for line in sys.stdin:
             }
         )
     elif method == "session/prompt":
+        if any(
+            block.get("type") == "text" and block.get("text") == "delayed prompt"
+            for block in params.get("prompt", [])
+        ):
+            time.sleep(0.1)
         send(
             {
                 "jsonrpc": "2.0",

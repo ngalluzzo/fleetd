@@ -1,0 +1,59 @@
+{
+  "schema_version": 2,
+  "agent_id": "REPLACE_WITH_FLEETD_AGENT_ID",
+  "working_directory": "/absolute/path/to/clean/git/worktree",
+  "additional_directories": [],
+  "mcp_grants": [],
+  "adapter": {
+    "kind": "repository_patch_v1",
+    "provider": {
+      "id": {
+        "package": "dev.fleetd.provider",
+        "name": "opencode_repository_patcher",
+        "version": "0.1.0"
+      },
+      "capability": {
+        "package": "dev.fleetd.capability",
+        "name": "propose_repository_patch",
+        "version": "0.1.0"
+      },
+      "implementation_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "git_executable": "/absolute/path/to/git"
+  },
+  "plugin": {
+    "id": "fleetd.harness.opencode",
+    "executable": "/absolute/path/to/fleetd/target/debug/fleetd-harness-opencode",
+    "args": [],
+    "config": {
+      "executable": "/absolute/path/to/opencode",
+      "expected_version": "replace-with-exact-opencode-version",
+      "model": "fleet-local//absolute/path/to/model",
+      "home": "/absolute/path/to/empty/opencode-home",
+      "path": "/explicit/non-secret/path",
+      "term": "xterm-256color",
+      "tmpdir": "/absolute/private/tmp/path",
+      "openai_compatible": {
+        "provider_id": "fleet-local",
+        "provider_name": "Fleet local inference",
+        "base_url": "http://127.0.0.1:18082/v1",
+        "model_id": "/absolute/path/to/model",
+        "model_name": "Local model"
+      }
+    },
+    "initialize_timeout_ms": 30000,
+    "request_timeout_ms": 30000,
+    "shutdown_timeout_ms": 5000
+  },
+  "lease_duration_ms": 1000000,
+  "poll_interval_ms": 1000,
+  "restart_backoff_ms": 5000,
+  "pre_arm_retry_delay_ms": 5000,
+  "turn": {
+    "idle_timeout_ms": 600000,
+    "wall_timeout_ms": 900000,
+    "cancel_drain_timeout_ms": 15000,
+    "max_captured_output_bytes": 524288,
+    "tool_budget": 96
+  }
+}

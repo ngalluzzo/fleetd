@@ -47,6 +47,16 @@ use it as a production vendor adapter. By default the worker resumes only an
 exact observed profile digest. Set `compatibility_digest` only after a
 separately qualified set of profiles has proven native-session compatibility.
 
+For a local OpenAI-compatible model server, the OpenCode plugin also accepts a
+typed `openai_compatible` block. It requires a credential-free explicit
+loopback HTTP address, constructs the native
+`@ai-sdk/openai-compatible` provider entry, and requires `model` to equal the
+exact `provider_id/model_id` route. The provider configuration and plugin policy
+version participate in the effective profile digest. The plugin denies
+OpenCode's nested `task` permission: nested subagent activity is not admitted
+until its tools, progress, cancellation, and budgets are visible through the
+same typed Fleetd evidence boundary.
+
 `mcp_grants` is an allowlist of semantic capability names, not MCP commands,
 URLs, or credentials. The current worker accepts either no grants or exactly
 `fleet.messaging.send`. When enabled, it starts a random-port `127.0.0.1`
@@ -97,6 +107,18 @@ evidence, not harness filesystem reads, so do not place secrets in the worktree
 or treat the adapter as an operating-system sandbox. See the
 [repository-inspection contract](contracts/repository-inspection-v1.md).
 
+Set `adapter.kind` to `repository_patch_v1` to request one patch artifact; see
+[`worker.patch.opencode.example.json`](../examples/worker.patch.opencode.example.json).
+The adapter requires one exact patch provider, a clean isolated checkout at the
+brief's exact base `HEAD`, and one absolute Git executable. The provider is
+instructed not to modify the checkout. Strict extraction applies the proposed
+diff only to a temporary Git index, requires Git's exact sorted path set to
+match the claim and remain in scope, rejects binary and non-regular modes, and
+emits a canonical full-index patch digest. This does not run tests or grant
+commit, push, review, approval, or merge authority. No real patch provider has
+qualified yet; see the [repository-patch contract](contracts/repository-patch-v1.md)
+and [first failed-closed qualification](qualification/repository-patch-provider-2026-08-24.md).
+
 The lease must cover the configured wall timeout, cancellation drain timeout,
 and a 60-second settlement margin. Permission requests are denied by the
 controller, tool use is observed and cancelled at the configured budget, token
@@ -113,6 +135,11 @@ bounds are validated before a process starts.
   uncertain.
 - After a completed or blocked turn, result settlement is already committed in
   SQLite before the next reservation.
+- A known, quiescent terminal is safe to settle but is not automatically a
+  successful provider attempt. Final-JSON adapters report failure unless one
+  complete protocol-bounded JSON value was captured. Host cancellation
+  overrides a runtime `end_turn` and preserves that runtime claim separately as
+  evidence.
 - Invocation capabilities are activated only after dispatch arming. Revocation
   serializes behind any accepted durable append and completes before result or
   block settlement.

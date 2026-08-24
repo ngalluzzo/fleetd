@@ -258,6 +258,81 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
 }
 
 #[tokio::test]
+async fn managed_controller_marks_unavailable_structured_capture_failed() {
+    let (_directory, store, _sender, invocation) = fixture().await;
+    let agent_id = invocation.agent_id.clone();
+    let (mut harness, session_ref, binding) = open_harness(&store, &agent_id, "healthy").await;
+    let outcome = ManagedHarnessController::new(&store)
+        .run(
+            &mut harness,
+            ManagedTurn {
+                invocation,
+                binding,
+                session_ref,
+                prompt: vec![PromptBlock::Text {
+                    text: "return structured work".to_owned(),
+                }],
+                policy: policy(),
+                capabilities: Vec::new(),
+                result_kind: "work.attempt/v2".to_owned(),
+                result_capture: TurnResultCapture::FinalAssistantJson,
+                result_context: Value::Null,
+            },
+        )
+        .await
+        .expect("settle malformed structured attempt");
+    let ManagedTurnOutcome::Completed(completion) = outcome else {
+        panic!("known terminal must settle durably");
+    };
+    assert_eq!(completion.result.payload["status"], "failed");
+    assert_eq!(completion.result.payload["stop_reason"], "end_turn");
+    assert_eq!(
+        completion.result.payload["structured_result"],
+        json!({"status": "unavailable", "reason": "malformed_final_json"})
+    );
+    harness.shutdown().await.expect("shutdown harness");
+}
+
+#[tokio::test]
+async fn managed_controller_preserves_host_cancellation_over_runtime_end_turn() {
+    let (_directory, store, _sender, invocation) = fixture().await;
+    let agent_id = invocation.agent_id.clone();
+    let (mut harness, session_ref, binding) =
+        open_harness(&store, &agent_id, "cancel-end-turn").await;
+    let mut short_policy = policy();
+    short_policy.wall_timeout_ms = 20;
+    let outcome = ManagedHarnessController::new(&store)
+        .run(
+            &mut harness,
+            ManagedTurn {
+                invocation,
+                binding,
+                session_ref,
+                prompt: vec![PromptBlock::Text {
+                    text: "run until the host deadline".to_owned(),
+                }],
+                policy: short_policy,
+                capabilities: Vec::new(),
+                result_kind: "work.attempt/v1".to_owned(),
+                result_capture: TurnResultCapture::Transcript,
+                result_context: Value::Null,
+            },
+        )
+        .await
+        .expect("settle known host cancellation");
+    let ManagedTurnOutcome::Completed(completion) = outcome else {
+        panic!("known cancelled terminal must settle durably");
+    };
+    assert_eq!(completion.result.payload["status"], "failed");
+    assert_eq!(
+        completion.result.payload["stop_reason"],
+        "host_wall_deadline"
+    );
+    assert_eq!(completion.result.payload["runtime_stop_reason"], "end_turn");
+    harness.shutdown().await.expect("shutdown harness");
+}
+
+#[tokio::test]
 async fn managed_controller_parks_post_arm_protocol_ambiguity() {
     let (_directory, store, _sender, invocation) = fixture().await;
     let input_message = invocation.message.id.clone();

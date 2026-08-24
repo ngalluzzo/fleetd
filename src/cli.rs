@@ -14,9 +14,10 @@ use fleetd::{
     ClaimDeliveries, CompleteInvocation, ContinuousHarnessWorker, ContinuousWorkerConfig,
     CreateAgent, CreateChannel, EnvelopeTurnAdapter, InboundAcceptance, Invocation,
     IssuedCredential, Message, MessagePage, PluginSpec, PreparedTurn, RegisteredAgent,
-    RepositoryInspectionBrief, RepositoryInspectionTurnAdapter, ResolveDeliveryBlock,
-    RetryDelivery, SendMessage, Store, ToolBudget, TurnAdapter, TurnPolicy,
-    bind_repository_inspection, conform_repository_inspection, extract_capability_message, router,
+    RepositoryChangeBrief, RepositoryInspectionBrief, RepositoryInspectionTurnAdapter,
+    RepositoryPatchTurnAdapter, ResolveDeliveryBlock, RetryDelivery, SendMessage, Store,
+    ToolBudget, TurnAdapter, TurnPolicy, bind_repository_inspection, bind_repository_patch,
+    conform_repository_inspection, conform_repository_patch, extract_capability_message, router,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -298,6 +299,22 @@ enum WorkCommand {
         #[arg(long = "git-executable")]
         git_executable: PathBuf,
     },
+    /// Bind a typed repository-change brief to a patch capability request.
+    PatchBind {
+        #[arg(long)]
+        brief: PathBuf,
+    },
+    /// Strictly lift and conform one repository-patch attempt.
+    PatchExtract {
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long = "attempt-message")]
+        attempt_message: PathBuf,
+        #[arg(long = "repository-root")]
+        repository_root: PathBuf,
+        #[arg(long = "git-executable")]
+        git_executable: PathBuf,
+    },
 }
 
 #[derive(Args)]
@@ -353,6 +370,10 @@ enum WorkerAdapterConfig {
         provider: CapabilityProviderDescriptor,
         git_executable: PathBuf,
     },
+    RepositoryPatchV1 {
+        provider: CapabilityProviderDescriptor,
+        git_executable: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -366,6 +387,7 @@ enum ConfiguredTurnAdapter {
     Envelope(EnvelopeTurnAdapter),
     CapabilityWorkV1(CapabilityWorkTurnAdapter),
     RepositoryInspectionV1(RepositoryInspectionTurnAdapter),
+    RepositoryPatchV1(RepositoryPatchTurnAdapter),
 }
 
 impl TurnAdapter for ConfiguredTurnAdapter {
@@ -374,6 +396,7 @@ impl TurnAdapter for ConfiguredTurnAdapter {
             Self::Envelope(adapter) => adapter.inbound_acceptance(),
             Self::CapabilityWorkV1(adapter) => adapter.inbound_acceptance(),
             Self::RepositoryInspectionV1(adapter) => adapter.inbound_acceptance(),
+            Self::RepositoryPatchV1(adapter) => adapter.inbound_acceptance(),
         }
     }
 
@@ -382,6 +405,7 @@ impl TurnAdapter for ConfiguredTurnAdapter {
             Self::Envelope(adapter) => adapter.prepare(invocation),
             Self::CapabilityWorkV1(adapter) => adapter.prepare(invocation),
             Self::RepositoryInspectionV1(adapter) => adapter.prepare(invocation),
+            Self::RepositoryPatchV1(adapter) => adapter.prepare(invocation),
         }
     }
 }
@@ -578,6 +602,48 @@ async fn work_command(
                 })),
             }
         }
+        WorkCommand::PatchBind { brief } => patch_bind_command(&brief),
+        WorkCommand::PatchExtract {
+            request,
+            attempt_message,
+            repository_root,
+            git_executable,
+        } => patch_extract_command(
+            &request,
+            &attempt_message,
+            &repository_root,
+            &git_executable,
+        ),
+    }
+}
+
+fn patch_bind_command(brief: &Path) -> MainResult<()> {
+    let brief: RepositoryChangeBrief = serde_json::from_slice(&fs::read(brief)?)?;
+    print_json(&bind_repository_patch(brief)?)
+}
+
+fn patch_extract_command(
+    request: &Path,
+    attempt_message: &Path,
+    repository_root: &Path,
+    git_executable: &Path,
+) -> MainResult<()> {
+    let request: CapabilityWorkRequest = serde_json::from_slice(&fs::read(request)?)?;
+    let attempt: Message = serde_json::from_slice(&fs::read(attempt_message)?)?;
+    match extract_capability_message(&request, &attempt)? {
+        CapabilityAttemptProjection::Candidate(candidate) => {
+            let artifact =
+                conform_repository_patch(&request, &candidate, repository_root, git_executable)?;
+            print_json(&json!({
+                "status": "conformant_candidate",
+                "candidate": candidate,
+                "artifact": artifact,
+            }))
+        }
+        CapabilityAttemptProjection::Unable(unable) => print_json(&json!({
+            "status": "unable",
+            "unable": unable,
+        })),
     }
 }
 
@@ -667,6 +733,17 @@ impl WorkerFileConfig {
                 git_executable,
             } => Ok(ConfiguredTurnAdapter::RepositoryInspectionV1(
                 RepositoryInspectionTurnAdapter::new(
+                    provider.clone(),
+                    self.working_directory.clone(),
+                    git_executable.clone(),
+                )
+                .map_err(|error| format!("worker adapter configuration is invalid: {error}"))?,
+            )),
+            WorkerAdapterConfig::RepositoryPatchV1 {
+                provider,
+                git_executable,
+            } => Ok(ConfiguredTurnAdapter::RepositoryPatchV1(
+                RepositoryPatchTurnAdapter::new(
                     provider.clone(),
                     self.working_directory.clone(),
                     git_executable.clone(),
@@ -1451,6 +1528,48 @@ mod tests {
                 .turn_adapter()
                 .expect("configure inspection adapter"),
             ConfiguredTurnAdapter::RepositoryInspectionV1(_)
+        ));
+
+        let mut mismatch = value;
+        mismatch["adapter"]["provider"]["capability"]["name"] = json!("other");
+        let mismatch: WorkerFileConfig =
+            serde_json::from_value(mismatch).expect("parse mismatched provider");
+        assert!(mismatch.turn_adapter().is_err());
+    }
+
+    #[test]
+    fn repository_patch_adapter_binds_exact_provider_git_and_workspace() {
+        let value = json!({
+            "schema_version": 2,
+            "agent_id": "agent-id",
+            "working_directory": env!("CARGO_MANIFEST_DIR"),
+            "adapter": {
+                "kind": "repository_patch_v1",
+                "provider": {
+                    "id": {
+                        "package": "dev.fleetd.provider",
+                        "name": "fixture_patcher",
+                        "version": "0.1.0"
+                    },
+                    "capability": {
+                        "package": "dev.fleetd.capability",
+                        "name": "propose_repository_patch",
+                        "version": "0.1.0"
+                    },
+                    "implementation_digest": format!("sha256:{}", "a".repeat(64))
+                },
+                "git_executable": std::env::current_exe().expect("current test executable")
+            },
+            "plugin": {
+                "id": "mock.harness",
+                "executable": "/usr/bin/python3"
+            }
+        });
+        let desired: WorkerFileConfig =
+            serde_json::from_value(value.clone()).expect("parse patch adapter");
+        assert!(matches!(
+            desired.turn_adapter().expect("configure patch adapter"),
+            ConfiguredTurnAdapter::RepositoryPatchV1(_)
         ));
 
         let mut mismatch = value;

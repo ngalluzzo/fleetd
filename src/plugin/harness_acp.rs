@@ -289,6 +289,8 @@ pub struct TurnTerminal {
     pub fence: ExecutionFence,
     pub last_event_seq: u64,
     pub stop_reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_stop_reason: Option<String>,
     pub execution_certainty: HarnessExecutionCertainty,
     pub session_quiescent: bool,
     pub session_persistence: SessionPersistence,

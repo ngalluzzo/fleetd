@@ -180,6 +180,18 @@ The path scope is an admissible-evidence rule rather than a filesystem sandbox.
 See [ADR 0018](adr/0018-repository-inspection-specializes-capability-work.md)
 and the [v1 contract](contracts/repository-inspection-v1.md).
 
+Repository patch proposal is the write-shaped counterpart without ambient
+mutation authority. A change brief binds one exact base revision, path scope,
+objective, criteria, and constraints. The provider returns an untrusted unified
+diff artifact; Fleetd applies it only to a temporary Git index, compares Git's
+exact changed path set, rejects binary and non-regular modes, and emits Git's
+canonical patch plus a byte digest. The authoritative worktree, index, branch,
+and history are untouched. Conformance proves applicability and artifact
+identity, not that the natural-language criteria pass. Test, review, commit,
+publication, and merge remain separate future capabilities. See
+[ADR 0019](adr/0019-patches-are-conformed-artifacts-not-workspace-mutation.md)
+and the [v1 contract](contracts/repository-patch-v1.md).
+
 The first admitted-output target is a browser adapter for blocked-delivery
 review. Its static `/operator/contract.json` is the exact web target IR from
 the capability request; the script derives fields, actions, selectors, and API

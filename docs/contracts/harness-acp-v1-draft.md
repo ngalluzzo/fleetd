@@ -362,10 +362,12 @@ Result:
 
 Cancellation is idempotent for the same fence. The driver sends ACP
 `session/cancel`, continues forwarding terminal updates, cancels outstanding
-permission requests, and waits for the original prompt to return a cancelled
-stop reason. It emits `harness.acp.turn.terminal` only after that drain, or
-after the drain deadline classifies the outcome as unknown and the ACP process
-group is terminated.
+permission requests, and waits for the original prompt to return. A known,
+quiescent response cannot erase the host cancellation: `stop_reason` remains
+the host reason and the native response's claim is preserved separately as
+`runtime_stop_reason`. The driver emits `harness.acp.turn.terminal` only after
+that drain, or after the drain deadline classifies the outcome as unknown and
+the ACP process group is terminated.
 
 ## `harness.acp.turn.terminal`
 
@@ -414,6 +416,12 @@ Plugin notification:
   }
 }
 ```
+
+`runtime_stop_reason` is omitted for a turn the host did not cancel. When a
+host deadline or explicit cancellation drains to a known native response, the
+terminal instead carries both layers, for example `stop_reason:
+"wall_deadline"` and `runtime_stop_reason: "end_turn"`. Admission policy must
+use the effective `stop_reason`; the runtime field is evidence, not authority.
 
 Valid execution certainty values are `not_started`, `outcome_known`, and
 `outcome_unknown`. `session_quiescent` may be true only after the original

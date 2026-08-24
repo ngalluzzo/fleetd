@@ -46,14 +46,22 @@
   structured result without discarding its progress transcript.
 - [x] Delegate one exact-revision repository inspection through a specialized
   capability adapter and validate its complete report and Git citations.
+- [x] Define exact-revision repository patch proposals and deterministically
+  conform fixture candidates through an isolated Git index without mutating the
+  source checkout.
+- [ ] Qualify a real repository-patch provider. The first cloud and local Qwen
+  attempts failed closed before producing a candidate.
 - Versioned task, progress, result, review, and approval contracts.
 - Dependency scheduling expressed outside the messaging kernel.
 - A complete author-reviewer loop exercised on fleetd itself.
 
 ## M3 — Git adapter
 
-- Worktree isolation and exact-revision evidence.
-- Patch publication and independent review.
+- [x] Worktree isolation and exact-revision evidence for inspection and patch
+  proposals.
+- [ ] Patch publication and independent review. Patch artifact conformance is
+  implemented; no provider or reviewer is qualified and no publication
+  authority exists.
 - Atomic merge authorization bound to reviewed base and head revisions.
 - No Git hosting and no direct-push policy emulation.
 

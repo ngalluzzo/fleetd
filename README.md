@@ -208,6 +208,7 @@ remain the next reliability boundaries. See
 [ADR 0016](docs/adr/0016-invocation-scoped-message-capability.md),
 [ADR 0017](docs/adr/0017-adapters-declare-inbound-acceptance.md),
 [ADR 0018](docs/adr/0018-repository-inspection-specializes-capability-work.md),
+[ADR 0019](docs/adr/0019-patches-are-conformed-artifacts-not-workspace-mutation.md),
 and the
 [historical reference qualification](docs/qualification/acp-driver-2026-08-24.md)
 and [OpenCode plugin qualification](docs/qualification/opencode-plugin-2026-08-24.md).
@@ -313,6 +314,34 @@ It emits `conformant_candidate`, not accepted natural-language truth. See the
 [contract](docs/contracts/repository-inspection-v1.md),
 [ADR 0018](docs/adr/0018-repository-inspection-specializes-capability-work.md),
 and [OpenCode qualification](docs/qualification/repository-inspection-opencode-2026-08-24.md).
+
+### Repository-patch dogfood
+
+Patch production is a separate capability rather than writable-workspace
+permission. Bind an exact change brief, submit it through the same capability
+work path, and run an isolated seat using
+[`examples/worker.patch.opencode.example.json`](examples/worker.patch.opencode.example.json):
+
+```sh
+cargo run -- work patch-bind --brief /tmp/change-brief.json \
+  > /tmp/patch-request.json
+cargo run -- --token-file .fleetd/requester.token work submit \
+  --channel CHANNEL_ID --to PATCHER_AGENT_ID \
+  --request /tmp/patch-request.json
+```
+
+`work patch-extract` strictly lifts the immutable attempt, applies its diff only
+to a temporary Git index, checks exact scope and paths through Git, rejects
+binary and non-regular changes, and emits a canonical patch digest without
+touching the worktree or repository history. That is artifact conformance, not
+test success, review, commit, push, or merge authorization.
+
+The first cloud and local-Qwen attempts failed before producing a candidate, so
+no real patch provider is qualified yet. The failed run exposed and closed a
+host-cancellation/result-status bug and an invisible nested-subagent path. See
+the [contract](docs/contracts/repository-patch-v1.md),
+[ADR 0019](docs/adr/0019-patches-are-conformed-artifacts-not-workspace-mutation.md),
+and [qualification record](docs/qualification/repository-patch-provider-2026-08-24.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [API contract](docs/API_CONTRACT.md), [protocol](docs/PROTOCOL.md), and

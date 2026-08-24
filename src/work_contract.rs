@@ -302,6 +302,8 @@ struct HarnessAttemptPayload {
     status: String,
     invocation_id: String,
     stop_reason: String,
+    #[serde(default)]
+    runtime_stop_reason: Option<String>,
     output_complete: bool,
     assistant_messages: Vec<AttemptAssistantMessage>,
     #[serde(rename = "usage")]
@@ -327,6 +329,8 @@ struct HarnessAttemptV2Payload {
     status: String,
     invocation_id: String,
     stop_reason: String,
+    #[serde(default)]
+    runtime_stop_reason: Option<String>,
     transcript_complete: bool,
     assistant_messages: Vec<AttemptAssistantMessage>,
     structured_result: AttemptStructuredResult,
@@ -410,6 +414,7 @@ pub fn extract_capability_attempt(
         .map_err(|error| WorkContractError::MalformedAttempt(error.to_string()))?;
     if attempt.status != "completed"
         || attempt.stop_reason != "end_turn"
+        || attempt.runtime_stop_reason.is_some()
         || !attempt.output_complete
     {
         return Err(WorkContractError::IncompleteAttempt);
@@ -455,7 +460,10 @@ pub fn extract_capability_attempt_v2(
     request.validate()?;
     let attempt: HarnessAttemptV2Payload = serde_json::from_value(payload.clone())
         .map_err(|error| WorkContractError::MalformedAttempt(error.to_string()))?;
-    if attempt.status != "completed" || attempt.stop_reason != "end_turn" {
+    if attempt.status != "completed"
+        || attempt.stop_reason != "end_turn"
+        || attempt.runtime_stop_reason.is_some()
+    {
         return Err(WorkContractError::IncompleteAttempt);
     }
     if attempt.result_context.request_id != request.request_id {
@@ -1182,6 +1190,15 @@ mod tests {
         assert!(matches!(
             extract_capability_attempt_v2(&request, "fleetd", "attempt-2", &tampered),
             Err(WorkContractError::StructuredResultMismatch)
+        ));
+
+        let mut host_stopped = attempt_payload_v2(&request, &response);
+        host_stopped["status"] = json!("failed");
+        host_stopped["stop_reason"] = json!("host_wall_deadline");
+        host_stopped["runtime_stop_reason"] = json!("end_turn");
+        assert!(matches!(
+            extract_capability_attempt_v2(&request, "fleetd", "attempt-2", &host_stopped),
+            Err(WorkContractError::IncompleteAttempt)
         ));
     }
 
