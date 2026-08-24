@@ -1,0 +1,7 @@
+/target/
+/fleetd.db
+/fleetd.db-shm
+/fleetd.db-wal
+/.fleetd/
+.DS_Store
+
