@@ -1,8 +1,10 @@
 import json
 import sys
+from pathlib import Path
 
 
 mode = sys.argv[1] if len(sys.argv) > 1 else "healthy"
+marker_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
 
 
 def send(payload):
@@ -68,6 +70,13 @@ for line in sys.stdin:
             },
         )
     elif method == "harness.acp.session.open":
+        if (
+            mode == "fail-open-once"
+            and marker_path is not None
+            and not marker_path.exists()
+        ):
+            marker_path.touch()
+            sys.exit(19)
         resumed = params["mode"]["kind"] == "resume"
         session_ref = params["mode"].get("session_ref", "mock-session")
         result(

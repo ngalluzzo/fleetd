@@ -1,0 +1,421 @@
+#![cfg(unix)]
+
+use std::{path::PathBuf, time::Duration};
+
+use fleetd::{
+    Capability, ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError,
+    CreateAgent, CreateChannel, CreateMessage, EnvelopeTurnAdapter, ExecutionCertainty,
+    InvocationState, PluginSpec, PreparedTurn, SessionBindingState, Store, ToolBudget, TurnAdapter,
+    TurnPolicy,
+};
+use serde_json::json;
+use tokio_util::sync::CancellationToken;
+
+fn fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_harness_plugin.py")
+}
+
+fn harness_spec(mode: &str) -> PluginSpec {
+    PluginSpec::new("mock.harness", "/usr/bin/python3")
+        .with_arg(fixture_path())
+        .with_arg(mode)
+        .require(Capability {
+            name: "harness.acp".to_owned(),
+            version: 1,
+        })
+        .with_request_timeout(Duration::from_secs(2))
+}
+
+fn policy() -> TurnPolicy {
+    TurnPolicy {
+        idle_timeout_ms: 2_000,
+        wall_timeout_ms: 5_000,
+        cancel_drain_timeout_ms: 500,
+        max_captured_output_bytes: 4_096,
+        permission_policy: "controller".to_owned(),
+        tool_budget: ToolBudget {
+            limit: 8,
+            required_enforcement: "observe_then_cancel".to_owned(),
+        },
+        token_budget: None,
+    }
+}
+
+fn worker_config(agent_id: &str, mode: &str, working_directory: PathBuf) -> ContinuousWorkerConfig {
+    ContinuousWorkerConfig {
+        agent_id: agent_id.to_owned(),
+        plugin: harness_spec(mode),
+        working_directory,
+        additional_directories: Vec::new(),
+        mcp_grants: Vec::new(),
+        compatibility_digest: None,
+        lease_duration: Duration::from_secs(70),
+        poll_interval: Duration::from_millis(10),
+        restart_backoff: Duration::from_millis(10),
+        pre_arm_retry_delay: Duration::ZERO,
+        turn_policy: policy(),
+    }
+}
+
+struct Fixture {
+    directory: tempfile::TempDir,
+    store: Store,
+    sender_id: String,
+    receiver_id: String,
+    channel_id: String,
+}
+
+async fn fixture(message_count: usize) -> Fixture {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let store = Store::open(directory.path().join("fleetd.db"))
+        .await
+        .expect("open store");
+    let sender = store
+        .create_agent(CreateAgent {
+            name: "worker-sender".to_owned(),
+            metadata: json!({}),
+        })
+        .await
+        .expect("create sender");
+    let receiver = store
+        .create_agent(CreateAgent {
+            name: "worker-receiver".to_owned(),
+            metadata: json!({}),
+        })
+        .await
+        .expect("create receiver");
+    let channel = store
+        .create_channel(CreateChannel {
+            name: "worker-test".to_owned(),
+            metadata: json!({}),
+            member_ids: vec![sender.id.clone(), receiver.id.clone()],
+        })
+        .await
+        .expect("create channel");
+    for sequence in 0..message_count {
+        store
+            .append_message(
+                &channel.id,
+                CreateMessage {
+                    sender_id: sender.id.clone(),
+                    idempotency_key: None,
+                    recipient_id: Some(receiver.id.clone()),
+                    kind: "work.request/v1".to_owned(),
+                    payload: json!({"task": format!("worker test {sequence}")}),
+                    correlation_id: Some("worker-test".to_owned()),
+                    causation_id: None,
+                },
+            )
+            .await
+            .expect("append request");
+    }
+    Fixture {
+        directory,
+        store,
+        sender_id: sender.id,
+        receiver_id: receiver.id,
+        channel_id: channel.id,
+    }
+}
+
+#[tokio::test]
+async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
+    let fixture = fixture(2).await;
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(
+            &fixture.receiver_id,
+            "healthy",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        ),
+        EnvelopeTurnAdapter::new("work.result/v1"),
+    )
+    .expect("valid worker");
+
+    let report = worker
+        .run_until(CancellationToken::new(), Some(2))
+        .await
+        .expect("drain two turns");
+
+    assert_eq!(report.completed, 2);
+    assert_eq!(report.blocked, 0);
+    assert_eq!(report.plugin_generations, 1);
+    assert_eq!(report.reservations, 2);
+    let sessions = fixture
+        .store
+        .list_session_bindings(Some(&fixture.receiver_id))
+        .await
+        .expect("list sessions");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].state, SessionBindingState::Ready);
+    assert_eq!(sessions[0].binding.binding_generation, 1);
+    assert_eq!(sessions[0].binding.owner_epoch, 1);
+    let history = fixture
+        .store
+        .list_messages(&fixture.channel_id, Some(&fixture.sender_id), 0, 100)
+        .await
+        .expect("list history");
+    assert_eq!(
+        history
+            .messages
+            .iter()
+            .filter(|message| message.kind == "work.result/v1")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn fresh_worker_generation_adopts_and_resumes_ready_session() {
+    let fixture = fixture(2).await;
+    let working_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let first = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(&fixture.receiver_id, "healthy", working_directory.clone()),
+        EnvelopeTurnAdapter::new("work.result/v1"),
+    )
+    .expect("valid first worker");
+    first
+        .run_until(CancellationToken::new(), Some(1))
+        .await
+        .expect("first generation completes");
+
+    let second = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(&fixture.receiver_id, "healthy", working_directory),
+        EnvelopeTurnAdapter::new("work.result/v1"),
+    )
+    .expect("valid second worker");
+    second
+        .run_until(CancellationToken::new(), Some(1))
+        .await
+        .expect("second generation resumes");
+
+    let sessions = fixture
+        .store
+        .list_session_bindings(Some(&fixture.receiver_id))
+        .await
+        .expect("list sessions");
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].state, SessionBindingState::Ready);
+    assert_eq!(sessions[0].binding.binding_generation, 1);
+    assert_eq!(sessions[0].binding.owner_epoch, 2);
+}
+
+#[tokio::test]
+async fn session_open_crash_releases_unarmed_work_and_restarts_generation() {
+    let fixture = fixture(1).await;
+    let marker = fixture.directory.path().join("open-failed-once");
+    let mut config = worker_config(
+        &fixture.receiver_id,
+        "healthy",
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+    );
+    config.plugin = PluginSpec::new("mock.harness", "/usr/bin/python3")
+        .with_arg(fixture_path())
+        .with_arg("fail-open-once")
+        .with_arg(&marker)
+        .require(Capability {
+            name: "harness.acp".to_owned(),
+            version: 1,
+        })
+        .with_request_timeout(Duration::from_secs(2));
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        config,
+        EnvelopeTurnAdapter::new("work.result/v1"),
+    )
+    .expect("valid worker");
+
+    let report = worker
+        .run_until(CancellationToken::new(), Some(1))
+        .await
+        .expect("replacement generation completes");
+
+    assert_eq!(report.plugin_generations, 2);
+    assert_eq!(report.operational_restarts, 1);
+    assert_eq!(report.reservations, 2);
+    assert_eq!(report.pre_arm_retries, 1);
+    assert_eq!(report.completed, 1);
+    let sessions = fixture
+        .store
+        .list_session_bindings(Some(&fixture.receiver_id))
+        .await
+        .expect("list generations");
+    assert_eq!(sessions.len(), 2);
+    assert!(sessions.iter().any(|session| {
+        session.binding.binding_generation == 2 && session.state == SessionBindingState::Ready
+    }));
+}
+
+#[tokio::test]
+async fn cancellation_during_idle_poll_shuts_down_cleanly() {
+    let fixture = fixture(0).await;
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(
+            &fixture.receiver_id,
+            "healthy",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        ),
+        EnvelopeTurnAdapter::new("work.result/v1"),
+    )
+    .expect("valid worker");
+    let cancellation = CancellationToken::new();
+    let trigger = cancellation.clone();
+    let canceller = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        trigger.cancel();
+    });
+
+    let report = worker.run(cancellation).await.expect("cancel worker");
+    canceller.await.expect("join cancellation task");
+
+    assert_eq!(report.completed, 0);
+    assert_eq!(report.reservations, 0);
+    assert!(report.idle_polls > 0);
+}
+
+struct CancellingAdapter {
+    cancellation: CancellationToken,
+    delegate: EnvelopeTurnAdapter,
+}
+
+impl TurnAdapter for CancellingAdapter {
+    fn prepare(&self, invocation: &fleetd::Invocation) -> Result<PreparedTurn, String> {
+        self.cancellation.cancel();
+        self.delegate.prepare(invocation)
+    }
+}
+
+#[tokio::test]
+async fn cancellation_after_reservation_releases_work_before_dispatch() {
+    let fixture = fixture(1).await;
+    let cancellation = CancellationToken::new();
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(
+            &fixture.receiver_id,
+            "healthy",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        ),
+        CancellingAdapter {
+            cancellation: cancellation.clone(),
+            delegate: EnvelopeTurnAdapter::new("work.result/v1"),
+        },
+    )
+    .expect("valid worker");
+
+    let report = worker.run(cancellation).await.expect("cancel before arm");
+
+    assert_eq!(report.reservations, 1);
+    assert_eq!(report.pre_arm_retries, 1);
+    assert_eq!(report.settled_turns(), 0);
+    assert!(
+        fixture
+            .store
+            .list_session_bindings(Some(&fixture.receiver_id))
+            .await
+            .expect("list sessions")
+            .is_empty()
+    );
+    let invocation = fixture
+        .store
+        .list_invocations(Some(&fixture.receiver_id))
+        .await
+        .expect("list invocations")
+        .pop()
+        .expect("one invocation");
+    assert_eq!(invocation.state, InvocationState::Terminal);
+    assert_eq!(
+        invocation.execution_certainty,
+        Some(ExecutionCertainty::NotStarted)
+    );
+}
+
+#[tokio::test]
+async fn post_arm_protocol_ambiguity_is_blocked_without_reexecution() {
+    let fixture = fixture(1).await;
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(
+            &fixture.receiver_id,
+            "wrong-fence",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        ),
+        EnvelopeTurnAdapter::new("work.result/v1"),
+    )
+    .expect("valid worker");
+
+    let report = worker
+        .run_until(CancellationToken::new(), Some(1))
+        .await
+        .expect("ambiguity settles by blocking");
+
+    assert_eq!(report.blocked, 1);
+    assert_eq!(report.completed, 0);
+    assert_eq!(report.operational_restarts, 0);
+    let blocked = fixture
+        .store
+        .list_blocked_deliveries(Some(&fixture.receiver_id))
+        .await
+        .expect("list blocks");
+    assert_eq!(blocked.len(), 1);
+    let session = fixture
+        .store
+        .list_session_bindings(Some(&fixture.receiver_id))
+        .await
+        .expect("list sessions")
+        .pop()
+        .expect("one session");
+    assert_eq!(session.state, SessionBindingState::Uncertain);
+}
+
+struct RejectingAdapter;
+
+impl TurnAdapter for RejectingAdapter {
+    fn prepare(&self, _invocation: &fleetd::Invocation) -> Result<PreparedTurn, String> {
+        Err("unsupported work kind".to_owned())
+    }
+}
+
+#[tokio::test]
+async fn adapter_failure_releases_only_the_unarmed_reservation() {
+    let fixture = fixture(1).await;
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(
+            &fixture.receiver_id,
+            "healthy",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        ),
+        RejectingAdapter,
+    )
+    .expect("valid worker");
+
+    let error = worker
+        .run_until(CancellationToken::new(), Some(1))
+        .await
+        .expect_err("adapter failure stops the worker");
+    assert!(matches!(error, ContinuousWorkerError::Adapter(_)));
+    let invocation = fixture
+        .store
+        .list_invocations(Some(&fixture.receiver_id))
+        .await
+        .expect("list invocations")
+        .pop()
+        .expect("one invocation");
+    assert_eq!(invocation.state, InvocationState::Terminal);
+    assert_eq!(
+        invocation.execution_certainty,
+        Some(ExecutionCertainty::NotStarted)
+    );
+    assert!(
+        fixture
+            .store
+            .list_blocked_deliveries(Some(&fixture.receiver_id))
+            .await
+            .expect("list blocks")
+            .is_empty()
+    );
+}

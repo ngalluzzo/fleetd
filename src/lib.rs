@@ -10,6 +10,7 @@ pub mod model;
 pub mod plugin;
 pub mod session_binding;
 pub mod store;
+pub mod worker;
 
 pub use api::{AppState, openapi_document, router};
 pub use auth::{AuthService, OperatorBootstrap, Principal};
@@ -37,3 +38,7 @@ pub use session_binding::{
     SessionBinding, SessionBindingState,
 };
 pub use store::{AppendMessageResult, Store};
+pub use worker::{
+    ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError, EnvelopeTurnAdapter,
+    PreparedTurn, TurnAdapter, WorkerReport,
+};

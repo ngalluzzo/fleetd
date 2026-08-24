@@ -1,8 +1,8 @@
 # Harness execution architecture
 
 Status: implementation baseline for M1. The typed host, generic driver,
-durable session owner fencing, and one-turn controller exist; the capability
-contract remains a draft until it passes the complete Codex and DSH
+durable session owner fencing, and continuous local worker exist; the
+capability contract remains a draft until it passes the complete Codex and DSH
 qualification matrix.
 
 This document defines the layer between fleetd's durable agent inbox and an
@@ -62,10 +62,10 @@ flowchart TB
 ```
 
 The logical worker controller is trusted fleetd code but is not part of the
-messaging kernel. The first deployment may compose it into `fleetd serve` so a
-single daemon can reserve work and record an invocation in one SQLite
-transaction. A future external worker can exercise the same logic through the
-public API with an agent-bound credential.
+messaging kernel. The first deployment runs `fleetd worker run` as a separate
+local process against the same authoritative SQLite database. A future remote
+worker can exercise equivalent logic through a dedicated authenticated API
+only after transport and enrollment are designed.
 
 The ACP driver and harness are separate processes. The driver speaks fleetd's
 strict plugin lifecycle on its outer stdio and uses an authoritative ACP SDK on
@@ -601,7 +601,7 @@ The first vertical slice now implements:
 5. **Bounded capture.** Frames are capped at one MiB and turn capture at 512
    KiB. Oversized JSON becomes an explicit byte-count and SHA-256 truncation
    record. A content-addressed artifact sink remains pending.
-6. **Managed settlement.** The one-turn controller arms before prompt dispatch,
+6. **Managed settlement.** The turn controller arms before prompt dispatch,
    independently enforces the wall deadline, denies permission requests by
    default, atomically completes known quiescent output, and parks every
    post-arm protocol ambiguity.
@@ -610,13 +610,17 @@ The first vertical slice now implements:
    persistence claims, uncertainty, and retirement evidence survive restart.
    Compatible ready sessions adopt under a higher epoch; incompatible or
    abandoned sessions rotate; active and uncertain sessions fail closed.
+8. **Continuous scheduling.** One serialized worker seat reserves the oldest
+   eligible invocation, derives a semantic-neutral per-channel turn, reuses its
+   open session lane, and repeats until cancelled. Plugin or harness failure
+   starts a fresh process generation after bounded backoff. Compatible ready
+   lanes are natively resumed under a higher owner epoch.
 
-The controller deliberately requires an already-reserved invocation and an
-session acquired through the durable binding API. The caller still performs
-the requested native create/resume operation and records its opaque reference
-before invoking the one-turn controller. Invocation-event storage, runtime
-generation adoption, a capability broker, and a continuous inbox loop are not
-implemented yet.
+The inner turn controller deliberately requires an already-reserved invocation
+and a session acquired through the durable binding API. The continuous worker
+owns reservation, native create/resume, and opaque-reference recording before
+it invokes that controller. Invocation-event storage, persistent runtime
+generation evidence, and a capability broker are not implemented yet.
 
 These are reliability requirements for the first vertical loop, not a request
 to expand the messaging kernel with harness semantics.

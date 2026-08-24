@@ -167,19 +167,37 @@ environment, owns their complete process group, and does not give plugins
 fleetd credentials.
 
 The workspace now includes an experimental typed `harness.acp` host client, a
-generic ACP v1 driver built on the official Rust SDK, and a one-turn controller
-that composes reservation, durable session acquisition, owner-epoch fencing,
-write-ahead arming, prompt drain, atomic completion, and conservative
-unknown-outcome parking. Compatible restarts resume under a higher owner epoch;
-incompatible profiles rotate the binding generation; active or uncertain
-sessions fail closed. The underlying JSON-RPC call surface remains private;
-this is not a generic `execute` contract.
+generic ACP v1 driver built on the official Rust SDK, and a continuous worker
+that composes inbox reservation, durable session acquisition, owner-epoch
+fencing, write-ahead arming, prompt drain, atomic completion, conservative
+unknown-outcome parking, and process restart. Compatible restarts resume under
+a higher owner epoch; incompatible profiles rotate the binding generation;
+active or uncertain sessions fail closed. The underlying JSON-RPC call surface
+remains private; this is not a generic `execute` contract.
+
+The worker is a separate trusted local process, not part of the daemon or
+messaging kernel. Its desired state is an explicit versioned JSON file:
+
+```sh
+cargo build --workspace
+cp examples/worker.acp.example.json .fleetd/worker.json
+# Fill in the agent ID, absolute paths, exact runtime identity, and allowlisted
+# non-secret environment values.
+cargo run --bin fleetd -- worker run --db .fleetd/fleetd.db \
+  --config .fleetd/worker.json
+```
+
+It runs one serialized seat, defaults to one native session lane per channel,
+and observes `Ctrl-C` only between turns. An armed turn always drains to a known
+completion or a durable block before the plugin generation is stopped. See the
+[worker operations guide](docs/WORKER.md) for configuration and failure
+semantics.
 
 The driver has completed a real Codex turn. DSH initialization and identity
 verification pass, but local session qualification is currently blocked by an
 unconfigured DSH credential, so the capability remains experimental. Persisted
-event evidence, runtime-generation records, and the continuous inbox worker are
-the next boundary. See
+event evidence and runtime-generation records are the next reliability
+boundary. See
 [the harness execution architecture](docs/HARNESS_EXECUTION.md),
 [ADR 0004](docs/adr/0004-out-of-process-capability-plugins.md),
 [ADR 0005](docs/adr/0005-acp-harness-boundary.md),

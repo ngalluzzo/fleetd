@@ -18,10 +18,9 @@
 - [ ] One generic ACP driver qualified against Codex and DSH. The typed driver
   and real Codex turn pass; DSH initialization passes but session creation is
   blocked on an approved credential path.
-- [ ] A managed worker controller that consumes addressed messages and replies
-  with correlation and causation intact. The one-turn reserve-to-complete
-  control flow and durable session ownership pass; continuous inbox scheduling
-  is pending.
+- [x] A managed local worker controller that continuously consumes addressed
+  messages and replies with correlation and causation intact, with supervised
+  plugin restart and durable native-session adoption.
 - [x] Delivery leases, acknowledgement, retry, and restart resumption.
 - [x] Durable unknown-outcome parking with operator-only resolution.
 

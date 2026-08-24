@@ -56,6 +56,7 @@ pub enum PluginError {
 }
 
 /// Operator-supplied desired state for one plugin process.
+#[derive(Clone)]
 pub struct PluginSpec {
     id: String,
     executable: PathBuf,

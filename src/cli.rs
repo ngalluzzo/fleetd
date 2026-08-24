@@ -9,12 +9,15 @@ use std::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleetd::{
     AckDelivery, AddMember, AppState, ArmInvocation, AuthService, BlockDelivery, BlockResolution,
-    ClaimDeliveries, CompleteInvocation, CreateAgent, CreateChannel, IssuedCredential, MessagePage,
-    RegisteredAgent, ResolveDeliveryBlock, RetryDelivery, SendMessage, Store, router,
+    Capability, ClaimDeliveries, CompleteInvocation, ContinuousHarnessWorker,
+    ContinuousWorkerConfig, CreateAgent, CreateChannel, EnvelopeTurnAdapter, IssuedCredential,
+    MessagePage, PluginSpec, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery, SendMessage,
+    Store, ToolBudget, TurnPolicy, router,
 };
 use futures_util::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 
 pub type MainResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -51,6 +54,11 @@ enum Command {
     Invocation {
         #[command(subcommand)]
         command: InvocationCommand,
+    },
+    /// Run a local harness worker against fleetd's authoritative database.
+    Worker {
+        #[command(subcommand)]
+        command: WorkerCommand,
     },
 }
 
@@ -236,6 +244,95 @@ enum InvocationCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum WorkerCommand {
+    /// Continuously reserve and execute one agent's inbox.
+    Run(WorkerRunArgs),
+}
+
+#[derive(Args)]
+struct WorkerRunArgs {
+    #[arg(long, env = "FLEETD_DB", default_value = "fleetd.db")]
+    db: PathBuf,
+    /// JSON desired-state file for the worker and harness plugin.
+    #[arg(long)]
+    config: PathBuf,
+    /// Stop after one completed or conservatively blocked turn.
+    #[arg(long)]
+    once: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerFileConfig {
+    schema_version: u32,
+    agent_id: String,
+    working_directory: PathBuf,
+    #[serde(default)]
+    additional_directories: Vec<PathBuf>,
+    #[serde(default)]
+    mcp_grants: Vec<String>,
+    #[serde(default)]
+    compatibility_digest: Option<String>,
+    plugin: WorkerPluginConfig,
+    #[serde(default = "default_result_kind")]
+    result_kind: String,
+    #[serde(default = "default_worker_lease_ms")]
+    lease_duration_ms: u64,
+    #[serde(default = "default_poll_interval_ms")]
+    poll_interval_ms: u64,
+    #[serde(default = "default_restart_backoff_ms")]
+    restart_backoff_ms: u64,
+    #[serde(default = "default_pre_arm_retry_delay_ms")]
+    pre_arm_retry_delay_ms: u64,
+    #[serde(default)]
+    turn: WorkerTurnConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerPluginConfig {
+    id: String,
+    executable: PathBuf,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default = "empty_json_object")]
+    config: Value,
+    #[serde(default = "default_initialize_timeout_ms")]
+    initialize_timeout_ms: u64,
+    #[serde(default = "default_request_timeout_ms")]
+    request_timeout_ms: u64,
+    #[serde(default = "default_shutdown_timeout_ms")]
+    shutdown_timeout_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerTurnConfig {
+    #[serde(default = "default_idle_timeout_ms")]
+    idle_timeout_ms: u64,
+    #[serde(default = "default_wall_timeout_ms")]
+    wall_timeout_ms: u64,
+    #[serde(default = "default_cancel_drain_timeout_ms")]
+    cancel_drain_timeout_ms: u64,
+    #[serde(default = "default_captured_output_bytes")]
+    max_captured_output_bytes: usize,
+    #[serde(default = "default_tool_budget")]
+    tool_budget: u64,
+}
+
+impl Default for WorkerTurnConfig {
+    fn default() -> Self {
+        Self {
+            idle_timeout_ms: default_idle_timeout_ms(),
+            wall_timeout_ms: default_wall_timeout_ms(),
+            cancel_drain_timeout_ms: default_cancel_drain_timeout_ms(),
+            max_captured_output_bytes: default_captured_output_bytes(),
+            tool_budget: default_tool_budget(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum ResolutionArg {
     Requeue,
@@ -290,7 +387,161 @@ pub async fn run() -> MainResult<()> {
             )
             .await
         }
+        Command::Worker { command } => worker_command(command).await,
     }
+}
+
+async fn worker_command(command: WorkerCommand) -> MainResult<()> {
+    match command {
+        WorkerCommand::Run(args) => run_worker(args).await,
+    }
+}
+
+async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
+    let raw = fs::read(&args.config)?;
+    let desired: WorkerFileConfig = serde_json::from_slice(&raw).map_err(|error| {
+        format!(
+            "worker configuration {} is invalid: {error}",
+            args.config.display()
+        )
+    })?;
+    if desired.schema_version != 1 {
+        return Err(format!(
+            "unsupported worker configuration schema version {}; expected 1",
+            desired.schema_version
+        )
+        .into());
+    }
+    if let Some(parent) = args.db.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let store = Store::open(&args.db).await?;
+    let result_kind = desired.result_kind.clone();
+    let worker = ContinuousHarnessWorker::new(
+        &store,
+        desired.into_runtime_config(),
+        EnvelopeTurnAdapter::new(result_kind),
+    )?;
+    let cancellation = CancellationToken::new();
+    let signal = cancellation.clone();
+    let signal_task = tokio::spawn(async move {
+        shutdown_signal().await;
+        signal.cancel();
+    });
+    tracing::info!(database = %args.db.display(), "continuous worker ready");
+    let run = if args.once {
+        worker.run_until(cancellation, Some(1)).await
+    } else {
+        worker.run(cancellation).await
+    };
+    signal_task.abort();
+    let report = run?;
+    print_json(&report)
+}
+
+impl WorkerFileConfig {
+    fn into_runtime_config(self) -> ContinuousWorkerConfig {
+        ContinuousWorkerConfig {
+            agent_id: self.agent_id,
+            plugin: self.plugin.into_spec(),
+            working_directory: self.working_directory,
+            additional_directories: self.additional_directories,
+            mcp_grants: self.mcp_grants,
+            compatibility_digest: self.compatibility_digest,
+            lease_duration: std::time::Duration::from_millis(self.lease_duration_ms),
+            poll_interval: std::time::Duration::from_millis(self.poll_interval_ms),
+            restart_backoff: std::time::Duration::from_millis(self.restart_backoff_ms),
+            pre_arm_retry_delay: std::time::Duration::from_millis(self.pre_arm_retry_delay_ms),
+            turn_policy: TurnPolicy {
+                idle_timeout_ms: self.turn.idle_timeout_ms,
+                wall_timeout_ms: self.turn.wall_timeout_ms,
+                cancel_drain_timeout_ms: self.turn.cancel_drain_timeout_ms,
+                max_captured_output_bytes: self.turn.max_captured_output_bytes,
+                permission_policy: "controller".to_owned(),
+                tool_budget: ToolBudget {
+                    limit: self.turn.tool_budget,
+                    required_enforcement: "observe_then_cancel".to_owned(),
+                },
+                token_budget: None,
+            },
+        }
+    }
+}
+
+impl WorkerPluginConfig {
+    fn into_spec(self) -> PluginSpec {
+        let mut spec = PluginSpec::new(self.id, self.executable)
+            .with_config(self.config)
+            .require(Capability {
+                name: "harness.acp".to_owned(),
+                version: 1,
+            })
+            .with_initialize_timeout(std::time::Duration::from_millis(self.initialize_timeout_ms))
+            .with_request_timeout(std::time::Duration::from_millis(self.request_timeout_ms))
+            .with_shutdown_timeout(std::time::Duration::from_millis(self.shutdown_timeout_ms));
+        for argument in self.args {
+            spec = spec.with_arg(argument);
+        }
+        spec
+    }
+}
+
+const fn default_worker_lease_ms() -> u64 {
+    900_000
+}
+
+const fn default_poll_interval_ms() -> u64 {
+    1_000
+}
+
+const fn default_restart_backoff_ms() -> u64 {
+    5_000
+}
+
+const fn default_pre_arm_retry_delay_ms() -> u64 {
+    5_000
+}
+
+const fn default_initialize_timeout_ms() -> u64 {
+    10_000
+}
+
+const fn default_request_timeout_ms() -> u64 {
+    30_000
+}
+
+const fn default_shutdown_timeout_ms() -> u64 {
+    5_000
+}
+
+const fn default_idle_timeout_ms() -> u64 {
+    120_000
+}
+
+const fn default_wall_timeout_ms() -> u64 {
+    600_000
+}
+
+const fn default_cancel_drain_timeout_ms() -> u64 {
+    15_000
+}
+
+const fn default_captured_output_bytes() -> usize {
+    512 * 1_024
+}
+
+const fn default_tool_budget() -> u64 {
+    64
+}
+
+fn default_result_kind() -> String {
+    "work.result/v1".to_owned()
+}
+
+fn empty_json_object() -> Value {
+    json!({})
 }
 
 struct ApiClient {
@@ -817,7 +1068,11 @@ fn base_url(server: &str) -> &str {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    use super::{persist_secret_file, replace_secret_file, validate_listen_address};
+    use serde_json::json;
+
+    use super::{
+        WorkerFileConfig, persist_secret_file, replace_secret_file, validate_listen_address,
+    };
 
     #[test]
     fn loopback_listen_addresses_are_allowed() {
@@ -829,6 +1084,29 @@ mod tests {
     fn non_loopback_listen_addresses_are_rejected() {
         let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 7419);
         assert!(validate_listen_address(address).is_err());
+    }
+
+    #[test]
+    fn worker_config_defaults_are_bounded_and_unknown_fields_fail() {
+        let value = json!({
+            "schema_version": 1,
+            "agent_id": "agent-id",
+            "working_directory": env!("CARGO_MANIFEST_DIR"),
+            "plugin": {
+                "id": "mock.harness",
+                "executable": "/usr/bin/python3"
+            }
+        });
+        let desired: WorkerFileConfig =
+            serde_json::from_value(value.clone()).expect("parse minimal desired state");
+        let runtime = desired.into_runtime_config();
+        assert_eq!(runtime.lease_duration.as_millis(), 900_000);
+        assert_eq!(runtime.turn_policy.wall_timeout_ms, 600_000);
+        assert_eq!(runtime.turn_policy.tool_budget.limit, 64);
+
+        let mut invalid = value;
+        invalid["surprise"] = json!(true);
+        assert!(serde_json::from_value::<WorkerFileConfig>(invalid).is_err());
     }
 
     #[test]

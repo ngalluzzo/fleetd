@@ -87,18 +87,25 @@ capability adds invocation identity, session fencing, deadlines, and evidence
 without exposing a generic protocol tunnel. The supervisor owns the driver and
 its ACP runtime as one process group.
 
-A one-turn managed controller now composes an existing reservation with a
-durable session binding, exclusive owner epoch, write-ahead dispatch arming,
-typed prompt drain, conservative ambiguity parking, and atomic
-correlated-result completion. Binding activation commits with invocation
+A continuous local worker composes atomic reservation with durable session
+binding, exclusive owner epochs, write-ahead dispatch arming, typed prompt
+drain, conservative ambiguity parking, atomic correlated-result completion,
+inbox polling, and supervised process restart. One process owns one serialized
+seat and caches one native session per channel lane. A fresh process generation
+adopts a compatible ready session under a higher epoch and performs the native
+resume before it handles more work. Binding activation commits with invocation
 arming, and known quiescent completion returns the binding to ready in the same
-commit as result publication. It is not yet a continuous worker: persisted
-invocation events, runtime-generation records, and inbox scheduling remain the
-next controller boundary. Codex has passed one real end-to-end turn;
-DSH has passed initialization but still requires an approved credential path
-for session and turn qualification. Invocation, resumption, retry policy, and
+commit as result publication.
+
+The worker opens SQLite directly as a trusted local controller. It is neither
+part of the public HTTP API nor embedded in the messaging kernel. Persisted
+invocation-event fragments and explicit runtime-generation evidence remain the
+next controller boundary. Codex has passed one real end-to-end turn; DSH has
+passed initialization but still requires an approved credential path for
+session and turn qualification. Invocation, resumption, retry policy, and
 restart policy remain outside the messaging kernel. See the
 [harness execution architecture](HARNESS_EXECUTION.md),
+[worker operations guide](WORKER.md),
 [ADR 0005](adr/0005-acp-harness-boundary.md),
 [ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md), and the
 [qualification record](qualification/acp-driver-2026-08-24.md).

@@ -1,0 +1,74 @@
+# Continuous worker operations
+
+`fleetd worker run` is the first dogfood worker seat. It is a trusted local
+controller process that opens the same SQLite database as `fleetd serve`, owns
+one harness plugin generation, and serially consumes one agent inbox. It does
+not add harness concepts to the public API or messaging kernel.
+
+## Start one seat
+
+Build the daemon and ACP driver, copy the example desired-state file, then fill
+in every placeholder with an absolute path or exact observed identity:
+
+```sh
+cargo build --workspace
+cp examples/worker.acp.example.json .fleetd/worker.json
+cargo run --bin fleetd -- worker run --db .fleetd/fleetd.db \
+  --config .fleetd/worker.json
+```
+
+Use `--once` to wait for and settle one invocation, which is useful for a
+qualification run. Without it, the process polls until `Ctrl-C`. Run only one
+seat for a given agent during this first slice; durable session fencing remains
+safe with competing processes, but they will produce avoidable retries.
+
+The configuration schema is versioned and rejects unknown fields. JSON does
+not interpolate environment variables. The values under
+`plugin.config.runtime.environment` are copied literally and must contain only
+the non-secret names accepted by the ACP driver. Never put a fleetd bearer
+credential, provider key, or other secret in this file. The driver starts with
+an empty environment and reconstructs only the explicit allowlist.
+
+`plugin.config.profile_digest` is an operator-owned identifier for the complete
+behavioral profile. Change it when the adapter, model route, arguments, or
+behavior-affecting settings change. The driver separately hashes the adapter at
+`identity_path` and verifies the exact runtime name and version. By default the
+worker resumes only an exact profile digest. Set `compatibility_digest` only
+after a separately qualified set of profiles has proven native-session
+compatibility.
+
+## Turn and lane behavior
+
+The built-in adapter passes the full immutable fleetd message envelope and its
+invocation attempt to the harness as JSON. It adds no task, Git, review, or UI
+semantics. One durable native session lane is maintained per channel, so
+conversation context stays scoped to the channel. A future versioned adapter
+or workflow plugin can choose a different lane policy without changing the
+kernel.
+
+The lease must cover the configured wall timeout, cancellation drain timeout,
+and a 60-second settlement margin. Permission requests are denied by the
+controller, tool use is observed and cancelled at the configured budget, token
+budgets are not claimed, output capture is capped at 512 KiB, and all policy
+bounds are validated before a process starts.
+
+## Failure semantics
+
+- Before durable dispatch arming, adapter, session, or harness-start failures
+  release the invocation with `not_started` evidence and a bounded retry delay.
+- After arming, unknown protocol, persistence, timeout, or process state is
+  never converted into permission to replay. The controller drains a known
+  terminal outcome or durably blocks the delivery and marks the session
+  uncertain.
+- After a completed or blocked turn, result settlement is already committed in
+  SQLite before the next reservation.
+- Plugin generations restart with bounded backoff. Their in-memory session
+  cache is discarded; compatible ready bindings are reacquired under a higher
+  owner epoch and natively resumed.
+- `Ctrl-C` is observed between turns. An armed turn is allowed to finish or
+  block before the child process group is shut down.
+
+The final JSON report includes generations, restarts, reservations,
+completions, blocks, safe pre-arm retries, and idle polls. Inspect durable
+ambiguity with `fleetd inbox blocked`; only an operator can requeue or abandon
+it.
