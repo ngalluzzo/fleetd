@@ -6,10 +6,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleetd::{
-    AckDelivery, AddMember, AppState, AuthService, ClaimDeliveries, CreateAgent, CreateChannel,
-    IssuedCredential, MessagePage, RegisteredAgent, RetryDelivery, SendMessage, Store, router,
+    AckDelivery, AddMember, AppState, AuthService, BlockDelivery, BlockResolution, ClaimDeliveries,
+    CreateAgent, CreateChannel, IssuedCredential, MessagePage, RegisteredAgent,
+    ResolveDeliveryBlock, RetryDelivery, SendMessage, Store, router,
 };
 use futures_util::StreamExt;
 use serde::Serialize;
@@ -163,6 +164,45 @@ enum InboxCommand {
         #[arg(long)]
         error: Option<String>,
     },
+    Block {
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        message: String,
+        #[arg(long)]
+        lease: String,
+        #[arg(long)]
+        reason: String,
+    },
+    Blocked {
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    Resolve {
+        #[arg(long)]
+        block: i64,
+        #[arg(long, value_enum)]
+        resolution: ResolutionArg,
+        #[arg(long, default_value_t = 0)]
+        retry_after_ms: u64,
+        #[arg(long)]
+        note: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ResolutionArg {
+    Requeue,
+    Abandon,
+}
+
+impl From<ResolutionArg> for BlockResolution {
+    fn from(value: ResolutionArg) -> Self {
+        match value {
+            ResolutionArg::Requeue => Self::Requeue,
+            ResolutionArg::Abandon => Self::Abandon,
+        }
+    }
 }
 
 pub async fn run() -> MainResult<()> {
@@ -356,6 +396,41 @@ async fn inbox_command(api: &ApiClient, command: InboxCommand) -> MainResult<()>
                     lease_token: lease,
                     retry_after_ms,
                     error,
+                })
+                .send()
+                .await?
+        }
+        InboxCommand::Block {
+            agent,
+            message,
+            lease,
+            reason,
+        } => {
+            api.post(&format!("/v1/agents/{agent}/deliveries/{message}/block"))
+                .json(&BlockDelivery {
+                    lease_token: lease,
+                    reason,
+                })
+                .send()
+                .await?
+        }
+        InboxCommand::Blocked { agent } => {
+            let query = agent.map_or_else(String::new, |agent| format!("?agent={agent}"));
+            api.get(&format!("/v1/delivery-blocks{query}"))
+                .send()
+                .await?
+        }
+        InboxCommand::Resolve {
+            block,
+            resolution,
+            retry_after_ms,
+            note,
+        } => {
+            api.post(&format!("/v1/delivery-blocks/{block}/resolve"))
+                .json(&ResolveDeliveryBlock {
+                    resolution: resolution.into(),
+                    retry_after_ms,
+                    note,
                 })
                 .send()
                 .await?

@@ -12,9 +12,10 @@ pub use api::{AppState, router};
 pub use auth::{AuthService, OperatorBootstrap, Principal};
 pub use error::FleetError;
 pub use model::{
-    AckDelivery, AddMember, Agent, Channel, ClaimBatch, ClaimDeliveries, CreateAgent,
-    CreateChannel, CreateMessage, Delivery, IssuedCredential, Message, MessagePage,
-    RegisteredAgent, RetryDelivery, SendMessage,
+    AckDelivery, AddMember, Agent, BlockDelivery, BlockResolution, BlockedDelivery, Channel,
+    ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, Delivery,
+    IssuedCredential, Message, MessagePage, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery,
+    SendMessage,
 };
 pub use plugin::{
     Capability, PluginError, PluginExit, PluginIdentity, PluginManifest, PluginNotification,

@@ -17,6 +17,7 @@
 - A managed worker controller that consumes addressed messages and replies
   with correlation and causation intact.
 - [x] Delivery leases, acknowledgement, retry, and restart resumption.
+- [x] Durable unknown-outcome parking with operator-only resolution.
 
 ## M2 — Work contracts
 

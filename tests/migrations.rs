@@ -1,4 +1,4 @@
-use fleetd::{CreateAgent, CreateChannel, CreateMessage};
+use fleetd::{BlockDelivery, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage};
 use serde_json::json;
 use sqlx::{Connection, sqlite::SqliteConnectOptions};
 
@@ -78,7 +78,7 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
     let input = CreateMessage {
         sender_id: "legacy-agent".to_owned(),
         idempotency_key: Some("migration/result".to_owned()),
-        recipient_id: Some(recipient.id),
+        recipient_id: Some(recipient.id.clone()),
         kind: "agent.output/v1".to_owned(),
         payload: json!({ "text": "survived" }),
         correlation_id: None,
@@ -95,4 +95,42 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
     assert!(created.created);
     assert!(!replayed.created);
     assert_eq!(created.message, replayed.message);
+
+    assert_blocking_works_after_migration(&store, &recipient.id, &created.message.id).await;
+}
+
+async fn assert_blocking_works_after_migration(
+    store: &fleetd::Store,
+    recipient_id: &str,
+    message_id: &str,
+) {
+    let batch = store
+        .claim_deliveries(
+            recipient_id,
+            ClaimDeliveries {
+                limit: 1,
+                lease_duration_ms: 10_000,
+            },
+        )
+        .await
+        .expect("claim delivery after migration");
+    let (blocked, was_created) = store
+        .block_delivery(
+            recipient_id,
+            message_id,
+            BlockDelivery {
+                lease_token: batch.lease_token,
+                reason: "migration smoke test".to_owned(),
+            },
+        )
+        .await
+        .expect("block delivery after migration");
+    assert!(was_created);
+    assert_eq!(
+        store
+            .list_blocked_deliveries(Some(recipient_id))
+            .await
+            .expect("list block after migration"),
+        vec![blocked]
+    );
 }

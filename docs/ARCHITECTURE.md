@@ -28,6 +28,13 @@ acknowledge or release them. WebSockets remain notification hints; the leased
 inbox is the work guarantee. See
 [ADR 0002](adr/0002-at-least-once-agent-inbox.md) for failure semantics.
 
+An active worker can durably park a delivery when an external outcome is
+ambiguous. Parked work never becomes claimable merely because its old lease
+expires; only an operator can requeue or abandon the exact block record. This
+keeps retry policy outside harness stop reasons while giving the future worker
+controller a conservative kernel primitive. See
+[ADR 0007](adr/0007-durable-blocked-deliveries.md).
+
 Agent-scoped idempotency keys make message publication safely retryable after a
 lost response. The original message and delivery snapshot are returned for an
 identical replay; conflicting key reuse fails closed. This lets a future worker

@@ -71,16 +71,40 @@ If processing fails, `inbox retry` releases the delivery with a delay and
 diagnostic message. If the worker disappears, the lease expires and another
 worker can claim the delivery with an incremented attempt count.
 
+If a worker cannot prove whether an external effect happened, it parks the
+delivery instead of blindly retrying it:
+
+```sh
+cargo run -- --token-file .fleetd/weaver.token inbox block \
+  --agent Weaver_ID --message MESSAGE_ID --lease LEASE_TOKEN \
+  --reason 'tool connection closed after request write'
+```
+
+Blocked work remains unclaimable after the lease expires. The operator can
+inspect it and make an explicit decision:
+
+```sh
+cargo run -- inbox blocked --agent Weaver_ID
+cargo run -- inbox resolve --block BLOCK_ID --resolution requeue \
+  --note 'verified that the side effect did not occur'
+```
+
+`--resolution abandon` permanently ends that delivery instead. Blocking and
+resolution are both safely replayable after a lost HTTP response; changing the
+evidence or decision on replay fails with `409 Conflict`.
+
 Every message also accepts a machine-readable JSON payload, a semantic `kind`,
 and optional correlation and causation IDs.
 
 ## Security boundary
 
 Every versioned API request requires an operator or agent-bound bearer
-credential. Administrative actions require the operator. Inbox operations are
-restricted to the credential's agent, and message attribution is constructed by
-the server rather than accepted from request data. Raw tokens are returned once
-and stored only in owner-readable files; SQLite contains cryptographic digests.
+credential. Administrative actions require the operator. Claim, acknowledge,
+retry, and block operations are restricted to the credential's agent; only the
+operator can inspect or resolve blocked work. Message attribution is
+constructed by the server rather than accepted from request data. Raw tokens
+are returned once and stored only in owner-readable files; SQLite contains
+cryptographic digests.
 
 The daemon still rejects non-loopback listen addresses. Authentication is not a
 substitute for encrypted transport, so remote workers remain unsupported until

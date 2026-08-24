@@ -22,6 +22,10 @@ processing acknowledges each delivery with the matching lease token. Failed
 processing releases it with a bounded retry delay and diagnostic text. An
 expired lease becomes claimable again and increments the attempt counter.
 
+Ambiguous external outcomes are handled by the separately specified durable
+blocked state rather than ordinary retry. See
+[ADR 0007](0007-durable-blocked-deliveries.md).
+
 The guarantee is at-least-once, not exactly-once. A crash between an external
 side effect and acknowledgement can repeat the effect. Adapters must use the
 stable message ID as their idempotency key wherever the target system permits.

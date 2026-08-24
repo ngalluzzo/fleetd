@@ -72,22 +72,52 @@ The worker settles each delivery by message ID:
 - `POST .../{message_id}/ack` records successful processing.
 - `POST .../{message_id}/retry` records failure evidence and makes the delivery
   eligible after a bounded delay.
+- `POST .../{message_id}/block` records ambiguity evidence and parks the
+  delivery for an explicit operator decision.
 
 Settlement requires the active lease token. Retrying the same settlement after
 a lost HTTP response is idempotent. An expired or superseded owner cannot settle
 the delivery. After expiry, another worker can claim it again.
 
+### Blocked delivery resolution
+
+Blocking is for an execution whose external outcome is unknown, not an ordinary
+transient failure. The agent-bound request supplies the active lease token and a
+non-empty reason of at most 4,096 bytes. The first request returns the durable
+block record with `201 Created`; an exact replay returns the same record with
+`200 OK`. Reusing that lease with different evidence returns `409 Conflict`.
+
+A blocked delivery is not claimable when its former lease expires. Only an
+operator may list unresolved records with `GET /v1/delivery-blocks` (optionally
+filtered by `?agent=...`) and resolve one with
+`POST /v1/delivery-blocks/{block_id}/resolve`:
+
+```json
+{
+  "resolution": "requeue",
+  "retry_after_ms": 1000,
+  "note": "verified that the side effect did not occur"
+}
+```
+
+`requeue` makes the same delivery eligible after a bounded delay; its next
+claim increments the existing attempt count. `abandon` moves it to a terminal,
+unclaimable state and requires a zero retry delay. The resolution record is
+durable. Repeating an identical decision is idempotent, while a different
+second decision returns `409 Conflict`.
+
 Delivery is at-least-once. The stable message ID is the idempotency key for
 external effects; fleetd does not claim exactly-once execution across another
-system's boundary.
+system's boundary. Blocking prevents a known ambiguity from being retried
+automatically; it cannot prove whether the external effect happened.
 
 ## Authentication and attribution
 
 Every `/v1` HTTP request and WebSocket upgrade requires the header
 `Authorization: Bearer <token>`. Health checks remain public. Operator
-credentials administer agents, credentials, channels, and membership. Agent
-credentials send messages, access member channels, and claim or settle only
-their own inbox.
+credentials administer agents, credentials, channels, membership, and blocked
+delivery resolution. Agent credentials send messages, access member channels,
+and claim or settle only their own inbox.
 
 The message-send body deliberately has no `sender_id` field. Unknown fields are
 rejected, and the server writes the authenticated agent ID into the immutable

@@ -401,10 +401,12 @@ The plugin may supply evidence and retry advice. It cannot authorize retry or
 result admission. Those are controller decisions bound to exact evidence and
 policy.
 
-The current delivery API has no explicit `blocked` settlement. Before running
-effectful unattended workloads, fleetd needs either a durable blocked state or
-a work-contract policy that retains the invocation without repeatedly
-executing an unknown outcome.
+The delivery API provides an explicit, durable `blocked` settlement. The active
+agent lease can park bounded ambiguity evidence, but only an operator can
+requeue or abandon the exact block record. This prevents automatic execution
+after lease expiry. A future controller still needs its invocation ledger to
+recover a crash that occurred before it recorded the block and to apply a
+versioned policy to the evidence.
 
 ## Budgets are claims with enforcement strength
 
@@ -573,13 +575,10 @@ these prerequisites:
 4. **Durable invocation reservation.** Inbox claim and invocation creation
    need one transaction in the embedded controller so a restart can distinguish
    unstarted work from an unrecorded attempt.
-5. **Unknown-outcome parking.** The current delivery states cannot explicitly
-   park an ambiguous effect for operator or policy review. Do not run
-   unattended effectful work until that state exists.
-6. **Effective instance evidence.** Persist the lifecycle instance ID,
+5. **Effective instance evidence.** Persist the lifecycle instance ID,
    profile digest, inner executable identity, observed ACP initialize result,
    and exit evidence together; desired config alone is insufficient.
-7. **Bounded artifact capture.** Inner ACP frames may exceed fleetd's one-MiB
+6. **Bounded artifact capture.** Inner ACP frames may exceed fleetd's one-MiB
    outer frame. Add a content-addressed evidence sink or emit an explicit
    truncated prefix, full-byte count, and digest. Oversized data must never be
    silently dropped or smuggled through larger lifecycle frames.
@@ -587,9 +586,12 @@ these prerequisites:
 These are reliability requirements for the first vertical loop, not a request
 to expand the messaging kernel with harness semantics.
 
-Agent-scoped idempotent message append is already implemented by
-[ADR 0006](adr/0006-idempotent-message-append.md); the controller can use a
-deterministic invocation-result key when it reaches the final commit boundary.
+Two required messaging foundations are already implemented: agent-scoped
+idempotent append in [ADR 0006](adr/0006-idempotent-message-append.md), and
+durable unknown-outcome parking in
+[ADR 0007](adr/0007-durable-blocked-deliveries.md). The controller can use a
+deterministic invocation-result key at the final commit boundary and park an
+ambiguous attempt without making it automatically claimable.
 
 ## First implementation acceptance matrix
 
@@ -603,7 +605,8 @@ both `codex-acp` and `dsh-acp`:
 4. reject a stale terminal event after owner epoch changes;
 5. cancel during tool activity, drain terminal updates, and prove quiescence;
 6. kill before prompt write and classify `not_started`;
-7. kill after prompt acceptance and classify `outcome_unknown`;
+7. kill after prompt acceptance, classify `outcome_unknown`, and park the
+   delivery for explicit resolution;
 8. enforce wall, idle, drain, and output bounds independently;
 9. append one deterministic result and acknowledge the delivery atomically,
    including restart immediately around commit;

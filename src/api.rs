@@ -17,8 +17,8 @@ use crate::{
     auth::{AuthService, Principal},
     error::FleetError,
     model::{
-        AckDelivery, AddMember, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
-        Message, RetryDelivery, SendMessage,
+        AckDelivery, AddMember, BlockDelivery, ClaimDeliveries, CreateAgent, CreateChannel,
+        CreateMessage, Message, ResolveDeliveryBlock, RetryDelivery, SendMessage,
     },
     store::Store,
 };
@@ -70,6 +70,15 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/agents/{agent_id}/deliveries/{message_id}/retry",
             post(retry_delivery),
+        )
+        .route(
+            "/v1/agents/{agent_id}/deliveries/{message_id}/block",
+            post(block_delivery),
+        )
+        .route("/v1/delivery-blocks", get(list_delivery_blocks))
+        .route(
+            "/v1/delivery-blocks/{block_id}/resolve",
+            post(resolve_delivery_block),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
     Router::new()
@@ -200,6 +209,55 @@ async fn retry_delivery(
         .store
         .retry_delivery(&agent_id, &message_id, input)
         .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn block_delivery(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path((agent_id, message_id)): Path<(String, String)>,
+    Json(input): Json<BlockDelivery>,
+) -> Result<(StatusCode, Json<crate::model::BlockedDelivery>), FleetError> {
+    require_bound_agent(&principal, &agent_id)?;
+    let (blocked, created) = state
+        .store
+        .block_delivery(&agent_id, &message_id, input)
+        .await?;
+    let status = if created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(blocked)))
+}
+
+#[derive(Deserialize)]
+struct DeliveryBlockQuery {
+    agent: Option<String>,
+}
+
+async fn list_delivery_blocks(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<DeliveryBlockQuery>,
+) -> Result<Json<Vec<crate::model::BlockedDelivery>>, FleetError> {
+    require_operator(&principal)?;
+    Ok(Json(
+        state
+            .store
+            .list_blocked_deliveries(query.agent.as_deref())
+            .await?,
+    ))
+}
+
+async fn resolve_delivery_block(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path(block_id): Path<i64>,
+    Json(input): Json<ResolveDeliveryBlock>,
+) -> Result<StatusCode, FleetError> {
+    require_operator(&principal)?;
+    state.store.resolve_delivery_block(block_id, input).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

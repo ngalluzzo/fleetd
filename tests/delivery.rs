@@ -1,5 +1,6 @@
 use fleetd::{
-    ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, FleetError, RetryDelivery, Store,
+    BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries, CreateAgent, CreateChannel,
+    CreateMessage, FleetError, ResolveDeliveryBlock, RetryDelivery, Store,
 };
 use serde_json::json;
 
@@ -209,5 +210,259 @@ async fn a_retry_is_delayed_and_preserves_failure_evidence() {
     assert_eq!(
         second.deliveries[0].last_error.as_deref(),
         Some("model server unavailable")
+    );
+}
+
+#[tokio::test]
+async fn a_blocked_delivery_stays_parked_until_an_operator_resolves_it() {
+    let (_directory, store, sender, receiver, channel) = fixture().await;
+    let message = send(
+        &store,
+        &channel.id,
+        &sender.id,
+        Some(receiver.id.clone()),
+        "do not execute twice",
+    )
+    .await;
+    let first = store
+        .claim_deliveries(&receiver.id, claim(1, 100))
+        .await
+        .expect("first claim");
+    let created = assert_block_replay(&store, &receiver.id, &message, first.lease_token).await;
+
+    tokio::time::sleep(std::time::Duration::from_millis(125)).await;
+    let still_parked = store
+        .claim_deliveries(&receiver.id, claim(1, 10_000))
+        .await
+        .expect("claim after former lease expired");
+    assert!(still_parked.deliveries.is_empty());
+    assert_eq!(
+        store
+            .list_blocked_deliveries(Some(&receiver.id))
+            .await
+            .expect("list blocked deliveries"),
+        vec![created.clone()]
+    );
+
+    let resolution = ResolveDeliveryBlock {
+        resolution: BlockResolution::Requeue,
+        retry_after_ms: 25,
+        note: Some("operator verified no side effect".to_owned()),
+    };
+    store
+        .resolve_delivery_block(created.block_id, resolution.clone())
+        .await
+        .expect("requeue block");
+    store
+        .resolve_delivery_block(created.block_id, resolution)
+        .await
+        .expect("resolution replay is idempotent");
+    let conflicting_resolution = store
+        .resolve_delivery_block(
+            created.block_id,
+            ResolveDeliveryBlock {
+                resolution: BlockResolution::Abandon,
+                retry_after_ms: 0,
+                note: Some("changed decision".to_owned()),
+            },
+        )
+        .await
+        .expect_err("changed resolution must conflict");
+    assert!(matches!(conflicting_resolution, FleetError::Conflict(_)));
+    assert!(
+        store
+            .list_blocked_deliveries(None)
+            .await
+            .expect("resolved block is absent")
+            .is_empty()
+    );
+
+    let too_early = store
+        .claim_deliveries(&receiver.id, claim(1, 10_000))
+        .await
+        .expect("claim before operator delay");
+    assert!(too_early.deliveries.is_empty());
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let second = store
+        .claim_deliveries(&receiver.id, claim(1, 10_000))
+        .await
+        .expect("claim requeued delivery");
+    assert_eq!(second.deliveries.len(), 1);
+    assert_eq!(second.deliveries[0].attempt, 2);
+    assert_eq!(
+        second.deliveries[0].last_error.as_deref(),
+        Some("operator verified no side effect")
+    );
+
+    assert_abandon(
+        &store,
+        &receiver.id,
+        &message.id,
+        second.lease_token,
+        created.block_id,
+    )
+    .await;
+}
+
+async fn assert_abandon(
+    store: &Store,
+    agent_id: &str,
+    message_id: &str,
+    lease_token: String,
+    previous_block_id: i64,
+) {
+    let (second_block, was_created) = store
+        .block_delivery(
+            agent_id,
+            message_id,
+            BlockDelivery {
+                lease_token,
+                reason: "second ambiguous attempt".to_owned(),
+            },
+        )
+        .await
+        .expect("block second attempt");
+    assert!(was_created);
+    assert_ne!(second_block.block_id, previous_block_id);
+    store
+        .resolve_delivery_block(
+            second_block.block_id,
+            ResolveDeliveryBlock {
+                resolution: BlockResolution::Abandon,
+                retry_after_ms: 0,
+                note: Some("side effect confirmed".to_owned()),
+            },
+        )
+        .await
+        .expect("abandon block");
+    let never_again = store
+        .claim_deliveries(agent_id, claim(1, 10_000))
+        .await
+        .expect("claim abandoned delivery");
+    assert!(never_again.deliveries.is_empty());
+}
+
+async fn assert_block_replay(
+    store: &Store,
+    agent_id: &str,
+    message: &fleetd::Message,
+    lease_token: String,
+) -> BlockedDelivery {
+    let block = BlockDelivery {
+        lease_token,
+        reason: "tool returned after its connection closed".to_owned(),
+    };
+    let (created, was_created) = store
+        .block_delivery(agent_id, &message.id, block.clone())
+        .await
+        .expect("block delivery");
+    assert!(was_created);
+    assert_eq!(created.attempt, 1);
+    assert_eq!(&created.message, message);
+
+    let (replayed, was_created) = store
+        .block_delivery(agent_id, &message.id, block.clone())
+        .await
+        .expect("replay block after a lost response");
+    assert!(!was_created);
+    assert_eq!(replayed, created);
+    let conflict = store
+        .block_delivery(
+            agent_id,
+            &message.id,
+            BlockDelivery {
+                lease_token: block.lease_token,
+                reason: "different evidence".to_owned(),
+            },
+        )
+        .await
+        .expect_err("changed replay must conflict");
+    assert!(matches!(conflict, FleetError::Conflict(_)));
+    created
+}
+
+#[tokio::test]
+async fn blocking_requires_the_current_unexpired_lease() {
+    let (_directory, store, sender, receiver, channel) = fixture().await;
+    let message = send(
+        &store,
+        &channel.id,
+        &sender.id,
+        Some(receiver.id.clone()),
+        "lease fenced",
+    )
+    .await;
+    let batch = store
+        .claim_deliveries(&receiver.id, claim(1, 25))
+        .await
+        .expect("claim delivery");
+    let foreign = store
+        .block_delivery(
+            &receiver.id,
+            &message.id,
+            BlockDelivery {
+                lease_token: "foreign-lease".to_owned(),
+                reason: "not the owner".to_owned(),
+            },
+        )
+        .await
+        .expect_err("foreign lease must fail");
+    assert!(matches!(foreign, FleetError::LeaseConflict(_)));
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let expired = store
+        .block_delivery(
+            &receiver.id,
+            &message.id,
+            BlockDelivery {
+                lease_token: batch.lease_token,
+                reason: "too late".to_owned(),
+            },
+        )
+        .await
+        .expect_err("expired lease must fail");
+    assert!(matches!(expired, FleetError::LeaseConflict(_)));
+}
+
+#[tokio::test]
+async fn concurrent_block_retries_create_one_evidence_record() {
+    let (_directory, store, sender, receiver, channel) = fixture().await;
+    let message = send(
+        &store,
+        &channel.id,
+        &sender.id,
+        Some(receiver.id.clone()),
+        "concurrent block",
+    )
+    .await;
+    let batch = store
+        .claim_deliveries(&receiver.id, claim(1, 10_000))
+        .await
+        .expect("claim delivery");
+    let input = BlockDelivery {
+        lease_token: batch.lease_token,
+        reason: "worker lost the response".to_owned(),
+    };
+    let first_store = store.clone();
+    let second_store = store.clone();
+    let first_agent = receiver.id.clone();
+    let second_agent = receiver.id.clone();
+    let first_message = message.id.clone();
+    let second_message = message.id.clone();
+    let second_input = input.clone();
+    let (first, second) = tokio::join!(
+        first_store.block_delivery(&first_agent, &first_message, input),
+        second_store.block_delivery(&second_agent, &second_message, second_input),
+    );
+    let first = first.expect("first block");
+    let second = second.expect("second block");
+    assert_eq!(u8::from(first.1) + u8::from(second.1), 1);
+    assert_eq!(first.0, second.0);
+    assert_eq!(
+        store
+            .list_blocked_deliveries(None)
+            .await
+            .expect("list blocks"),
+        vec![first.0]
     );
 }

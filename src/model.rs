@@ -178,6 +178,41 @@ pub struct RetryDelivery {
     pub error: Option<String>,
 }
 
+/// Input for parking an ambiguously executed delivery under its active lease.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BlockDelivery {
+    pub lease_token: String,
+    pub reason: String,
+}
+
+/// One unresolved blocked delivery and its immutable source message.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct BlockedDelivery {
+    pub block_id: i64,
+    pub agent_id: String,
+    pub message: Message,
+    pub attempt: i64,
+    pub reason: String,
+    pub blocked_at_ms: i64,
+}
+
+/// Operator decision for a blocked delivery.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockResolution {
+    Requeue,
+    Abandon,
+}
+
+/// Input for resolving one exact blocked-delivery record.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ResolveDeliveryBlock {
+    pub resolution: BlockResolution,
+    #[serde(default)]
+    pub retry_after_ms: u64,
+    pub note: Option<String>,
+}
+
 fn empty_object() -> Value {
     json!({})
 }
