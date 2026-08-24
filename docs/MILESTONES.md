@@ -33,8 +33,8 @@
   into a content-addressed candidate or explicit unable result.
 - [x] Implement the first real independently identified conformance provider
   and a GOOIR-derived blocked-delivery web artifact.
-- Return the exact durable candidate through conformance and re-plan the GOOIR
-  graph with its admitted fact.
+- [x] Return the exact durable candidate through conformance and re-plan the
+  GOOIR graph with its admitted fact.
 - Versioned task, progress, result, review, and approval contracts.
 - Dependency scheduling expressed outside the messaging kernel.
 - A complete author-reviewer loop exercised on fleetd itself.

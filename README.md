@@ -255,6 +255,9 @@ See the [capability work contract](docs/contracts/capability-work-v1.md) and
 [ADR 0012](docs/adr/0012-capability-needs-become-durable-work.md) plus
 [ADR 0013](docs/adr/0013-raw-attempts-lift-to-unverified-candidates.md) and
 [ADR 0014](docs/adr/0014-gooir-derived-operator-surface.md).
+The complete first qualification, including rejected attempts, exact evidence
+identities, admission, re-planning, and browser validation, is recorded in
+[the runnable-web qualification](docs/qualification/gooir-runnable-web-2026-08-24.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [API contract](docs/API_CONTRACT.md), [protocol](docs/PROTOCOL.md), and
