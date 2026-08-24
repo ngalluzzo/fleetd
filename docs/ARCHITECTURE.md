@@ -79,18 +79,26 @@ storage or authority. See
 [ADR 0004](adr/0004-out-of-process-capability-plugins.md) and the
 [lifecycle v1 contract](contracts/plugin-lifecycle-v1.md).
 
-## Next boundary
+## Harness boundary
 
-The next layer implements one generic ACP driver plugin and qualifies it
-against Codex and DSH. ACP remains the inner harness protocol; a narrow fleetd
-capability adds durable invocation identity, session fencing, deadlines, and
-evidence without exposing a generic protocol tunnel. An authenticated worker
-controller reserves addressed messages, arms the write-ahead dispatch fence,
-invokes that capability, posts
-idempotent correlated responses, and settles the lease. Invocation, resumption,
-retry policy, and restart policy remain outside the messaging kernel. See the
-[harness execution architecture](HARNESS_EXECUTION.md) and
-[ADR 0005](adr/0005-acp-harness-boundary.md).
+The experimental harness layer implements one generic ACP v1 driver plugin and
+a typed host client. ACP remains the inner harness protocol; a narrow fleetd
+capability adds invocation identity, session fencing, deadlines, and evidence
+without exposing a generic protocol tunnel. The supervisor owns the driver and
+its ACP runtime as one process group.
+
+A one-turn managed controller now composes an existing reservation and durable
+session reference with write-ahead dispatch arming, typed prompt drain,
+conservative ambiguity parking, and atomic correlated-result completion. It is
+not yet a continuous worker: durable session bindings and owner epochs,
+persisted invocation events, runtime-generation records, and inbox scheduling
+remain the next controller boundary. Codex has passed one real end-to-end turn;
+DSH has passed initialization but still requires an approved credential path
+for session and turn qualification. Invocation, resumption, retry policy, and
+restart policy remain outside the messaging kernel. See the
+[harness execution architecture](HARNESS_EXECUTION.md),
+[ADR 0005](adr/0005-acp-harness-boundary.md), and the
+[qualification record](qualification/acp-driver-2026-08-24.md).
 
 ## Identity boundary
 

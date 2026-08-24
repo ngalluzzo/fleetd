@@ -46,6 +46,11 @@ if [ "$mode" = 'plugin-request' ]; then
 else
   printf '%s\n' '{"jsonrpc":"2.0","method":"mock.ready","params":{"ready":true}}'
 fi
+if [ "$mode" = 'descendant' ] || [ "$mode" = 'orphan-descendant' ]; then
+  /bin/sleep 30 &
+  descendant_pid=$!
+  printf '{"jsonrpc":"2.0","method":"mock.descendant","params":{"pid":%s}}\n' "$descendant_pid"
+fi
 
 request_id=2
 while IFS= read -r request; do
@@ -57,6 +62,10 @@ while IFS= read -r request; do
         printf '{"jsonrpc":"2.0","id":%s,"result":{"status":"ok"}}\n' "$request_id"
       fi
       if [ "$mode" = 'crash-after-health' ]; then
+        exit 17
+      fi
+      if [ "$mode" = 'orphan-descendant' ]; then
+        printf '%s\n' '{"jsonrpc":"2.0","method":"mock.outer_exiting","params":{}}'
         exit 17
       fi
       ;;

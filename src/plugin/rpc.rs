@@ -140,6 +140,20 @@ impl RpcPeer {
         self.notifications.try_recv().ok()
     }
 
+    pub(crate) async fn next_notification(&mut self) -> Result<PluginNotification, PluginError> {
+        if let Some(notification) = self.notifications.recv().await {
+            return Ok(notification);
+        }
+        let failure = self
+            .state
+            .lock()
+            .await
+            .failure
+            .clone()
+            .unwrap_or_else(|| "plugin notification stream closed".to_owned());
+        Err(PluginError::Protocol(failure))
+    }
+
     async fn write_frame(&self, frame: &[u8]) -> Result<(), PluginError> {
         let mut writer = self.writer.lock().await;
         writer.write_all(frame).await?;
@@ -160,7 +174,7 @@ enum ReplyError {
     Remote {
         code: i64,
         message: String,
-        data: Option<Value>,
+        data: Option<Box<Value>>,
     },
     Protocol(String),
 }
@@ -254,7 +268,7 @@ fn parse_remote_error(value: &Value) -> Result<ReplyError, String> {
     Ok(ReplyError::Remote {
         code,
         message: message.to_owned(),
-        data: object.get("data").cloned(),
+        data: object.get("data").cloned().map(Box::new),
     })
 }
 

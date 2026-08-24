@@ -55,11 +55,11 @@ Result:
 {
   "driver": {
     "version": "0.1.0",
-    "acp_sdk_version": "1.4.0",
+    "acp_sdk_version": "2.0.0",
     "acp_protocol_version": 1
   },
   "runtime": {
-    "name": "deepseek-harness-acp",
+    "name": "dsh-acp",
     "version": "0.4.22",
     "executable_digest": "sha256:..."
   },

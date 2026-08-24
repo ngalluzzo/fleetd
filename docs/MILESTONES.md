@@ -15,9 +15,13 @@
   idempotent result append.
 - [x] Atomic delivery reservation and write-ahead invocation dispatch fence.
 - [x] Atomic idempotent result publication and input acknowledgement.
-- One generic ACP driver qualified against Codex and DSH.
-- A managed worker controller that consumes addressed messages and replies
-  with correlation and causation intact.
+- [ ] One generic ACP driver qualified against Codex and DSH. The typed driver
+  and real Codex turn pass; DSH initialization passes but session creation is
+  blocked on an approved credential path.
+- [ ] A managed worker controller that consumes addressed messages and replies
+  with correlation and causation intact. The one-turn reserve-to-complete
+  control flow passes; continuous inbox scheduling and durable session binding
+  are pending.
 - [x] Delivery leases, acknowledgement, retry, and restart resumption.
 - [x] Durable unknown-outcome parking with operator-only resolution.
 

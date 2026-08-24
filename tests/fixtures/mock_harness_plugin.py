@@ -1,0 +1,163 @@
+import json
+import sys
+
+
+mode = sys.argv[1] if len(sys.argv) > 1 else "healthy"
+
+
+def send(payload):
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+
+
+def result(request, payload):
+    send({"jsonrpc": "2.0", "id": request["id"], "result": payload})
+
+
+initialize = json.loads(sys.stdin.readline())
+result(
+    initialize,
+    {
+        "protocol_version": 1,
+        "plugin": {
+            "id": "mock.harness",
+            "name": "Mock ACP harness",
+            "version": "0.1.0",
+        },
+        "capabilities": [{"name": "harness.acp", "version": 1}],
+    },
+)
+
+if mode == "overflow":
+    for sequence in range(300):
+        send(
+            {
+                "jsonrpc": "2.0",
+                "method": "mock.overflow",
+                "params": {"sequence": sequence},
+            }
+        )
+
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request["method"]
+    params = request.get("params", {})
+    if method == "fleetd.health":
+        result(request, {"status": "ok"})
+    elif method == "harness.acp.describe":
+        result(
+            request,
+            {
+                "driver": {
+                    "version": "0.1.0",
+                    "acp_sdk_version": "2.0.0",
+                    "acp_protocol_version": 1,
+                },
+                "runtime": {
+                    "name": "mock-acp",
+                    "version": "1.0.0",
+                    "executable_digest": "sha256:mock",
+                },
+                "agent_capabilities": {"loadSession": True},
+                "limits": {
+                    "max_concurrent_turns": 1,
+                    "max_frame_bytes": 1048576,
+                },
+                "profile_digest": "sha256:profile",
+                "raw_initialize_result": {"extension": "preserved"},
+            },
+        )
+    elif method == "harness.acp.session.open":
+        resumed = params["mode"]["kind"] == "resume"
+        session_ref = params["mode"].get("session_ref", "mock-session")
+        result(
+            request,
+            {
+                "session_ref": session_ref,
+                "profile_digest": params["profile_digest"],
+                "resumed": resumed,
+                "effective_config": {},
+                "raw_session_result": {"extension": "preserved"},
+            },
+        )
+    elif method == "harness.acp.turn.start":
+        wall_enforcement = "soft" if mode == "weak-enforcement" else "hard"
+        result(
+            request,
+            {
+                "accepted": True,
+                "effective_enforcement": {
+                    "wall_timeout": wall_enforcement,
+                    "idle_timeout": "hard",
+                    "cancel_drain_timeout": "hard",
+                    "captured_output_bytes": "hard",
+                    "tool_budget": "observe_then_cancel",
+                    "token_budget": "unavailable",
+                },
+            },
+        )
+        fence = dict(params["fence"])
+        if mode == "wrong-fence":
+            fence["owner_epoch"] += 1
+        send(
+            {
+                "jsonrpc": "2.0",
+                "method": "harness.acp.turn.event",
+                "params": {
+                    "fence": fence,
+                    "event_seq": 1,
+                    "observed_at_ms": 1,
+                    "classification": "agent_message_content",
+                    "raw_update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": "done"},
+                        "unknownExtension": {"preserved": True},
+                    },
+                },
+            }
+        )
+        send(
+            {
+                "jsonrpc": "2.0",
+                "method": "harness.acp.turn.terminal",
+                "params": {
+                    "fence": fence,
+                    "last_event_seq": 1,
+                    "stop_reason": "end_turn",
+                    "execution_certainty": "outcome_known",
+                    "session_quiescent": True,
+                    "session_persistence": "runtime_claimed",
+                    "assistant_messages": [
+                        {
+                            "message_id": None,
+                            "content": [{"type": "text", "text": "done"}],
+                            "complete": True,
+                            "first_event_seq": 1,
+                            "last_event_seq": 1,
+                        }
+                    ],
+                    "usage": {},
+                    "raw_prompt_response": {"stopReason": "end_turn"},
+                },
+            }
+        )
+    elif method == "harness.acp.turn.cancel":
+        result(request, {"accepted": True})
+    elif method == "harness.acp.permission.resolve":
+        result(request, {"accepted": True})
+    elif method == "harness.acp.session.close":
+        result(
+            request,
+            {"ownership_retired": True, "native_resources_released": False},
+        )
+    elif method == "fleetd.shutdown":
+        result(request, {"accepted": True})
+        sys.exit(0)
+    else:
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "error": {"code": -32601, "message": "method not found"},
+            }
+        )

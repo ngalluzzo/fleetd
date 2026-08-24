@@ -156,17 +156,26 @@ Harnesses and other domain behavior run outside the daemon as child-process
 plugins. fleetd provides a small, versioned lifecycle over newline-framed
 JSON-RPC: initialize, negotiate exact capabilities, check readiness, and shut
 down within a deadline. It launches absolute executables directly with an empty
-environment and does not give plugins fleetd credentials.
+environment, owns their complete process group, and does not give plugins
+fleetd credentials.
 
-This is the isolation and negotiation foundation, not a generic `execute`
-contract or an automatic restart manager. One generic ACP driver will be
-qualified against Codex and DSH; fleetd adds only durable invocation, fencing,
-deadline, and evidence semantics around the standard harness protocol. See
+The workspace now includes an experimental typed `harness.acp` host client, a
+generic ACP v1 driver built on the official Rust SDK, and a one-turn controller
+that composes reservation, write-ahead arming, prompt drain, atomic completion,
+and conservative unknown-outcome parking. The underlying JSON-RPC call surface
+remains private; this is not a generic `execute` contract.
+
+The driver has completed a real Codex turn. DSH initialization and identity
+verification pass, but local session qualification is currently blocked by an
+unconfigured DSH credential, so the capability remains experimental. Durable
+session bindings, persisted event evidence, and the continuous inbox worker are
+the next boundary. See
 [the harness execution architecture](docs/HARNESS_EXECUTION.md),
 [ADR 0004](docs/adr/0004-out-of-process-capability-plugins.md),
 [ADR 0005](docs/adr/0005-acp-harness-boundary.md),
-[ADR 0008](docs/adr/0008-write-ahead-invocation-fence.md), and the
-[lifecycle v1 contract](docs/contracts/plugin-lifecycle-v1.md).
+[ADR 0008](docs/adr/0008-write-ahead-invocation-fence.md),
+[ADR 0009](docs/adr/0009-typed-acp-driver-and-process-ownership.md), and the
+[qualification record](docs/qualification/acp-driver-2026-08-24.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [protocol](docs/PROTOCOL.md), and [milestones](docs/MILESTONES.md) for the

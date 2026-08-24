@@ -5,6 +5,10 @@ edition = "2024"
 description = "A local-first control plane for cooperating software agents"
 license = "MIT"
 
+[workspace]
+members = [".", "plugins/acp-driver"]
+resolver = "2"
+
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
@@ -25,6 +29,9 @@ tokio-util = { version = "0.7", features = ["codec"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30", features = ["signal"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

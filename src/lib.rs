@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod controller;
 mod delivery;
 pub mod error;
 mod invocation;
@@ -11,6 +12,7 @@ pub mod store;
 
 pub use api::{AppState, router};
 pub use auth::{AuthService, OperatorBootstrap, Principal};
+pub use controller::{ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnOutcome};
 pub use error::FleetError;
 pub use model::{
     AckDelivery, AddMember, Agent, ArmInvocation, BlockDelivery, BlockResolution, BlockedDelivery,
@@ -20,7 +22,13 @@ pub use model::{
     RetryDelivery, SendMessage,
 };
 pub use plugin::{
-    Capability, PluginError, PluginExit, PluginIdentity, PluginManifest, PluginNotification,
-    PluginProcess, PluginSpec, ShutdownOutcome,
+    AcceptedResult, AssistantMessage, Binding, CancelTurn, Capability, CloseSession,
+    CloseSessionResult, DescribeResult, DriverIdentity, EffectiveEnforcement, ExecutionFence,
+    HarnessAcpClient, HarnessAcpNotification, HarnessExecutionCertainty, HarnessLimits,
+    OpenSession, OpenSessionMode, OpenSessionResult, PermissionOutcome, PermissionRequested,
+    PermissionResolution, PluginError, PluginExit, PluginIdentity, PluginManifest,
+    PluginNotification, PluginProcess, PluginSpec, PromptBlock, RuntimeIdentity,
+    SessionPersistence, ShutdownOutcome, StartTurn, StartTurnResult, ToolBudget, TurnEvent,
+    TurnPolicy, TurnSource, TurnTerminal, harness_acp_capability,
 };
 pub use store::{AppendMessageResult, Store};

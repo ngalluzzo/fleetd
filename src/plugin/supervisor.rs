@@ -41,7 +41,7 @@ pub enum PluginError {
         method: String,
         code: i64,
         message: String,
-        data: Option<Value>,
+        data: Option<Box<Value>>,
     },
     #[error("plugin exited unexpectedly with code {code:?}")]
     Exited { code: Option<i32> },
@@ -194,6 +194,7 @@ pub enum ShutdownOutcome {
 pub struct PluginProcess {
     manifest: PluginManifest,
     child: Child,
+    process_group: Option<i32>,
     rpc: RpcPeer,
     request_timeout: Duration,
     shutdown_timeout: Duration,
@@ -219,7 +220,13 @@ impl PluginProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        #[cfg(unix)]
+        command.process_group(0);
         let mut child = command.spawn()?;
+        #[cfg(unix)]
+        let process_group = child.id().and_then(|id| i32::try_from(id).ok());
+        #[cfg(not(unix))]
+        let process_group = None;
         let stdin = child
             .stdin
             .take()
@@ -233,13 +240,14 @@ impl PluginProcess {
         let manifest = match result {
             Ok(manifest) => manifest,
             Err(error) => {
-                let _unused = terminate(&mut child).await;
+                let _unused = terminate(&mut child, process_group).await;
                 return Err(error);
             }
         };
         Ok(Self {
             manifest,
             child,
+            process_group,
             rpc,
             request_timeout: spec.request_timeout,
             shutdown_timeout: spec.shutdown_timeout,
@@ -266,6 +274,7 @@ impl PluginProcess {
     /// protocol, or reports a status other than `ok`.
     pub async fn health(&mut self) -> Result<(), PluginError> {
         if let Some(status) = self.child.try_wait()? {
+            kill_plugin_group(self.process_group);
             return Err(PluginError::Exited {
                 code: status.code(),
             });
@@ -278,13 +287,40 @@ impl PluginProcess {
         self.rpc.try_notification()
     }
 
+    /// Converts this process into the typed experimental ACP harness client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the process did not negotiate `harness.acp` v1.
+    pub fn into_harness_acp(self) -> Result<super::HarnessAcpClient, PluginError> {
+        super::HarnessAcpClient::new(self)
+    }
+
+    pub(crate) async fn capability_call<P, R>(
+        &self,
+        method: &str,
+        params: &P,
+    ) -> Result<R, PluginError>
+    where
+        P: serde::Serialize + ?Sized,
+        R: serde::de::DeserializeOwned,
+    {
+        self.rpc.call(method, params, self.request_timeout).await
+    }
+
+    pub(crate) async fn next_notification(&mut self) -> Result<PluginNotification, PluginError> {
+        self.rpc.next_notification().await
+    }
+
     /// Waits for an unsolicited process exit and returns its evidence.
     ///
     /// # Errors
     ///
     /// Returns an error if waiting on the child process fails.
     pub async fn wait_for_exit(&mut self) -> Result<PluginExit, PluginError> {
-        Ok(exit_evidence(self.child.wait().await?))
+        let status = self.child.wait().await?;
+        kill_plugin_group(self.process_group);
+        Ok(exit_evidence(status))
     }
 
     /// Requests graceful shutdown, then forcibly kills an overrun process.
@@ -301,19 +337,31 @@ impl PluginProcess {
         match result {
             Ok(result) if result.accepted => {}
             Ok(_) => {
-                let _unused = terminate(&mut self.child).await;
+                let _unused = terminate(&mut self.child, self.process_group).await;
                 return Err(PluginError::ShutdownRejected);
             }
             Err(error) => {
-                let _unused = terminate(&mut self.child).await;
+                let _unused = terminate(&mut self.child, self.process_group).await;
                 return Err(error);
             }
         }
         if let Ok(status) = tokio::time::timeout(self.shutdown_timeout, self.child.wait()).await {
-            Ok(ShutdownOutcome::Graceful(exit_evidence(status?)))
+            let status = status?;
+            kill_plugin_group(self.process_group);
+            Ok(ShutdownOutcome::Graceful(exit_evidence(status)))
         } else {
-            let status = terminate(&mut self.child).await?;
+            let status = terminate(&mut self.child, self.process_group).await?;
             Ok(ShutdownOutcome::Forced(exit_evidence(status)))
+        }
+    }
+}
+
+impl Drop for PluginProcess {
+    fn drop(&mut self) {
+        let child_is_running = self.child.try_wait().ok().flatten().is_none();
+        kill_plugin_group(self.process_group);
+        if child_is_running {
+            let _unused = self.child.start_kill();
         }
     }
 }
@@ -342,12 +390,29 @@ async fn check_health(rpc: &RpcPeer, timeout: Duration) -> Result<(), PluginErro
     Ok(())
 }
 
-async fn terminate(child: &mut Child) -> Result<std::process::ExitStatus, std::io::Error> {
+async fn terminate(
+    child: &mut Child,
+    process_group: Option<i32>,
+) -> Result<std::process::ExitStatus, std::io::Error> {
     if let Some(status) = child.try_wait()? {
+        kill_plugin_group(process_group);
         return Ok(status);
     }
-    child.start_kill()?;
+    kill_plugin_group(process_group);
+    let _unused = child.start_kill();
     child.wait().await
+}
+
+fn kill_plugin_group(process_group: Option<i32>) {
+    #[cfg(unix)]
+    if let Some(process_group) = process_group {
+        let _unused = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(process_group),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+    #[cfg(not(unix))]
+    let _unused = process_group;
 }
 
 fn exit_evidence(status: std::process::ExitStatus) -> PluginExit {

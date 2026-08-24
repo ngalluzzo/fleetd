@@ -136,6 +136,67 @@ async fn unexpected_exit_and_shutdown_overrun_produce_evidence() {
 }
 
 #[tokio::test]
+async fn dropping_plugin_kills_its_descendant_process_group() {
+    let mut plugin = PluginProcess::start(fixture_spec("descendant"))
+        .await
+        .expect("start plugin with descendant");
+    let ready = plugin.try_notification().expect("ready notification");
+    assert_eq!(ready.method, "mock.ready");
+    let descendant = plugin
+        .try_notification()
+        .expect("descendant PID notification");
+    let descendant_pid = descendant.params["pid"]
+        .as_i64()
+        .and_then(|pid| i32::try_from(pid).ok())
+        .expect("valid descendant PID");
+    assert!(process_exists(descendant_pid));
+
+    drop(plugin);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while process_exists(descendant_pid) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!process_exists(descendant_pid));
+}
+
+#[tokio::test]
+async fn dropping_exited_plugin_still_kills_its_surviving_descendant() {
+    let mut plugin = PluginProcess::start(fixture_spec("orphan-descendant"))
+        .await
+        .expect("start exiting plugin with descendant");
+    let ready = plugin.try_notification().expect("ready notification");
+    assert_eq!(ready.method, "mock.ready");
+    let descendant = plugin
+        .try_notification()
+        .expect("descendant PID notification");
+    let descendant_pid = descendant.params["pid"]
+        .as_i64()
+        .and_then(|pid| i32::try_from(pid).ok())
+        .expect("valid descendant PID");
+    let notification_deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    let exiting = loop {
+        if let Some(notification) = plugin.try_notification() {
+            break notification;
+        }
+        assert!(
+            tokio::time::Instant::now() < notification_deadline,
+            "outer exit notification timed out"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    assert_eq!(exiting.method, "mock.outer_exiting");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(process_exists(descendant_pid));
+
+    drop(plugin);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while process_exists(descendant_pid) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!process_exists(descendant_pid));
+}
+
+#[tokio::test]
 async fn plugin_executables_must_be_absolute() {
     let error = start_error(
         PluginSpec::new("mock.plugin", "relative-plugin"),
@@ -150,4 +211,8 @@ async fn plugin_executables_must_be_absolute() {
     )
     .await;
     assert!(matches!(identifier, PluginError::InvalidSpec(_)));
+}
+
+fn process_exists(pid: i32) -> bool {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok()
 }

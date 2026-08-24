@@ -11,7 +11,7 @@ cancellation protocol would duplicate a mature boundary and make each harness
 integration bespoke.
 
 Buzz already operates multiple harnesses through the Agent Client Protocol
-(ACP). The local DSH qualification demonstrated ACP v1 session creation,
+(ACP). The preceding standalone DSH study demonstrated ACP v1 session creation,
 streaming, tools, cancellation, and persistent-session continuation with
 `@deepseek-ai/dsh` `0.1.1-rc.2`,
 `@openma/deepseek-harness-acp` `0.4.22`, and
@@ -23,10 +23,10 @@ in-memory ACP bridge even though the bridge itself is not persistent.
 
 ## Decision
 
-ACP v1 is the inner harness interoperability protocol. fleetd will build one
-generic ACP driver plugin and qualify it against both `codex-acp` and
-`dsh-acp`. Harness-specific shims are added only for observed incompatibilities
-or optional capabilities.
+ACP v1 is the inner harness interoperability protocol. fleetd builds one
+generic ACP driver plugin and qualifies that same implementation against both
+`codex-acp` and `dsh-acp`. Harness-specific shims are added only for observed
+incompatibilities or optional capabilities.
 
 The outer boundary remains fleetd's plugin lifecycle plus a narrow,
 independently versioned `harness.acp` capability. That capability adds only the

@@ -8,8 +8,8 @@ Before submitting a change, run:
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets --all-features
 ```
 
 Each behavioral change should include a test at the narrowest stable boundary.

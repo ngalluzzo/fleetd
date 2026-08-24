@@ -1,7 +1,8 @@
 # Harness execution architecture
 
-Status: design baseline for M1; the capability contract remains a draft until
-it passes the Codex and DSH qualification matrix.
+Status: implementation baseline for M1. The typed host, generic driver, and
+one-turn controller exist; the capability contract remains a draft until it
+passes the complete Codex and DSH qualification matrix.
 
 This document defines the layer between fleetd's durable agent inbox and an
 agent harness. It deliberately does not add harness concepts to the messaging
@@ -538,7 +539,8 @@ driver digest
 ```
 
 Qualification records observed capability responses rather than trusting CLI
-flags or marketing claims. This matters for the currently qualified DSH stack:
+flags or marketing claims. The architecture study identified this exact local
+DSH stack, which is not yet fully fleetd-qualified:
 
 - `@deepseek-ai/dsh` `0.1.1-rc.2`;
 - `@openma/deepseek-harness-acp` `0.4.22`;
@@ -547,9 +549,9 @@ flags or marketing claims. This matters for the currently qualified DSH stack:
 - the LLM session-title plugin destroying prompt-cache reuse for the tested
   local route.
 
-The qualified local DSH profile therefore includes its composition overlay and
-disables only the LLM title plugin. That is a profile fact, not a universal DSH
-rule.
+The candidate local DSH profile therefore includes its composition overlay and
+disables only the LLM title plugin. That is a profile hypothesis to verify, not
+a universal DSH rule or a completed fleetd qualification.
 
 Hot replacement is generation-based:
 
@@ -569,31 +571,38 @@ and qualification. Existing sessions either drain on the old generation or are
 exclusively adopted by a resume-compatible generation with an incremented
 owner epoch.
 
-## Gaps in the current foundation
+## Current implementation and remaining gaps
 
-The existing lifecycle code is a sound L0 boundary, but the architecture above
-must not be mistaken for code that already exists. The next implementation has
-these prerequisites:
+The first vertical slice now implements:
 
-1. **Descendant cleanup.** The current supervisor kills its direct plugin
-   child. An ACP driver creates another process, so the supervisor and driver
-   need a process-group/job-object ownership rule that reaps the complete
-   descendant tree on startup failure, forced shutdown, and drop.
-2. **Typed domain calls.** `PluginProcess` currently exposes lifecycle methods
-   and opaque notifications only. Add a `HarnessAcpClient` that owns the draft
-   methods without making the underlying generic JSON-RPC call public.
-3. **Continuous evidence draining.** The current 256-entry notification buffer
-   fails closed when exhausted and exposes only non-blocking polling. Add a
-   continuously driven receiver with explicit backpressure. The ACP driver
-   should coalesce token fragments into bounded ordered batches; it must not
-   emit one fleet event per decoded token.
-4. **Effective instance evidence.** Persist the lifecycle instance ID,
-   profile digest, inner executable identity, observed ACP initialize result,
-   and exit evidence together; desired config alone is insufficient.
-5. **Bounded artifact capture.** Inner ACP frames may exceed fleetd's one-MiB
-   outer frame. Add a content-addressed evidence sink or emit an explicit
-   truncated prefix, full-byte count, and digest. Oversized data must never be
-   silently dropped or smuggled through larger lifecycle frames.
+1. **Descendant cleanup.** The supervisor launches a plugin into a dedicated
+   process group, and startup failure, forced shutdown, observed exit, and drop
+   kill that complete group. The driver joins its ACP adapter to the same group
+   without a shell. A lifecycle test proves a descendant is reaped on drop.
+2. **Typed domain calls.** `HarnessAcpClient` owns the draft calls and validates
+   session bounds, exact fences, and contiguous event sequences. The underlying
+   generic JSON-RPC call remains crate-private.
+3. **Explicit backpressure.** The host provides a blocking notification drain;
+   buffer overflow becomes a protocol failure rather than deadlock or silent
+   loss. The driver emits bounded ordered updates. Persistent event storage and
+   safe fragment coalescing remain pending.
+4. **Observed instance evidence.** `describe` reports the profile digest,
+   adapter digest, exact runtime identity, ACP SDK/protocol version, effective
+   capabilities, and bounded raw initialize response. Persisting those facts
+   with lifecycle generation and exit evidence remains pending.
+5. **Bounded capture.** Frames are capped at one MiB and turn capture at 512
+   KiB. Oversized JSON becomes an explicit byte-count and SHA-256 truncation
+   record. A content-addressed artifact sink remains pending.
+6. **Managed settlement.** The one-turn controller arms before prompt dispatch,
+   independently enforces the wall deadline, denies permission requests by
+   default, atomically completes known quiescent output, and parks every
+   post-arm protocol ambiguity.
+
+The controller deliberately requires an already-reserved invocation and an
+already-opened session whose opaque reference the caller has durably recorded.
+Durable session-binding and owner-epoch migrations, invocation-event storage,
+runtime generation adoption, a capability broker, and a continuous inbox loop
+are not implemented yet.
 
 These are reliability requirements for the first vertical loop, not a request
 to expand the messaging kernel with harness semantics.
@@ -634,6 +643,12 @@ The first useful closed loop is one addressed message, one leased invocation,
 one ACP session, one correlated result, and one acknowledgement. Workflow,
 review, Git, and multi-agent planning remain later contracts built on that
 loop.
+
+The 2026-08-24 checkpoint has a full mock loop and a real Codex session/turn.
+DSH initialization and exact identity capture pass, while session creation is
+blocked by the local DSH runtime's authentication requirement. See the
+[qualification record](qualification/acp-driver-2026-08-24.md). This partial
+result does not stabilize the capability or satisfy the matrix above.
 
 ## Deliberate exclusions
 

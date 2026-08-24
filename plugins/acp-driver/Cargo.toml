@@ -1,0 +1,28 @@
+[package]
+name = "fleetd-acp-driver"
+version = "0.1.0"
+edition = "2024"
+description = "Typed fleetd harness driver for Agent Client Protocol v1 agents"
+license = "MIT"
+
+[dependencies]
+agent-client-protocol = "=2.0.0"
+fleetd = { path = "../.." }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30", features = ["process"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
