@@ -113,6 +113,22 @@ restart policy remain outside the messaging kernel. See the
 [ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md), and the
 [OpenCode plugin qualification](qualification/opencode-plugin-2026-08-24.md).
 
+## Capability work boundary
+
+A GOOIR capability need becomes executable only after it is bound to exact
+input fact instances. fleetd carries that provider-neutral request as
+`work.capability.request/v1`; the messaging kernel preserves it as opaque JSON.
+The authenticated sender supplies request authority, the explicit recipient is
+the first assignment policy, the invocation binds the exact message, and the
+session turn durably records binding generation and owner epoch.
+
+A capability-work adapter admits an exact configured capability set and uses a
+session lane keyed by the request's RFC 8785/SHA-256 identity. Harness ACP is
+only the current execution protocol. The first response is an attempt record,
+not accepted output or conformance proof. See
+[ADR 0012](adr/0012-capability-needs-become-durable-work.md) and the
+[capability work v1 contract](contracts/capability-work-v1.md).
+
 ## Identity boundary
 
 The local operator token file is authoritative for node administration and is

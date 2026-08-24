@@ -27,6 +27,8 @@
 
 ## M2 — Work contracts
 
+- [x] Bind a GOOIR capability need to exact facts and carry it through one
+  durable, owner-fenced provider attempt.
 - Versioned task, progress, result, review, and approval contracts.
 - Dependency scheduling expressed outside the messaging kernel.
 - A complete author-reviewer loop exercised on fleetd itself.

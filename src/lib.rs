@@ -10,6 +10,7 @@ pub mod model;
 pub mod plugin;
 pub mod session_binding;
 pub mod store;
+pub mod work_contract;
 pub mod worker;
 
 pub use api::{AppState, openapi_document, router};
@@ -38,7 +39,12 @@ pub use session_binding::{
     SessionBinding, SessionBindingState,
 };
 pub use store::{AppendMessageResult, Store};
+pub use work_contract::{
+    BoundFact, CAPABILITY_WORK_ATTEMPT_KIND, CAPABILITY_WORK_REQUEST_KIND, CapabilityWorkBody,
+    CapabilityWorkRequest, ExactIdentity, FactAcceptance, FactCoverage, FactRequirement,
+    WorkContractError,
+};
 pub use worker::{
-    ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError, EnvelopeTurnAdapter,
-    PreparedTurn, TurnAdapter, WorkerReport,
+    CapabilityWorkTurnAdapter, ContinuousHarnessWorker, ContinuousWorkerConfig,
+    ContinuousWorkerError, EnvelopeTurnAdapter, PreparedTurn, TurnAdapter, WorkerReport,
 };

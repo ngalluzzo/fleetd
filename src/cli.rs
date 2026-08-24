@@ -9,10 +9,11 @@ use std::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleetd::{
     AckDelivery, AddMember, AppState, ArmInvocation, AuthService, BlockDelivery, BlockResolution,
-    Capability, ClaimDeliveries, CompleteInvocation, ContinuousHarnessWorker,
-    ContinuousWorkerConfig, CreateAgent, CreateChannel, EnvelopeTurnAdapter, IssuedCredential,
-    MessagePage, PluginSpec, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery, SendMessage,
-    Store, ToolBudget, TurnPolicy, router,
+    CAPABILITY_WORK_REQUEST_KIND, Capability, CapabilityWorkRequest, CapabilityWorkTurnAdapter,
+    ClaimDeliveries, CompleteInvocation, ContinuousHarnessWorker, ContinuousWorkerConfig,
+    CreateAgent, CreateChannel, EnvelopeTurnAdapter, ExactIdentity, Invocation, IssuedCredential,
+    MessagePage, PluginSpec, PreparedTurn, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery,
+    SendMessage, Store, ToolBudget, TurnAdapter, TurnPolicy, router,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -54,6 +55,12 @@ enum Command {
     Invocation {
         #[command(subcommand)]
         command: InvocationCommand,
+    },
+    /// Submit exact, versioned work contracts without teaching the kernel
+    /// their semantics.
+    Work {
+        #[command(subcommand)]
+        command: WorkCommand,
     },
     /// Run a local harness worker against fleetd's authoritative database.
     Worker {
@@ -250,6 +257,23 @@ enum WorkerCommand {
     Run(WorkerRunArgs),
 }
 
+#[derive(Subcommand)]
+enum WorkCommand {
+    /// Validate and submit one bound capability request.
+    Submit {
+        #[arg(long)]
+        channel: String,
+        #[arg(long = "to")]
+        recipient: String,
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long)]
+        idempotency_key: Option<String>,
+        #[arg(long)]
+        causation: Option<String>,
+    },
+}
+
 #[derive(Args)]
 struct WorkerRunArgs {
     #[arg(long, env = "FLEETD_DB", default_value = "fleetd.db")]
@@ -275,6 +299,8 @@ struct WorkerFileConfig {
     #[serde(default)]
     compatibility_digest: Option<String>,
     plugin: WorkerPluginConfig,
+    #[serde(default)]
+    adapter: Option<WorkerAdapterConfig>,
     #[serde(default = "default_result_kind")]
     result_kind: String,
     #[serde(default = "default_worker_lease_ms")]
@@ -287,6 +313,29 @@ struct WorkerFileConfig {
     pre_arm_retry_delay_ms: u64,
     #[serde(default)]
     turn: WorkerTurnConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum WorkerAdapterConfig {
+    Envelope,
+    CapabilityWorkV1 {
+        accepted_capabilities: Vec<ExactIdentity>,
+    },
+}
+
+enum ConfiguredTurnAdapter {
+    Envelope(EnvelopeTurnAdapter),
+    CapabilityWorkV1(CapabilityWorkTurnAdapter),
+}
+
+impl TurnAdapter for ConfiguredTurnAdapter {
+    fn prepare(&self, invocation: &Invocation) -> Result<PreparedTurn, String> {
+        match self {
+            Self::Envelope(adapter) => adapter.prepare(invocation),
+            Self::CapabilityWorkV1(adapter) => adapter.prepare(invocation),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -387,7 +436,56 @@ pub async fn run() -> MainResult<()> {
             )
             .await
         }
+        Command::Work { command } => {
+            work_command(
+                &ApiClient::load(&cli.server, cli.token_file.as_deref())?,
+                command,
+            )
+            .await
+        }
         Command::Worker { command } => worker_command(command).await,
+    }
+}
+
+async fn work_command(api: &ApiClient, command: WorkCommand) -> MainResult<()> {
+    match command {
+        WorkCommand::Submit {
+            channel,
+            recipient,
+            request,
+            idempotency_key,
+            causation,
+        } => {
+            let raw = fs::read(&request)?;
+            let request: CapabilityWorkRequest = serde_json::from_slice(&raw).map_err(|error| {
+                format!(
+                    "capability work request {} is malformed: {error}",
+                    request.display()
+                )
+            })?;
+            request.validate().map_err(|error| {
+                format!(
+                    "capability work request {} is invalid: {error}",
+                    request.request_id
+                )
+            })?;
+            let request_id = request.request_id.clone();
+            let idempotency_key =
+                idempotency_key.unwrap_or_else(|| format!("capability-request/{request_id}"));
+            let response = api
+                .post(&format!("/v1/channels/{channel}/messages"))
+                .json(&SendMessage {
+                    idempotency_key: Some(idempotency_key),
+                    recipient_id: Some(recipient),
+                    kind: CAPABILITY_WORK_REQUEST_KIND.to_owned(),
+                    payload: serde_json::to_value(request)?,
+                    correlation_id: Some(request_id),
+                    causation_id: causation,
+                })
+                .send()
+                .await?;
+            print_response(response).await
+        }
     }
 }
 
@@ -418,12 +516,8 @@ async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
         tokio::fs::create_dir_all(parent).await?;
     }
     let store = Store::open(&args.db).await?;
-    let result_kind = desired.result_kind.clone();
-    let worker = ContinuousHarnessWorker::new(
-        &store,
-        desired.into_runtime_config(),
-        EnvelopeTurnAdapter::new(result_kind),
-    )?;
+    let adapter = desired.turn_adapter()?;
+    let worker = ContinuousHarnessWorker::new(&store, desired.into_runtime_config(), adapter)?;
     let cancellation = CancellationToken::new();
     let signal = cancellation.clone();
     let signal_task = tokio::spawn(async move {
@@ -442,6 +536,20 @@ async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
 }
 
 impl WorkerFileConfig {
+    fn turn_adapter(&self) -> MainResult<ConfiguredTurnAdapter> {
+        match &self.adapter {
+            None | Some(WorkerAdapterConfig::Envelope) => Ok(ConfiguredTurnAdapter::Envelope(
+                EnvelopeTurnAdapter::new(self.result_kind.clone()),
+            )),
+            Some(WorkerAdapterConfig::CapabilityWorkV1 {
+                accepted_capabilities,
+            }) => Ok(ConfiguredTurnAdapter::CapabilityWorkV1(
+                CapabilityWorkTurnAdapter::new(accepted_capabilities.clone())
+                    .map_err(|error| format!("worker adapter configuration is invalid: {error}"))?,
+            )),
+        }
+    }
+
     fn into_runtime_config(self) -> ContinuousWorkerConfig {
         ContinuousWorkerConfig {
             agent_id: self.agent_id,
@@ -1071,7 +1179,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        WorkerFileConfig, persist_secret_file, replace_secret_file, validate_listen_address,
+        ConfiguredTurnAdapter, WorkerFileConfig, persist_secret_file, replace_secret_file,
+        validate_listen_address,
     };
 
     #[test]
@@ -1106,6 +1215,37 @@ mod tests {
 
         let mut invalid = value;
         invalid["surprise"] = json!(true);
+        assert!(serde_json::from_value::<WorkerFileConfig>(invalid).is_err());
+    }
+
+    #[test]
+    fn worker_capability_adapter_configuration_is_exact_and_strict() {
+        let value = json!({
+            "schema_version": 1,
+            "agent_id": "agent-id",
+            "working_directory": env!("CARGO_MANIFEST_DIR"),
+            "adapter": {
+                "kind": "capability_work_v1",
+                "accepted_capabilities": [{
+                    "package": "dev.fleetd.capability",
+                    "name": "generate_runnable_web_surface",
+                    "version": "0.1.0"
+                }]
+            },
+            "plugin": {
+                "id": "mock.harness",
+                "executable": "/usr/bin/python3"
+            }
+        });
+        let desired: WorkerFileConfig =
+            serde_json::from_value(value.clone()).expect("parse capability adapter");
+        assert!(matches!(
+            desired.turn_adapter().expect("configure adapter"),
+            ConfiguredTurnAdapter::CapabilityWorkV1(_)
+        ));
+
+        let mut invalid = value;
+        invalid["adapter"]["surprise"] = json!(true);
         assert!(serde_json::from_value::<WorkerFileConfig>(invalid).is_err());
     }
 

@@ -47,6 +47,15 @@ conversation context stays scoped to the channel. A future versioned adapter
 or workflow plugin can choose a different lane policy without changing the
 kernel.
 
+Set `adapter.kind` to `capability_work_v1` to use the first such adapter; see
+[`worker.capability.opencode.example.json`](../examples/worker.capability.opencode.example.json).
+Its `accepted_capabilities` list is exact: no name-only or version-range match
+is permitted. It validates `work.capability.request/v1`, requires message
+correlation to equal the request identity, rejects partial facts where the
+capability requires completeness, and uses one lane per work contract. The
+selected harness is still only a candidate provider. Its attempt result does
+not establish that the named conformance suite passed.
+
 The lease must cover the configured wall timeout, cancellation drain timeout,
 and a 60-second settlement margin. Permission requests are denied by the
 controller, tool use is observed and cancelled at the configured budget, token

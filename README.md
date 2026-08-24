@@ -208,6 +208,28 @@ remain the next reliability boundaries. See
 [historical reference qualification](docs/qualification/acp-driver-2026-08-24.md)
 and [OpenCode plugin qualification](docs/qualification/opencode-plugin-2026-08-24.md).
 
+## Capability work dogfood
+
+GOOIR's Fleetd checker now emits a provider-neutral `runnable_web_request`
+whose identity binds the missing capability, exact web-target fact, expected
+artifact type, and conformance suite. Submit it without converting it to prose:
+
+```sh
+jq '.runnable_web_request' /path/to/gooir-report.json > /tmp/fleetd-web-request.json
+cargo run -- --token-file .fleetd/requester.token work submit \
+  --channel CHANNEL_ID --to PROVIDER_AGENT_ID \
+  --request /tmp/fleetd-web-request.json
+```
+
+Run the selected seat with
+[`examples/worker.capability.opencode.example.json`](examples/worker.capability.opencode.example.json).
+The adapter accepts only configured exact capabilities and the existing
+invocation/session machinery binds the immutable request to one owner epoch.
+Its correlated `work.capability.attempt/v1` response is still an unverified
+candidate; result extraction and conformance admission are the next boundary.
+See the [capability work contract](docs/contracts/capability-work-v1.md) and
+[ADR 0012](docs/adr/0012-capability-needs-become-durable-work.md).
+
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [API contract](docs/API_CONTRACT.md), [protocol](docs/PROTOCOL.md), and
 [milestones](docs/MILESTONES.md) for the intended boundaries and next slices.

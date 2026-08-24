@@ -3,10 +3,11 @@
 use std::{path::PathBuf, time::Duration};
 
 use fleetd::{
-    Capability, ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError,
-    CreateAgent, CreateChannel, CreateMessage, EnvelopeTurnAdapter, ExecutionCertainty,
-    InvocationState, PluginSpec, PreparedTurn, SessionBindingState, Store, ToolBudget, TurnAdapter,
-    TurnPolicy,
+    CAPABILITY_WORK_ATTEMPT_KIND, CAPABILITY_WORK_REQUEST_KIND, Capability, CapabilityWorkRequest,
+    CapabilityWorkTurnAdapter, ClaimDeliveries, ContinuousHarnessWorker, ContinuousWorkerConfig,
+    ContinuousWorkerError, CreateAgent, CreateChannel, CreateMessage, EnvelopeTurnAdapter,
+    ExecutionCertainty, InvocationState, PluginSpec, PreparedTurn, SessionBindingState, Store,
+    ToolBudget, TurnAdapter, TurnPolicy,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -118,6 +119,33 @@ async fn fixture(message_count: usize) -> Fixture {
     }
 }
 
+fn gooir_request() -> CapabilityWorkRequest {
+    serde_json::from_str(include_str!("fixtures/gooir_runnable_web_request.json"))
+        .expect("decode GOOIR request")
+}
+
+async fn append_gooir_request(
+    fixture: &Fixture,
+    request: &CapabilityWorkRequest,
+) -> fleetd::Message {
+    fixture
+        .store
+        .append_message(
+            &fixture.channel_id,
+            CreateMessage {
+                sender_id: fixture.sender_id.clone(),
+                idempotency_key: Some(format!("capability-request/{}", request.request_id)),
+                recipient_id: Some(fixture.receiver_id.clone()),
+                kind: CAPABILITY_WORK_REQUEST_KIND.to_owned(),
+                payload: serde_json::to_value(request).expect("encode GOOIR request"),
+                correlation_id: Some(request.request_id.clone()),
+                causation_id: None,
+            },
+        )
+        .await
+        .expect("append capability request")
+}
+
 #[tokio::test]
 async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
     let fixture = fixture(2).await;
@@ -200,6 +228,104 @@ async fn fresh_worker_generation_adopts_and_resumes_ready_session() {
     assert_eq!(sessions[0].state, SessionBindingState::Ready);
     assert_eq!(sessions[0].binding.binding_generation, 1);
     assert_eq!(sessions[0].binding.owner_epoch, 2);
+}
+
+#[tokio::test]
+async fn gooir_capability_request_binds_exact_work_to_one_owned_session_lane() {
+    let fixture = fixture(0).await;
+    let request = gooir_request();
+    request.validate().expect("validate GOOIR request");
+    let source = append_gooir_request(&fixture, &request).await;
+    let adapter = CapabilityWorkTurnAdapter::new([request.body.capability.clone()])
+        .expect("configure exact capability");
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(
+            &fixture.receiver_id,
+            "healthy",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        ),
+        adapter,
+    )
+    .expect("valid capability worker");
+
+    let report = worker
+        .run_until(CancellationToken::new(), Some(1))
+        .await
+        .expect("execute capability request");
+
+    assert_eq!(report.completed, 1);
+    let invocation = fixture
+        .store
+        .list_invocations(Some(&fixture.receiver_id))
+        .await
+        .expect("list invocations")
+        .pop()
+        .expect("one invocation");
+    assert_eq!(invocation.state, InvocationState::Terminal);
+    assert_eq!(invocation.message.id, source.id);
+    assert_eq!(
+        invocation.message.payload,
+        serde_json::to_value(&request).expect("encode request again")
+    );
+    let session = fixture
+        .store
+        .list_session_bindings(Some(&fixture.receiver_id))
+        .await
+        .expect("list session bindings")
+        .pop()
+        .expect("one capability session");
+    assert_eq!(session.lane_policy, "per-work-contract");
+    assert_eq!(session.lane_key, request.request_id);
+    assert_eq!(session.binding.owner_epoch, 1);
+    assert_eq!(session.last_quiescent_invocation_id, Some(invocation.id));
+    let history = fixture
+        .store
+        .list_messages(&fixture.channel_id, Some(&fixture.sender_id), 0, 100)
+        .await
+        .expect("list work history");
+    let attempt = history
+        .messages
+        .iter()
+        .find(|message| message.kind == CAPABILITY_WORK_ATTEMPT_KIND)
+        .expect("capability attempt result");
+    assert_eq!(attempt.correlation_id, Some(request.request_id.clone()));
+    assert_eq!(attempt.causation_id, Some(source.id));
+}
+
+#[tokio::test]
+async fn capability_adapter_rejects_an_unadmitted_exact_capability() {
+    let fixture = fixture(0).await;
+    let request = gooir_request();
+    append_gooir_request(&fixture, &request).await;
+    let reservation = fixture
+        .store
+        .reserve_invocations(
+            &fixture.receiver_id,
+            ClaimDeliveries {
+                limit: 1,
+                lease_duration_ms: 70_000,
+            },
+        )
+        .await
+        .expect("reserve exact request");
+    let invocation = reservation
+        .invocations
+        .first()
+        .expect("one reserved request");
+    let adapter = CapabilityWorkTurnAdapter::new([fleetd::ExactIdentity::new(
+        "dev.fleetd.capability",
+        "different_capability",
+        "0.1.0",
+    )])
+    .expect("configure another capability");
+
+    let error = adapter
+        .prepare(invocation)
+        .expect_err("unadmitted capability must fail closed");
+
+    assert!(error.contains("does not admit exact capability"));
+    assert_eq!(invocation.state, InvocationState::Reserved);
 }
 
 #[tokio::test]

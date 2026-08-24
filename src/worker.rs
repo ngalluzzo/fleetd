@@ -1,6 +1,11 @@
 //! Continuous harness worker orchestration above the durable controller.
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use serde::Serialize;
 use thiserror::Error;
@@ -11,7 +16,12 @@ use crate::{
     AcquireSessionBinding, FleetError, HarnessAcpClient, Invocation, ManagedHarnessController,
     ManagedTurn, ManagedTurnError, ManagedTurnOutcome, OpenSession, OpenSessionMode, PluginError,
     PluginProcess, PluginSpec, PromptBlock, RetryDelivery, SessionAcquisitionMode, Store,
-    TurnPolicy, plugin::Binding,
+    TurnPolicy,
+    plugin::Binding,
+    work_contract::{
+        CAPABILITY_WORK_ATTEMPT_KIND, CAPABILITY_WORK_REQUEST_KIND, CapabilityWorkRequest,
+        ExactIdentity,
+    },
 };
 
 const MAX_LEASE_DURATION_MS: u64 = 3_600_000;
@@ -19,6 +29,7 @@ const MAX_POLL_INTERVAL_MS: u64 = 60_000;
 const MAX_RETRY_DELAY_MS: u64 = 86_400_000;
 const MAX_CAPTURE_BYTES: usize = 512 * 1024;
 const LEASE_MARGIN_MS: u64 = 60_000;
+const MAX_CAPABILITY_REQUEST_BYTES: usize = 512 * 1024;
 
 /// One adapter-produced turn that remains outside the messaging kernel.
 #[derive(Clone, Debug)]
@@ -91,6 +102,99 @@ impl TurnAdapter for EnvelopeTurnAdapter {
                 ),
             }],
             result_kind: self.result_kind.clone(),
+        })
+    }
+}
+
+/// Strict adapter for one exact set of semantic capabilities. It validates a
+/// versioned capability-work request, binds one native session lane to the
+/// request identity, and leaves provider execution to the selected harness.
+#[derive(Clone, Debug)]
+pub struct CapabilityWorkTurnAdapter {
+    accepted_capabilities: BTreeSet<ExactIdentity>,
+}
+
+impl CapabilityWorkTurnAdapter {
+    /// Creates an exact capability admission set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty set, malformed identity, or duplicate.
+    pub fn new(
+        accepted_capabilities: impl IntoIterator<Item = ExactIdentity>,
+    ) -> Result<Self, String> {
+        let mut accepted = BTreeSet::new();
+        for capability in accepted_capabilities {
+            capability.validate().map_err(|error| error.to_string())?;
+            if !accepted.insert(capability.clone()) {
+                return Err(format!("duplicate accepted capability {capability}"));
+            }
+        }
+        if accepted.is_empty() {
+            return Err("accepted capability set must not be empty".to_owned());
+        }
+        Ok(Self {
+            accepted_capabilities: accepted,
+        })
+    }
+}
+
+impl TurnAdapter for CapabilityWorkTurnAdapter {
+    fn prepare(&self, invocation: &Invocation) -> Result<PreparedTurn, String> {
+        if invocation.message.kind != CAPABILITY_WORK_REQUEST_KIND {
+            return Err(format!(
+                "expected message kind {CAPABILITY_WORK_REQUEST_KIND}, received {}",
+                invocation.message.kind
+            ));
+        }
+        let request: CapabilityWorkRequest =
+            serde_json::from_value(invocation.message.payload.clone())
+                .map_err(|error| format!("capability work request is malformed: {error}"))?;
+        request
+            .validate()
+            .map_err(|error| format!("capability work request is invalid: {error}"))?;
+        if invocation.message.correlation_id.as_deref() != Some(&request.request_id) {
+            return Err(
+                "message correlation must equal the capability request identity".to_owned(),
+            );
+        }
+        if !self
+            .accepted_capabilities
+            .contains(&request.body.capability)
+        {
+            return Err(format!(
+                "worker does not admit exact capability {}",
+                request.body.capability
+            ));
+        }
+        let encoded = serde_json::to_string_pretty(&request)
+            .map_err(|error| format!("capability work request could not be encoded: {error}"))?;
+        if encoded.len() > MAX_CAPABILITY_REQUEST_BYTES {
+            return Err(format!(
+                "capability work request exceeds {MAX_CAPABILITY_REQUEST_BYTES} bytes"
+            ));
+        }
+        let expected_outputs = serde_json::to_string(&request.body.produces)
+            .map_err(|error| format!("expected outputs could not be encoded: {error}"))?;
+        Ok(PreparedTurn {
+            lane_policy: "per-work-contract".to_owned(),
+            lane_key: request.request_id.clone(),
+            prompt: vec![PromptBlock::Text {
+                text: format!(
+                    "You are the selected provider for an exact, durable capability work request. \
+                     Satisfy only the named capability using only the authority and workspace \
+                     access granted by your harness. The input facts are immutable. Do not claim \
+                     that the conformance suite passed: fleetd has not run it yet.\n\n\
+                     In your final response, emit one JSON object with request_id \
+                     `{request_id}`, status `candidate` or `unable`, outputs matching exactly \
+                     {expected_outputs}, conformance_suite `{conformance_suite}`, \
+                     conformance_status `unverified`, and bounded evidence or diagnostics.\n\n\
+                     Exact request:\n{encoded}",
+                    request_id = request.request_id,
+                    conformance_suite = request.body.conformance_suite,
+                ),
+            }],
+            result_kind: CAPABILITY_WORK_ATTEMPT_KIND.to_owned(),
         })
     }
 }
