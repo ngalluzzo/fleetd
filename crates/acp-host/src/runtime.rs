@@ -293,10 +293,7 @@ struct ActiveTurn {
     next_event_seq: u64,
     policy: fleetd::TurnPolicy,
     captured_bytes: usize,
-    assistant_text: String,
-    assistant_first_event: Option<u64>,
-    assistant_last_event: Option<u64>,
-    assistant_complete: bool,
+    assistant_messages: Vec<AssistantMessage>,
     tool_calls: u64,
     usage: Value,
     activity: watch::Sender<u64>,
@@ -659,10 +656,7 @@ async fn start_turn(
             next_event_seq: 1,
             policy: request.policy.clone(),
             captured_bytes: 0,
-            assistant_text: String::new(),
-            assistant_first_event: None,
-            assistant_last_event: None,
-            assistant_complete: true,
+            assistant_messages: Vec::new(),
             tool_calls: 0,
             usage: Value::Null,
             activity: activity_tx,
@@ -846,17 +840,7 @@ async fn emit_terminal(
             ),
         };
         let last_event_seq = active.next_event_seq.saturating_sub(1);
-        let assistant_messages = if active.assistant_text.is_empty() && active.assistant_complete {
-            Vec::new()
-        } else {
-            vec![AssistantMessage {
-                message_id: None,
-                content: vec![json!({"type": "text", "text": active.assistant_text})],
-                complete: active.assistant_complete,
-                first_event_seq: active.assistant_first_event.unwrap_or(last_event_seq),
-                last_event_seq: active.assistant_last_event.unwrap_or(last_event_seq),
-            }]
-        };
+        let assistant_messages = active.assistant_messages;
         (
             TurnTerminal {
                 fence: active.fence,
@@ -928,7 +912,7 @@ async fn handle_session_update(
         if recognized_activity {
             active.activity.send_replace(now_ms());
         }
-        capture_update(active, event_seq, &update);
+        capture_update(active, event_seq, &update)?;
         if classification == "tool_call" {
             active.tool_calls = active.tool_calls.saturating_add(1);
         }
@@ -954,40 +938,92 @@ async fn handle_session_update(
         .map_err(|_| DriverError::Runtime("host notification channel closed".to_owned()))
 }
 
-fn capture_update(active: &mut ActiveTurn, event_seq: u64, update: &Value) {
+fn capture_update(
+    active: &mut ActiveTurn,
+    event_seq: u64,
+    update: &Value,
+) -> Result<(), DriverError> {
     let kind = update.get("sessionUpdate").and_then(Value::as_str);
     if kind == Some("usage_update") {
         active.usage = update.clone();
     }
     if kind != Some("agent_message_chunk") {
-        return;
+        return Ok(());
     }
-    let Some(text) = update
-        .get("content")
-        .filter(|content| content.get("type").and_then(Value::as_str) == Some("text"))
-        .and_then(|content| content.get("text"))
-        .and_then(Value::as_str)
-    else {
-        return;
+    let message_id = match update.get("messageId") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_str().map(str::to_owned).ok_or_else(|| {
+            DriverError::Protocol("agent messageId must be a string or null".to_owned())
+        })?),
     };
-    active.assistant_first_event.get_or_insert(event_seq);
-    active.assistant_last_event = Some(event_seq);
+    let content = update
+        .get("content")
+        .ok_or_else(|| DriverError::Protocol("agent message chunk omitted content".to_owned()))?;
+
+    let starts_new_message = active
+        .assistant_messages
+        .last()
+        .is_none_or(|message| message.message_id != message_id);
+    if starts_new_message {
+        if let Some(id) = &message_id
+            && active
+                .assistant_messages
+                .iter()
+                .any(|message| message.message_id.as_ref() == Some(id))
+        {
+            return Err(DriverError::Protocol(format!(
+                "agent messageId {id} reappeared after a different message"
+            )));
+        }
+        active.assistant_messages.push(AssistantMessage {
+            message_id,
+            content: Vec::new(),
+            complete: true,
+            first_event_seq: event_seq,
+            last_event_seq: event_seq,
+        });
+    }
+    let message = active
+        .assistant_messages
+        .last_mut()
+        .expect("assistant message was created before capture");
+    message.last_event_seq = event_seq;
     let remaining = active
         .policy
         .max_captured_output_bytes
         .saturating_sub(active.captured_bytes);
-    if text.len() <= remaining {
-        active.assistant_text.push_str(text);
-        active.captured_bytes += text.len();
-    } else {
-        let mut end = remaining.min(text.len());
-        while !text.is_char_boundary(end) {
-            end = end.saturating_sub(1);
+    if content.get("type").and_then(Value::as_str) == Some("text") {
+        let text = content
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or_else(|| DriverError::Protocol("agent text chunk omitted text".to_owned()))?;
+        if text.len() <= remaining {
+            message.content.push(content.clone());
+            active.captured_bytes += text.len();
+        } else {
+            let mut end = remaining.min(text.len());
+            while !text.is_char_boundary(end) {
+                end = end.saturating_sub(1);
+            }
+            if end > 0 {
+                let mut captured = content.clone();
+                captured["text"] = Value::String(text[..end].to_owned());
+                message.content.push(captured);
+            }
+            active.captured_bytes = active.policy.max_captured_output_bytes;
+            message.complete = false;
         }
-        active.assistant_text.push_str(&text[..end]);
-        active.captured_bytes = active.policy.max_captured_output_bytes;
-        active.assistant_complete = false;
+    } else {
+        let encoded = serde_json::to_vec(content)?;
+        if encoded.len() <= remaining {
+            message.content.push(content.clone());
+            active.captured_bytes += encoded.len();
+        } else {
+            active.captured_bytes = active.policy.max_captured_output_bytes;
+            message.complete = false;
+        }
     }
+    Ok(())
 }
 
 fn classify_update(update: &Value) -> &'static str {

@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::{
@@ -20,8 +21,20 @@ pub struct ManagedTurn {
     pub prompt: Vec<PromptBlock>,
     pub policy: TurnPolicy,
     pub result_kind: String,
+    /// Adapter-selected result representation. The raw assistant transcript is
+    /// always retained; structured capture only identifies and parses one
+    /// protocol-bounded final message.
+    pub result_capture: TurnResultCapture,
     /// Adapter-owned immutable context copied into the raw result evidence.
     pub result_context: serde_json::Value,
+}
+
+/// How a turn adapter asks the controller to expose terminal output. This is
+/// result transport, not semantic validation or conformance.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TurnResultCapture {
+    Transcript,
+    FinalAssistantJson,
 }
 
 /// Durable settlement produced by one managed harness turn.
@@ -84,6 +97,7 @@ impl<'store> ManagedHarnessController<'store> {
             prompt,
             policy,
             result_kind,
+            result_capture,
             result_context,
         } = turn;
         self.store
@@ -133,8 +147,15 @@ impl<'store> ManagedHarnessController<'store> {
             TerminalDrain::Terminal(terminal) => *terminal,
             TerminalDrain::Blocked(blocked) => return Ok(ManagedTurnOutcome::Blocked(blocked)),
         };
-        self.settle_terminal(&invocation, &binding, result_kind, result_context, terminal)
-            .await
+        self.settle_terminal(
+            &invocation,
+            &binding,
+            result_kind,
+            result_capture,
+            result_context,
+            terminal,
+        )
+        .await
     }
 
     async fn await_terminal(
@@ -203,6 +224,7 @@ impl<'store> ManagedHarnessController<'store> {
         invocation: &Invocation,
         binding: &Binding,
         result_kind: String,
+        result_capture: TurnResultCapture,
         result_context: serde_json::Value,
         terminal: crate::TurnTerminal,
     ) -> Result<ManagedTurnOutcome, ManagedTurnError> {
@@ -217,25 +239,48 @@ impl<'store> ManagedHarnessController<'store> {
             return Ok(ManagedTurnOutcome::Blocked(Box::new(blocked)));
         }
 
-        let output_complete = terminal
+        let transcript_complete = terminal
             .assistant_messages
             .iter()
             .all(|message| message.complete);
-        let status = if terminal.stop_reason == "end_turn" && output_complete {
-            "completed"
-        } else {
-            "failed"
+        let payload = match result_capture {
+            TurnResultCapture::Transcript => {
+                let status = if terminal.stop_reason == "end_turn" && transcript_complete {
+                    "completed"
+                } else {
+                    "failed"
+                };
+                json!({
+                    "status": status,
+                    "invocation_id": invocation.id,
+                    "stop_reason": terminal.stop_reason,
+                    "output_complete": transcript_complete,
+                    "assistant_messages": terminal.assistant_messages,
+                    "usage": terminal.usage,
+                    "session_persistence": terminal.session_persistence,
+                    "result_context": result_context,
+                })
+            }
+            TurnResultCapture::FinalAssistantJson => {
+                let status = if terminal.stop_reason == "end_turn" {
+                    "completed"
+                } else {
+                    "failed"
+                };
+                let structured_result = capture_final_assistant_json(&terminal.assistant_messages);
+                json!({
+                    "status": status,
+                    "invocation_id": invocation.id,
+                    "stop_reason": terminal.stop_reason,
+                    "transcript_complete": transcript_complete,
+                    "assistant_messages": terminal.assistant_messages,
+                    "structured_result": structured_result,
+                    "usage": terminal.usage,
+                    "session_persistence": terminal.session_persistence,
+                    "result_context": result_context,
+                })
+            }
         };
-        let payload = serde_json::json!({
-            "status": status,
-            "invocation_id": invocation.id,
-            "stop_reason": terminal.stop_reason,
-            "output_complete": output_complete,
-            "assistant_messages": terminal.assistant_messages,
-            "usage": terminal.usage,
-            "session_persistence": terminal.session_persistence,
-            "result_context": result_context,
-        });
         let (completion, _created) = self
             .store
             .complete_session_invocation(
@@ -303,6 +348,73 @@ impl<'store> ManagedHarnessController<'store> {
             .await?;
         Ok(blocked)
     }
+}
+
+fn capture_final_assistant_json(messages: &[crate::AssistantMessage]) -> Value {
+    let (message, selection) = match select_final_assistant_message(messages) {
+        Ok(selected) => selected,
+        Err(reason) => return json!({"status": "unavailable", "reason": reason}),
+    };
+    if !message.complete {
+        return json!({"status": "unavailable", "reason": "incomplete_final_message"});
+    }
+    let mut text = String::new();
+    for block in &message.content {
+        if block.get("type").and_then(Value::as_str) != Some("text") {
+            return json!({"status": "unavailable", "reason": "unsupported_final_content"});
+        }
+        let Some(fragment) = block.get("text").and_then(Value::as_str) else {
+            return json!({"status": "unavailable", "reason": "unsupported_final_content"});
+        };
+        text.push_str(fragment);
+    }
+    if text.trim().is_empty() {
+        return json!({"status": "unavailable", "reason": "empty_final_message"});
+    }
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return json!({"status": "unavailable", "reason": "malformed_final_json"});
+    };
+    json!({
+        "status": "captured",
+        "source": {
+            "selection": selection,
+            "message_id": message.message_id,
+            "first_event_seq": message.first_event_seq,
+            "last_event_seq": message.last_event_seq,
+        },
+        "value": value,
+    })
+}
+
+fn select_final_assistant_message(
+    messages: &[crate::AssistantMessage],
+) -> Result<(&crate::AssistantMessage, &'static str), &'static str> {
+    let Some(final_message) = messages.last() else {
+        return Err("no_assistant_message");
+    };
+    let mut previous_last = 0;
+    for message in messages {
+        if message.first_event_seq == 0
+            || message.first_event_seq > message.last_event_seq
+            || message.first_event_seq <= previous_last
+        {
+            return Err("invalid_message_event_bounds");
+        }
+        previous_last = message.last_event_seq;
+    }
+    if messages.len() == 1 {
+        return Ok((final_message, "only_assistant_message"));
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for message in messages {
+        let Some(id) = message.message_id.as_deref() else {
+            return Err("ambiguous_message_boundary");
+        };
+        if !ids.insert(id) {
+            return Err("ambiguous_message_boundary");
+        }
+    }
+    Ok((final_message, "last_identified_assistant_message"))
 }
 
 enum TerminalDrain {

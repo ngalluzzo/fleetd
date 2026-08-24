@@ -32,6 +32,11 @@ outputs, attempt message and invocation identities, and an RFC 8785/SHA-256
 digest of the complete attempt message. Fleetd can reconstruct it
 deterministically with `fleetd work extract`; it does not declare it trusted.
 
+[ADR 0015](0015-protocol-bounded-structured-results.md) later introduced
+attempt v2. It preserves this semantic lift while allowing progress and result
+to occupy distinct protocol-identified assistant messages. Attempt v1 keeps
+the exact one-message rule recorded here.
+
 ## Consequences
 
 - Raw terminal evidence remains the durable source and can be re-lifted.

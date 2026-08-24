@@ -3,7 +3,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use fleetd::{
-    CAPABILITY_WORK_ATTEMPT_KIND, CAPABILITY_WORK_REQUEST_KIND, Capability,
+    CAPABILITY_WORK_ATTEMPT_V2_KIND, CAPABILITY_WORK_REQUEST_KIND, Capability,
     CapabilityAttemptProjection, CapabilityProviderDescriptor, CapabilityWorkRequest,
     CapabilityWorkTurnAdapter, ClaimDeliveries, ContinuousHarnessWorker, ContinuousWorkerConfig,
     ContinuousWorkerError, CreateAgent, CreateChannel, CreateMessage, EnvelopeTurnAdapter,
@@ -296,10 +296,21 @@ async fn gooir_capability_request_binds_exact_work_to_one_owned_session_lane() {
     let attempt = history
         .messages
         .iter()
-        .find(|message| message.kind == CAPABILITY_WORK_ATTEMPT_KIND)
+        .find(|message| message.kind == CAPABILITY_WORK_ATTEMPT_V2_KIND)
         .expect("capability attempt result");
     assert_eq!(attempt.correlation_id, Some(request.request_id.clone()));
     assert_eq!(attempt.causation_id, Some(source.id));
+    assert_eq!(
+        attempt.payload["assistant_messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        attempt.payload["structured_result"]["source"]["selection"],
+        "last_identified_assistant_message"
+    );
     let projection = extract_capability_message(&request, attempt)
         .expect("lift raw attempt into exact candidate");
     let CapabilityAttemptProjection::Candidate(candidate) = projection else {

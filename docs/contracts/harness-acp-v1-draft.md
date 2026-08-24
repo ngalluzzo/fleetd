@@ -407,6 +407,13 @@ not a second model response. When capture limits prevent complete assembly,
 `complete` is false and the record includes truncation evidence or an artifact
 reference. Incomplete output is not result-admissible by default.
 
+ACP `messageId` is preserved. Adjacent chunks with the same ID belong to one
+message, and a changed ID begins another. An ID that reappears after a different
+message is a protocol violation. When the runtime omits the optional ID, the
+host may assemble one un-ID'd contiguous message but must not invent a boundary
+that the protocol did not provide. See the
+[capability attempt v2 contract](capability-work-v2.md).
+
 The controller validates result content and policy separately. A terminal
 notification never acknowledges an inbox delivery and never grants itself a
 retry.

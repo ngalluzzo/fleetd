@@ -17,11 +17,11 @@ use crate::{
     AcquireSessionBinding, FleetError, HarnessAcpClient, Invocation, ManagedHarnessController,
     ManagedTurn, ManagedTurnError, ManagedTurnOutcome, OpenSession, OpenSessionMode, PluginError,
     PluginProcess, PluginSpec, PromptBlock, RetryDelivery, SessionAcquisitionMode, Store,
-    TurnPolicy,
+    TurnPolicy, TurnResultCapture,
     plugin::Binding,
     work_contract::{
-        CAPABILITY_WORK_ATTEMPT_KIND, CAPABILITY_WORK_REQUEST_KIND, CapabilityProviderDescriptor,
-        CapabilityWorkRequest, capability_attempt_context,
+        CAPABILITY_WORK_ATTEMPT_V2_KIND, CAPABILITY_WORK_REQUEST_KIND,
+        CapabilityProviderDescriptor, CapabilityWorkRequest, capability_attempt_context,
     },
 };
 
@@ -39,6 +39,7 @@ pub struct PreparedTurn {
     pub lane_key: String,
     pub prompt: Vec<PromptBlock>,
     pub result_kind: String,
+    pub result_capture: TurnResultCapture,
     /// Adapter-owned immutable context persisted with raw terminal evidence.
     pub result_context: Value,
 }
@@ -105,6 +106,7 @@ impl TurnAdapter for EnvelopeTurnAdapter {
                 ),
             }],
             result_kind: self.result_kind.clone(),
+            result_capture: TurnResultCapture::Transcript,
             result_context: Value::Null,
         })
     }
@@ -212,7 +214,8 @@ impl TurnAdapter for CapabilityWorkTurnAdapter {
                     conformance_suite = request.body.conformance_suite,
                 ),
             }],
-            result_kind: CAPABILITY_WORK_ATTEMPT_KIND.to_owned(),
+            result_kind: CAPABILITY_WORK_ATTEMPT_V2_KIND.to_owned(),
+            result_capture: TurnResultCapture::FinalAssistantJson,
             result_context: capability_attempt_context(&request, provider)
                 .map_err(|error| format!("attempt context could not be encoded: {error}"))?,
         })
@@ -578,6 +581,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
                     prompt: prepared.prompt,
                     policy: self.config.turn_policy.clone(),
                     result_kind: prepared.result_kind,
+                    result_capture: prepared.result_capture,
                     result_context: prepared.result_context,
                 },
             )

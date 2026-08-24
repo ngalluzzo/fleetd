@@ -2,6 +2,11 @@
 
 Status: experimental cross-project dogfood contract
 
+This document retains the original request and attempt-v1 rules. The request
+remains current. New workers publish structured attempts under
+[`work.capability.attempt/v2`](capability-work-v2.md); historical v1 attempts
+remain immutable and extractable.
+
 This contract binds one missing semantic capability to exact input facts. It is
 carried as an immutable fleetd message without adding capability meaning to the
 message kernel.

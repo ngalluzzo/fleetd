@@ -227,9 +227,10 @@ The adapter accepts only configured exact capabilities and the existing
 invocation/session machinery binds the immutable request to one owner epoch.
 Each configured semantic provider has its own exact identity and implementation
 digest; neither is confused with OpenCode or ACP. Its correlated
-`work.capability.attempt/v1` response remains raw terminal evidence. Strictly
-lift a saved immutable attempt message without interpreting prose or manually
-supplying its authority:
+`work.capability.attempt/v2` response preserves all captured assistant messages
+and exposes JSON only from the final protocol-bounded message. Strictly lift a
+saved immutable attempt message without searching prose or manually supplying
+its authority:
 
 ```sh
 cargo run -- work extract \
@@ -251,10 +252,12 @@ restrictive Content Security Policy; the routes stay outside the versioned
 OpenAPI document because they are an adapter over that API, not new kernel
 operations.
 
-See the [capability work contract](docs/contracts/capability-work-v1.md) and
+See the [capability request contract](docs/contracts/capability-work-v1.md),
+[structured attempt contract](docs/contracts/capability-work-v2.md), and
 [ADR 0012](docs/adr/0012-capability-needs-become-durable-work.md) plus
 [ADR 0013](docs/adr/0013-raw-attempts-lift-to-unverified-candidates.md) and
-[ADR 0014](docs/adr/0014-gooir-derived-operator-surface.md).
+[ADR 0014](docs/adr/0014-gooir-derived-operator-surface.md), plus
+[ADR 0015](docs/adr/0015-protocol-bounded-structured-results.md).
 The complete first qualification, including rejected attempts, exact evidence
 identities, admission, re-planning, and browser validation, is recorded in
 [the runnable-web qualification](docs/qualification/gooir-runnable-web-2026-08-24.md).

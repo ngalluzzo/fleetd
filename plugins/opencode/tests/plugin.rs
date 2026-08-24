@@ -99,14 +99,25 @@ async fn opencode_is_a_distinct_typed_harness_plugin() {
         .await
         .expect("start turn");
 
-    let event = harness.next_notification().await.expect("turn event");
+    let event = harness.next_notification().await.expect("progress event");
+    assert!(matches!(event, HarnessAcpNotification::TurnEvent(_)));
+    let event = harness.next_notification().await.expect("final event");
     assert!(matches!(event, HarnessAcpNotification::TurnEvent(_)));
     let terminal = harness.next_notification().await.expect("terminal");
     let HarnessAcpNotification::TurnTerminal(terminal) = terminal else {
         panic!("expected terminal");
     };
+    assert_eq!(terminal.assistant_messages.len(), 2);
     assert_eq!(
-        terminal.assistant_messages[0].content[0]["text"],
+        terminal.assistant_messages[0].message_id.as_deref(),
+        Some("opencode-progress")
+    );
+    assert_eq!(
+        terminal.assistant_messages[1].message_id.as_deref(),
+        Some("opencode-final")
+    );
+    assert_eq!(
+        terminal.assistant_messages[1].content[0]["text"],
         "OpenCode answer"
     );
     harness.shutdown().await.expect("shutdown OpenCode plugin");

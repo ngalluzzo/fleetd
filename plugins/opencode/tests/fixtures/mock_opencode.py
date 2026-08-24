@@ -51,6 +51,21 @@ for line in sys.stdin:
                     "sessionId": params["sessionId"],
                     "update": {
                         "sessionUpdate": "agent_message_chunk",
+                        "messageId": "opencode-progress",
+                        "content": {"type": "text", "text": "OpenCode progress"},
+                    },
+                },
+            }
+        )
+        send(
+            {
+                "jsonrpc": "2.0",
+                "method": "session/update",
+                "params": {
+                    "sessionId": params["sessionId"],
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": "opencode-final",
                         "content": {"type": "text", "text": "OpenCode answer"},
                     },
                 },

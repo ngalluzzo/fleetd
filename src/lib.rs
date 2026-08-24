@@ -16,7 +16,9 @@ pub mod worker;
 
 pub use api::{AppState, openapi_document, router};
 pub use auth::{AuthService, OperatorBootstrap, Principal};
-pub use controller::{ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnOutcome};
+pub use controller::{
+    ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnOutcome, TurnResultCapture,
+};
 pub use error::{ErrorResponse, FleetError};
 pub use model::{
     AckDelivery, AddMember, Agent, ArmInvocation, BlockDelivery, BlockResolution, BlockedDelivery,
@@ -41,11 +43,12 @@ pub use session_binding::{
 };
 pub use store::{AppendMessageResult, Store};
 pub use work_contract::{
-    AttemptEvidence, BoundFact, CAPABILITY_WORK_ATTEMPT_KIND, CAPABILITY_WORK_CANDIDATE_KIND,
-    CAPABILITY_WORK_REQUEST_KIND, CandidateFact, CapabilityAttemptProjection, CapabilityCandidate,
-    CapabilityCandidateBody, CapabilityProviderDescriptor, CapabilityUnable, CapabilityWorkBody,
-    CapabilityWorkRequest, ExactIdentity, FactAcceptance, FactCoverage, FactRequirement,
-    WorkContractError, capability_attempt_context, extract_capability_attempt,
+    AttemptEvidence, BoundFact, CAPABILITY_WORK_ATTEMPT_KIND, CAPABILITY_WORK_ATTEMPT_V2_KIND,
+    CAPABILITY_WORK_CANDIDATE_KIND, CAPABILITY_WORK_REQUEST_KIND, CandidateFact,
+    CapabilityAttemptProjection, CapabilityCandidate, CapabilityCandidateBody,
+    CapabilityProviderDescriptor, CapabilityUnable, CapabilityWorkBody, CapabilityWorkRequest,
+    ExactIdentity, FactAcceptance, FactCoverage, FactRequirement, WorkContractError,
+    capability_attempt_context, extract_capability_attempt, extract_capability_attempt_v2,
     extract_capability_message,
 };
 pub use worker::{

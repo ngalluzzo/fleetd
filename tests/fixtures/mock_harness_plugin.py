@@ -129,21 +129,63 @@ for line in sys.stdin:
         fence = dict(params["fence"])
         if mode == "wrong-fence":
             fence["owner_epoch"] += 1
+        assistant_messages = []
+        event_seq = 1
+        if mode == "capability-candidate":
+            progress_text = "Preparing the exact candidate."
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "harness.acp.turn.event",
+                    "params": {
+                        "fence": fence,
+                        "event_seq": event_seq,
+                        "observed_at_ms": 1,
+                        "classification": "agent_message_content",
+                        "raw_update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "messageId": "progress-1",
+                            "content": {"type": "text", "text": progress_text},
+                        },
+                    },
+                }
+            )
+            assistant_messages.append(
+                {
+                    "message_id": "progress-1",
+                    "content": [{"type": "text", "text": progress_text}],
+                    "complete": True,
+                    "first_event_seq": event_seq,
+                    "last_event_seq": event_seq,
+                }
+            )
+            event_seq += 1
+        message_id = "result-1" if mode == "capability-candidate" else None
         send(
             {
                 "jsonrpc": "2.0",
                 "method": "harness.acp.turn.event",
                 "params": {
                     "fence": fence,
-                    "event_seq": 1,
+                    "event_seq": event_seq,
                     "observed_at_ms": 1,
                     "classification": "agent_message_content",
                     "raw_update": {
                         "sessionUpdate": "agent_message_chunk",
+                        "messageId": message_id,
                         "content": {"type": "text", "text": assistant_text},
                         "unknownExtension": {"preserved": True},
                     },
                 },
+            }
+        )
+        assistant_messages.append(
+            {
+                "message_id": message_id,
+                "content": [{"type": "text", "text": assistant_text}],
+                "complete": True,
+                "first_event_seq": event_seq,
+                "last_event_seq": event_seq,
             }
         )
         send(
@@ -152,20 +194,12 @@ for line in sys.stdin:
                 "method": "harness.acp.turn.terminal",
                 "params": {
                     "fence": fence,
-                    "last_event_seq": 1,
+                    "last_event_seq": event_seq,
                     "stop_reason": "end_turn",
                     "execution_certainty": "outcome_known",
                     "session_quiescent": True,
                     "session_persistence": "runtime_claimed",
-                    "assistant_messages": [
-                        {
-                            "message_id": None,
-                            "content": [{"type": "text", "text": assistant_text}],
-                            "complete": True,
-                            "first_event_seq": 1,
-                            "last_event_seq": 1,
-                        }
-                    ],
+                    "assistant_messages": assistant_messages,
                     "usage": {},
                     "raw_prompt_response": {"stopReason": "end_turn"},
                 },

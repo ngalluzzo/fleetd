@@ -35,6 +35,8 @@
   and a GOOIR-derived blocked-delivery web artifact.
 - [x] Return the exact durable candidate through conformance and re-plan the
   GOOIR graph with its admitted fact.
+- [x] Preserve ACP assistant-message boundaries and lift a model's final
+  structured result without discarding its progress transcript.
 - Versioned task, progress, result, review, and approval contracts.
 - Dependency scheduling expressed outside the messaging kernel.
 - A complete author-reviewer loop exercised on fleetd itself.

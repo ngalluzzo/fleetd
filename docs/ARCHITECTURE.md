@@ -129,15 +129,20 @@ self-report, and remain distinct from the harness plugin and ACP protocol. The
 controller persists this context beside raw terminal evidence.
 
 The first response is an attempt record, not accepted output or conformance
-proof. A strict deterministic lift accepts only one complete raw JSON response,
-requires the exact request, suite, and output fact set, and emits either an
-unverified content-addressed candidate or an explicit unable result. Markdown,
-prose, duplicate/missing outputs, and claims of conformance fail closed. GOOIR,
-not the messaging kernel, runs the independently identified named suite and
-decides whether any candidate facts enter its graph. See
-[ADR 0012](adr/0012-capability-needs-become-durable-work.md) and the
-[capability work v1 contract](contracts/capability-work-v1.md), plus
-[ADR 0013](adr/0013-raw-attempts-lift-to-unverified-candidates.md).
+proof. Capability attempt v2 preserves the assistant transcript, uses ACP's
+message IDs to identify the final assistant message, and parses only that whole
+message as JSON. A strict deterministic lift independently reconstructs the
+same boundary, then requires the exact request, suite, and output fact set and
+emits either an unverified content-addressed candidate or an explicit unable
+result. Markdown, prose recovery, ambiguous boundaries, duplicate/missing
+outputs, and claims of conformance fail closed. GOOIR, not the messaging
+kernel, runs the independently identified named suite and decides whether any
+candidate facts enter its graph. See
+[ADR 0012](adr/0012-capability-needs-become-durable-work.md), the
+[capability request contract](contracts/capability-work-v1.md), the
+[structured attempt contract](contracts/capability-work-v2.md),
+[ADR 0013](adr/0013-raw-attempts-lift-to-unverified-candidates.md), and
+[ADR 0015](adr/0015-protocol-bounded-structured-results.md).
 
 The first admitted-output target is a browser adapter for blocked-delivery
 review. Its static `/operator/contract.json` is the exact web target IR from

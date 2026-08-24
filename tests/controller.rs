@@ -6,7 +6,7 @@ use fleetd::{
     AcquireSessionBinding, Capability, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
     ManagedHarnessController, ManagedTurn, ManagedTurnOutcome, OpenSession, OpenSessionMode,
     PluginProcess, PluginSpec, PromptBlock, SessionAcquisitionMode, SessionBindingState,
-    SessionPersistence, Store, ToolBudget, TurnPolicy,
+    SessionPersistence, Store, ToolBudget, TurnPolicy, TurnResultCapture,
 };
 use serde_json::{Value, json};
 
@@ -164,6 +164,7 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
                 }],
                 policy: policy(),
                 result_kind: "work.result/v1".to_owned(),
+                result_capture: TurnResultCapture::Transcript,
                 result_context: json!({"adapter": "fixture"}),
             },
         )
@@ -222,6 +223,7 @@ async fn managed_controller_parks_post_arm_protocol_ambiguity() {
                 }],
                 policy: policy(),
                 result_kind: "work.result/v1".to_owned(),
+                result_capture: TurnResultCapture::Transcript,
                 result_context: Value::Null,
             },
         )

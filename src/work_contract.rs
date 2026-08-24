@@ -12,6 +12,7 @@ use crate::Message;
 
 pub const CAPABILITY_WORK_REQUEST_KIND: &str = "work.capability.request/v1";
 pub const CAPABILITY_WORK_ATTEMPT_KIND: &str = "work.capability.attempt/v1";
+pub const CAPABILITY_WORK_ATTEMPT_V2_KIND: &str = "work.capability.attempt/v2";
 pub const CAPABILITY_WORK_CANDIDATE_KIND: &str = "work.capability.candidate/v1";
 
 const MAX_IDENTITY_PART_BYTES: usize = 256;
@@ -320,6 +321,76 @@ struct AttemptAssistantMessage {
     last_event_seq: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HarnessAttemptV2Payload {
+    status: String,
+    invocation_id: String,
+    stop_reason: String,
+    transcript_complete: bool,
+    assistant_messages: Vec<AttemptAssistantMessage>,
+    structured_result: AttemptStructuredResult,
+    #[serde(rename = "usage")]
+    _usage: Value,
+    #[serde(rename = "session_persistence")]
+    _session_persistence: String,
+    result_context: AttemptResultContext,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum AttemptStructuredResult {
+    Captured {
+        source: AttemptStructuredResultSource,
+        value: Value,
+    },
+    Unavailable {
+        reason: AttemptStructuredResultUnavailableReason,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum AttemptStructuredResultUnavailableReason {
+    NoAssistantMessage,
+    InvalidMessageEventBounds,
+    AmbiguousMessageBoundary,
+    IncompleteFinalMessage,
+    UnsupportedFinalContent,
+    EmptyFinalMessage,
+    MalformedFinalJson,
+}
+
+impl AttemptStructuredResultUnavailableReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoAssistantMessage => "no_assistant_message",
+            Self::InvalidMessageEventBounds => "invalid_message_event_bounds",
+            Self::AmbiguousMessageBoundary => "ambiguous_message_boundary",
+            Self::IncompleteFinalMessage => "incomplete_final_message",
+            Self::UnsupportedFinalContent => "unsupported_final_content",
+            Self::EmptyFinalMessage => "empty_final_message",
+            Self::MalformedFinalJson => "malformed_final_json",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum AttemptStructuredResultSelection {
+    OnlyAssistantMessage,
+    LastIdentifiedAssistantMessage,
+}
+
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct AttemptStructuredResultSource {
+    selection: AttemptStructuredResultSelection,
+    message_id: Option<String>,
+    first_event_seq: u64,
+    last_event_seq: u64,
+}
+
 /// Strictly lifts a known-complete harness attempt into either one exact
 /// unverified candidate or an explicit unable result. The raw attempt remains
 /// the evidence authority; prose and malformed JSON fail closed.
@@ -364,6 +435,93 @@ pub fn extract_capability_attempt(
         invocation_id: attempt.invocation_id,
         evidence_digest: canonical_digest(payload)?,
     };
+    project_provider_response(request, attempt.result_context.provider, response, evidence)
+}
+
+/// Strictly lifts a v2 attempt whose controller captured one protocol-bounded
+/// final assistant message as JSON while retaining the complete raw transcript.
+/// Earlier progress messages are evidence but cannot be mistaken for results.
+///
+/// # Errors
+///
+/// Returns an error when terminal evidence, message boundaries, structured
+/// capture, or semantic provider output fails exact revalidation.
+pub fn extract_capability_attempt_v2(
+    request: &CapabilityWorkRequest,
+    authority: impl Into<String>,
+    attempt_id: impl Into<String>,
+    payload: &Value,
+) -> Result<CapabilityAttemptProjection, WorkContractError> {
+    request.validate()?;
+    let attempt: HarnessAttemptV2Payload = serde_json::from_value(payload.clone())
+        .map_err(|error| WorkContractError::MalformedAttempt(error.to_string()))?;
+    if attempt.status != "completed" || attempt.stop_reason != "end_turn" {
+        return Err(WorkContractError::IncompleteAttempt);
+    }
+    if attempt.result_context.request_id != request.request_id {
+        return Err(WorkContractError::RequestMismatch);
+    }
+    attempt.result_context.provider.validate()?;
+    if attempt.result_context.provider.capability != request.body.capability {
+        return Err(WorkContractError::ProviderCapabilityMismatch);
+    }
+    let observed_transcript_complete = attempt
+        .assistant_messages
+        .iter()
+        .all(|message| message.complete);
+    if observed_transcript_complete != attempt.transcript_complete {
+        return Err(WorkContractError::StructuredResultMismatch);
+    }
+    let (final_message, expected_selection) =
+        select_final_assistant_message(&attempt.assistant_messages)?;
+    if !final_message.complete {
+        return Err(WorkContractError::IncompleteAttempt);
+    }
+    let (source, captured_value) = match attempt.structured_result {
+        AttemptStructuredResult::Captured { source, value } => (source, value),
+        AttemptStructuredResult::Unavailable { reason } => {
+            return Err(WorkContractError::StructuredResultUnavailable(
+                reason.as_str().to_owned(),
+            ));
+        }
+    };
+    let expected_source = AttemptStructuredResultSource {
+        selection: expected_selection,
+        message_id: final_message.message_id.clone(),
+        first_event_seq: final_message.first_event_seq,
+        last_event_seq: final_message.last_event_seq,
+    };
+    if source != expected_source {
+        return Err(WorkContractError::StructuredResultMismatch);
+    }
+    let response_text = assistant_text(final_message)?;
+    let independently_parsed: Value = serde_json::from_str(&response_text)
+        .map_err(|error| WorkContractError::MalformedProviderResponse(error.to_string()))?;
+    if independently_parsed != captured_value {
+        return Err(WorkContractError::StructuredResultMismatch);
+    }
+    let response: ProviderResponse = serde_json::from_value(captured_value)
+        .map_err(|error| WorkContractError::MalformedProviderResponse(error.to_string()))?;
+    if response.request_id != request.request_id
+        || response.conformance_suite != request.body.conformance_suite
+    {
+        return Err(WorkContractError::RequestMismatch);
+    }
+    let evidence = AttemptEvidence {
+        authority: authority.into(),
+        attempt_id: attempt_id.into(),
+        invocation_id: attempt.invocation_id,
+        evidence_digest: canonical_digest(payload)?,
+    };
+    project_provider_response(request, attempt.result_context.provider, response, evidence)
+}
+
+fn project_provider_response(
+    request: &CapabilityWorkRequest,
+    provider: CapabilityProviderDescriptor,
+    response: ProviderResponse,
+    evidence: AttemptEvidence,
+) -> Result<CapabilityAttemptProjection, WorkContractError> {
     match response.status {
         ProviderResponseStatus::Candidate => {
             if !response.diagnostics.is_empty() {
@@ -374,7 +532,7 @@ pub fn extract_capability_attempt(
                     request,
                     CapabilityCandidateBody {
                         request_id: request.request_id.clone(),
-                        provider: attempt.result_context.provider,
+                        provider,
                         outputs: response.outputs,
                         attempt: evidence,
                     },
@@ -396,7 +554,7 @@ pub fn extract_capability_attempt(
             }
             Ok(CapabilityAttemptProjection::Unable(CapabilityUnable {
                 request_id: request.request_id.clone(),
-                provider: attempt.result_context.provider,
+                provider,
                 attempt: evidence,
                 diagnostics: response.diagnostics,
             }))
@@ -415,7 +573,9 @@ pub fn extract_capability_message(
     request: &CapabilityWorkRequest,
     message: &Message,
 ) -> Result<CapabilityAttemptProjection, WorkContractError> {
-    if message.kind != CAPABILITY_WORK_ATTEMPT_KIND {
+    if message.kind != CAPABILITY_WORK_ATTEMPT_KIND
+        && message.kind != CAPABILITY_WORK_ATTEMPT_V2_KIND
+    {
         return Err(WorkContractError::AttemptKindMismatch);
     }
     if message.correlation_id.as_deref() != Some(request.request_id.as_str()) {
@@ -425,7 +585,11 @@ pub fn extract_capability_message(
         return Err(WorkContractError::AttemptCausationMissing);
     }
     let authority = format!("dev.fleetd.agent/{}", message.sender_id);
-    let projection = extract_capability_attempt(request, authority, &message.id, &message.payload)?;
+    let projection = if message.kind == CAPABILITY_WORK_ATTEMPT_V2_KIND {
+        extract_capability_attempt_v2(request, authority, &message.id, &message.payload)?
+    } else {
+        extract_capability_attempt(request, authority, &message.id, &message.payload)?
+    };
     let evidence_digest = canonical_digest(message)?;
     match projection {
         CapabilityAttemptProjection::Candidate(mut candidate) => {
@@ -502,8 +666,12 @@ pub enum WorkContractError {
     AttemptCausationMissing,
     #[error("provider response is malformed: {0}")]
     MalformedProviderResponse(String),
-    #[error("provider attempt must contain exactly one complete JSON-only assistant message")]
+    #[error("provider attempt does not establish one unambiguous complete assistant result")]
     AmbiguousAssistantOutput,
+    #[error("structured result is unavailable: {0}")]
+    StructuredResultUnavailable(String),
+    #[error("structured result does not match its final assistant message source")]
+    StructuredResultMismatch,
     #[error("candidate response must not contain diagnostics")]
     UnexpectedDiagnostics,
     #[error("unable response must contain diagnostics and no outputs")]
@@ -647,6 +815,60 @@ fn exact_assistant_json(messages: &[AttemptAssistantMessage]) -> Result<String, 
             return Err(WorkContractError::AmbiguousAssistantOutput);
         }
         text.push_str(&block.text);
+    }
+    if text.trim().is_empty() {
+        return Err(WorkContractError::AmbiguousAssistantOutput);
+    }
+    Ok(text)
+}
+
+fn select_final_assistant_message(
+    messages: &[AttemptAssistantMessage],
+) -> Result<(&AttemptAssistantMessage, AttemptStructuredResultSelection), WorkContractError> {
+    let Some(final_message) = messages.last() else {
+        return Err(WorkContractError::AmbiguousAssistantOutput);
+    };
+    let mut previous_last = 0;
+    for message in messages {
+        if message.first_event_seq == 0
+            || message.first_event_seq > message.last_event_seq
+            || message.first_event_seq <= previous_last
+        {
+            return Err(WorkContractError::AmbiguousAssistantOutput);
+        }
+        previous_last = message.last_event_seq;
+    }
+    if messages.len() == 1 {
+        return Ok((
+            final_message,
+            AttemptStructuredResultSelection::OnlyAssistantMessage,
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    for message in messages {
+        let Some(id) = message.message_id.as_deref() else {
+            return Err(WorkContractError::AmbiguousAssistantOutput);
+        };
+        if !ids.insert(id) {
+            return Err(WorkContractError::AmbiguousAssistantOutput);
+        }
+    }
+    Ok((
+        final_message,
+        AttemptStructuredResultSelection::LastIdentifiedAssistantMessage,
+    ))
+}
+
+fn assistant_text(message: &AttemptAssistantMessage) -> Result<String, WorkContractError> {
+    let mut text = String::new();
+    for block in &message.content {
+        if block.get("type").and_then(Value::as_str) != Some("text") {
+            return Err(WorkContractError::AmbiguousAssistantOutput);
+        }
+        let Some(fragment) = block.get("text").and_then(Value::as_str) else {
+            return Err(WorkContractError::AmbiguousAssistantOutput);
+        };
+        text.push_str(fragment);
     }
     if text.trim().is_empty() {
         return Err(WorkContractError::AmbiguousAssistantOutput);
@@ -843,6 +1065,41 @@ mod tests {
         })
     }
 
+    fn attempt_payload_v2(request: &CapabilityWorkRequest, response: &Value) -> Value {
+        json!({
+            "status": "completed",
+            "invocation_id": "invocation-2",
+            "stop_reason": "end_turn",
+            "transcript_complete": true,
+            "assistant_messages": [{
+                "message_id": "progress-1",
+                "content": [{"type": "text", "text": "Working on the candidate."}],
+                "complete": true,
+                "first_event_seq": 1,
+                "last_event_seq": 1
+            }, {
+                "message_id": "result-1",
+                "content": [{"type": "text", "text": serde_json::to_string(&response).unwrap()}],
+                "complete": true,
+                "first_event_seq": 2,
+                "last_event_seq": 2
+            }],
+            "structured_result": {
+                "status": "captured",
+                "source": {
+                    "selection": "last_identified_assistant_message",
+                    "message_id": "result-1",
+                    "first_event_seq": 2,
+                    "last_event_seq": 2
+                },
+                "value": response
+            },
+            "usage": {},
+            "session_persistence": "runtime_claimed",
+            "result_context": capability_attempt_context(request, &provider(request)).unwrap()
+        })
+    }
+
     #[test]
     fn exact_attempt_is_lifted_to_an_unverified_candidate() {
         let request = request(FactCoverage::Complete);
@@ -871,6 +1128,61 @@ mod tests {
         assert_eq!(candidate.body.provider, provider(&request));
         assert_eq!(candidate.body.outputs[0].payload["artifact"], "candidate");
         assert_eq!(candidate.body.attempt.invocation_id, "invocation-1");
+    }
+
+    #[test]
+    fn v2_attempt_uses_the_final_identified_message_without_discarding_progress() {
+        let request = request(FactCoverage::Complete);
+        let response = json!({
+            "request_id": request.request_id,
+            "status": "candidate",
+            "outputs": [{
+                "fact_type": request.body.produces[0],
+                "coverage": "complete",
+                "payload": {"artifact": "segmented-candidate"}
+            }],
+            "conformance_suite": request.body.conformance_suite,
+            "conformance_status": "unverified",
+            "diagnostics": []
+        });
+        let payload = attempt_payload_v2(&request, &response);
+
+        let projection =
+            extract_capability_attempt_v2(&request, "test.fleetd/worker@2", "attempt-2", &payload)
+                .expect("lift the bounded final result");
+        let CapabilityAttemptProjection::Candidate(candidate) = projection else {
+            panic!("segmented final response is a candidate")
+        };
+        assert_eq!(
+            candidate.body.outputs[0].payload["artifact"],
+            "segmented-candidate"
+        );
+    }
+
+    #[test]
+    fn v2_attempt_rejects_unidentified_or_tampered_result_boundaries() {
+        let request = request(FactCoverage::Complete);
+        let response = json!({
+            "request_id": request.request_id,
+            "status": "unable",
+            "outputs": [],
+            "conformance_suite": request.body.conformance_suite,
+            "conformance_status": "unverified",
+            "diagnostics": ["not available"]
+        });
+        let mut ambiguous = attempt_payload_v2(&request, &response);
+        ambiguous["assistant_messages"][0]["message_id"] = Value::Null;
+        assert!(matches!(
+            extract_capability_attempt_v2(&request, "fleetd", "attempt-2", &ambiguous),
+            Err(WorkContractError::AmbiguousAssistantOutput)
+        ));
+
+        let mut tampered = attempt_payload_v2(&request, &response);
+        tampered["structured_result"]["value"]["diagnostics"] = json!(["changed"]);
+        assert!(matches!(
+            extract_capability_attempt_v2(&request, "fleetd", "attempt-2", &tampered),
+            Err(WorkContractError::StructuredResultMismatch)
+        ));
     }
 
     #[test]
