@@ -91,6 +91,27 @@ for line in sys.stdin:
         )
     elif method == "harness.acp.turn.start":
         wall_enforcement = "soft" if mode == "weak-enforcement" else "hard"
+        assistant_text = "done"
+        if mode == "capability-candidate":
+            prompt_text = params["prompt"][0]["text"]
+            exact_request = json.loads(prompt_text.split("Exact request:\n", 1)[1])
+            assistant_text = json.dumps(
+                {
+                    "request_id": exact_request["request_id"],
+                    "status": "candidate",
+                    "outputs": [
+                        {
+                            "fact_type": exact_request["produces"][0],
+                            "coverage": "complete",
+                            "payload": {"artifact": "mock-runnable-web"},
+                        }
+                    ],
+                    "conformance_suite": exact_request["conformance_suite"],
+                    "conformance_status": "unverified",
+                    "diagnostics": [],
+                },
+                separators=(",", ":"),
+            )
         result(
             request,
             {
@@ -119,7 +140,7 @@ for line in sys.stdin:
                     "classification": "agent_message_content",
                     "raw_update": {
                         "sessionUpdate": "agent_message_chunk",
-                        "content": {"type": "text", "text": "done"},
+                        "content": {"type": "text", "text": assistant_text},
                         "unknownExtension": {"preserved": True},
                     },
                 },
@@ -139,7 +160,7 @@ for line in sys.stdin:
                     "assistant_messages": [
                         {
                             "message_id": None,
-                            "content": [{"type": "text", "text": "done"}],
+                            "content": [{"type": "text", "text": assistant_text}],
                             "complete": True,
                             "first_event_seq": 1,
                             "last_event_seq": 1,

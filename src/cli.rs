@@ -9,11 +9,12 @@ use std::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleetd::{
     AckDelivery, AddMember, AppState, ArmInvocation, AuthService, BlockDelivery, BlockResolution,
-    CAPABILITY_WORK_REQUEST_KIND, Capability, CapabilityWorkRequest, CapabilityWorkTurnAdapter,
+    CAPABILITY_WORK_REQUEST_KIND, Capability, CapabilityAttemptProjection,
+    CapabilityProviderDescriptor, CapabilityWorkRequest, CapabilityWorkTurnAdapter,
     ClaimDeliveries, CompleteInvocation, ContinuousHarnessWorker, ContinuousWorkerConfig,
-    CreateAgent, CreateChannel, EnvelopeTurnAdapter, ExactIdentity, Invocation, IssuedCredential,
+    CreateAgent, CreateChannel, EnvelopeTurnAdapter, Invocation, IssuedCredential, Message,
     MessagePage, PluginSpec, PreparedTurn, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery,
-    SendMessage, Store, ToolBudget, TurnAdapter, TurnPolicy, router,
+    SendMessage, Store, ToolBudget, TurnAdapter, TurnPolicy, extract_capability_message, router,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -272,6 +273,13 @@ enum WorkCommand {
         #[arg(long)]
         causation: Option<String>,
     },
+    /// Strictly lift one immutable attempt message into a candidate or unable result.
+    Extract {
+        #[arg(long)]
+        request: PathBuf,
+        #[arg(long = "attempt-message")]
+        attempt_message: PathBuf,
+    },
 }
 
 #[derive(Args)]
@@ -320,7 +328,7 @@ struct WorkerFileConfig {
 enum WorkerAdapterConfig {
     Envelope,
     CapabilityWorkV1 {
-        accepted_capabilities: Vec<ExactIdentity>,
+        providers: Vec<CapabilityProviderDescriptor>,
     },
 }
 
@@ -437,17 +445,17 @@ pub async fn run() -> MainResult<()> {
             .await
         }
         Command::Work { command } => {
-            work_command(
-                &ApiClient::load(&cli.server, cli.token_file.as_deref())?,
-                command,
-            )
-            .await
+            work_command(&cli.server, cli.token_file.as_deref(), command).await
         }
         Command::Worker { command } => worker_command(command).await,
     }
 }
 
-async fn work_command(api: &ApiClient, command: WorkCommand) -> MainResult<()> {
+async fn work_command(
+    server: &str,
+    token_file: Option<&Path>,
+    command: WorkCommand,
+) -> MainResult<()> {
     match command {
         WorkCommand::Submit {
             channel,
@@ -456,6 +464,7 @@ async fn work_command(api: &ApiClient, command: WorkCommand) -> MainResult<()> {
             idempotency_key,
             causation,
         } => {
+            let api = ApiClient::load(server, token_file)?;
             let raw = fs::read(&request)?;
             let request: CapabilityWorkRequest = serde_json::from_slice(&raw).map_err(|error| {
                 format!(
@@ -485,6 +494,17 @@ async fn work_command(api: &ApiClient, command: WorkCommand) -> MainResult<()> {
                 .send()
                 .await?;
             print_response(response).await
+        }
+        WorkCommand::Extract {
+            request,
+            attempt_message,
+        } => {
+            let request: CapabilityWorkRequest = serde_json::from_slice(&fs::read(&request)?)?;
+            let attempt: Message = serde_json::from_slice(&fs::read(&attempt_message)?)?;
+            match extract_capability_message(&request, &attempt)? {
+                CapabilityAttemptProjection::Candidate(candidate) => print_json(&candidate),
+                CapabilityAttemptProjection::Unable(unable) => print_json(&unable),
+            }
         }
     }
 }
@@ -541,12 +561,13 @@ impl WorkerFileConfig {
             None | Some(WorkerAdapterConfig::Envelope) => Ok(ConfiguredTurnAdapter::Envelope(
                 EnvelopeTurnAdapter::new(self.result_kind.clone()),
             )),
-            Some(WorkerAdapterConfig::CapabilityWorkV1 {
-                accepted_capabilities,
-            }) => Ok(ConfiguredTurnAdapter::CapabilityWorkV1(
-                CapabilityWorkTurnAdapter::new(accepted_capabilities.clone())
-                    .map_err(|error| format!("worker adapter configuration is invalid: {error}"))?,
-            )),
+            Some(WorkerAdapterConfig::CapabilityWorkV1 { providers }) => {
+                Ok(ConfiguredTurnAdapter::CapabilityWorkV1(
+                    CapabilityWorkTurnAdapter::new(providers.clone()).map_err(|error| {
+                        format!("worker adapter configuration is invalid: {error}")
+                    })?,
+                ))
+            }
         }
     }
 
@@ -1226,10 +1247,18 @@ mod tests {
             "working_directory": env!("CARGO_MANIFEST_DIR"),
             "adapter": {
                 "kind": "capability_work_v1",
-                "accepted_capabilities": [{
-                    "package": "dev.fleetd.capability",
-                    "name": "generate_runnable_web_surface",
-                    "version": "0.1.0"
+                "providers": [{
+                    "id": {
+                        "package": "dev.fleetd.provider",
+                        "name": "opencode_runnable_web",
+                        "version": "0.1.0"
+                    },
+                    "capability": {
+                        "package": "dev.fleetd.capability",
+                        "name": "generate_runnable_web_surface",
+                        "version": "0.1.0"
+                    },
+                    "implementation_digest": format!("sha256:{}", "a".repeat(64))
                 }]
             },
             "plugin": {

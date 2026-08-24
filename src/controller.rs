@@ -20,6 +20,8 @@ pub struct ManagedTurn {
     pub prompt: Vec<PromptBlock>,
     pub policy: TurnPolicy,
     pub result_kind: String,
+    /// Adapter-owned immutable context copied into the raw result evidence.
+    pub result_context: serde_json::Value,
 }
 
 /// Durable settlement produced by one managed harness turn.
@@ -82,6 +84,7 @@ impl<'store> ManagedHarnessController<'store> {
             prompt,
             policy,
             result_kind,
+            result_context,
         } = turn;
         self.store
             .arm_session_invocation(
@@ -130,7 +133,7 @@ impl<'store> ManagedHarnessController<'store> {
             TerminalDrain::Terminal(terminal) => *terminal,
             TerminalDrain::Blocked(blocked) => return Ok(ManagedTurnOutcome::Blocked(blocked)),
         };
-        self.settle_terminal(&invocation, &binding, result_kind, terminal)
+        self.settle_terminal(&invocation, &binding, result_kind, result_context, terminal)
             .await
     }
 
@@ -200,6 +203,7 @@ impl<'store> ManagedHarnessController<'store> {
         invocation: &Invocation,
         binding: &Binding,
         result_kind: String,
+        result_context: serde_json::Value,
         terminal: crate::TurnTerminal,
     ) -> Result<ManagedTurnOutcome, ManagedTurnError> {
         if terminal.execution_certainty == HarnessExecutionCertainty::OutcomeUnknown
@@ -230,6 +234,7 @@ impl<'store> ManagedHarnessController<'store> {
             "assistant_messages": terminal.assistant_messages,
             "usage": terminal.usage,
             "session_persistence": terminal.session_persistence,
+            "result_context": result_context,
         });
         let (completion, _created) = self
             .store

@@ -8,7 +8,7 @@ use fleetd::{
     PluginProcess, PluginSpec, PromptBlock, SessionAcquisitionMode, SessionBindingState,
     SessionPersistence, Store, ToolBudget, TurnPolicy,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_harness_plugin.py")
@@ -164,6 +164,7 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
                 }],
                 policy: policy(),
                 result_kind: "work.result/v1".to_owned(),
+                result_context: json!({"adapter": "fixture"}),
             },
         )
         .await
@@ -176,6 +177,10 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
         Some(sender.id.as_str())
     );
     assert_eq!(completion.result.payload["status"], "completed");
+    assert_eq!(
+        completion.result.payload["result_context"],
+        json!({"adapter": "fixture"})
+    );
     assert_eq!(
         completion.result.payload["assistant_messages"][0]["content"][0]["text"],
         "done"
@@ -217,6 +222,7 @@ async fn managed_controller_parks_post_arm_protocol_ambiguity() {
                 }],
                 policy: policy(),
                 result_kind: "work.result/v1".to_owned(),
+                result_context: Value::Null,
             },
         )
         .await

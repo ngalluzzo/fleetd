@@ -122,12 +122,22 @@ The authenticated sender supplies request authority, the explicit recipient is
 the first assignment policy, the invocation binds the exact message, and the
 session turn durably records binding generation and owner epoch.
 
-A capability-work adapter admits an exact configured capability set and uses a
-session lane keyed by the request's RFC 8785/SHA-256 identity. Harness ACP is
-only the current execution protocol. The first response is an attempt record,
-not accepted output or conformance proof. See
+A capability-work adapter admits an exact configured semantic provider set and
+uses a session lane keyed by the request's RFC 8785/SHA-256 identity. Provider
+identity and implementation digest are adapter configuration, not agent
+self-report, and remain distinct from the harness plugin and ACP protocol. The
+controller persists this context beside raw terminal evidence.
+
+The first response is an attempt record, not accepted output or conformance
+proof. A strict deterministic lift accepts only one complete raw JSON response,
+requires the exact request, suite, and output fact set, and emits either an
+unverified content-addressed candidate or an explicit unable result. Markdown,
+prose, duplicate/missing outputs, and claims of conformance fail closed. GOOIR,
+not the messaging kernel, runs the independently identified named suite and
+decides whether any candidate facts enter its graph. See
 [ADR 0012](adr/0012-capability-needs-become-durable-work.md) and the
-[capability work v1 contract](contracts/capability-work-v1.md).
+[capability work v1 contract](contracts/capability-work-v1.md), plus
+[ADR 0013](adr/0013-raw-attempts-lift-to-unverified-candidates.md).
 
 ## Identity boundary
 

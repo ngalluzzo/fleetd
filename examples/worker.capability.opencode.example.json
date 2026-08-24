@@ -6,11 +6,19 @@
   "mcp_grants": [],
   "adapter": {
     "kind": "capability_work_v1",
-    "accepted_capabilities": [
+    "providers": [
       {
-        "package": "dev.fleetd.capability",
-        "name": "generate_runnable_web_surface",
-        "version": "0.1.0"
+        "id": {
+          "package": "dev.fleetd.provider",
+          "name": "opencode_runnable_web",
+          "version": "0.1.0"
+        },
+        "capability": {
+          "package": "dev.fleetd.capability",
+          "name": "generate_runnable_web_surface",
+          "version": "0.1.0"
+        },
+        "implementation_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
       }
     ]
   },

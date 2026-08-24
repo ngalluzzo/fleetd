@@ -3,11 +3,12 @@
 use std::{path::PathBuf, time::Duration};
 
 use fleetd::{
-    CAPABILITY_WORK_ATTEMPT_KIND, CAPABILITY_WORK_REQUEST_KIND, Capability, CapabilityWorkRequest,
+    CAPABILITY_WORK_ATTEMPT_KIND, CAPABILITY_WORK_REQUEST_KIND, Capability,
+    CapabilityAttemptProjection, CapabilityProviderDescriptor, CapabilityWorkRequest,
     CapabilityWorkTurnAdapter, ClaimDeliveries, ContinuousHarnessWorker, ContinuousWorkerConfig,
     ContinuousWorkerError, CreateAgent, CreateChannel, CreateMessage, EnvelopeTurnAdapter,
     ExecutionCertainty, InvocationState, PluginSpec, PreparedTurn, SessionBindingState, Store,
-    ToolBudget, TurnAdapter, TurnPolicy,
+    ToolBudget, TurnAdapter, TurnPolicy, extract_capability_message,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -124,6 +125,14 @@ fn gooir_request() -> CapabilityWorkRequest {
         .expect("decode GOOIR request")
 }
 
+fn provider(request: &CapabilityWorkRequest) -> CapabilityProviderDescriptor {
+    CapabilityProviderDescriptor {
+        id: fleetd::ExactIdentity::new("dev.fleetd.provider", "fixture_runnable_web", "0.1.0"),
+        capability: request.body.capability.clone(),
+        implementation_digest: format!("sha256:{}", "a".repeat(64)),
+    }
+}
+
 async fn append_gooir_request(
     fixture: &Fixture,
     request: &CapabilityWorkRequest,
@@ -236,13 +245,13 @@ async fn gooir_capability_request_binds_exact_work_to_one_owned_session_lane() {
     let request = gooir_request();
     request.validate().expect("validate GOOIR request");
     let source = append_gooir_request(&fixture, &request).await;
-    let adapter = CapabilityWorkTurnAdapter::new([request.body.capability.clone()])
-        .expect("configure exact capability");
+    let adapter =
+        CapabilityWorkTurnAdapter::new([provider(&request)]).expect("configure exact capability");
     let worker = ContinuousHarnessWorker::new(
         &fixture.store,
         worker_config(
             &fixture.receiver_id,
-            "healthy",
+            "capability-candidate",
             PathBuf::from(env!("CARGO_MANIFEST_DIR")),
         ),
         adapter,
@@ -291,6 +300,16 @@ async fn gooir_capability_request_binds_exact_work_to_one_owned_session_lane() {
         .expect("capability attempt result");
     assert_eq!(attempt.correlation_id, Some(request.request_id.clone()));
     assert_eq!(attempt.causation_id, Some(source.id));
+    let projection = extract_capability_message(&request, attempt)
+        .expect("lift raw attempt into exact candidate");
+    let CapabilityAttemptProjection::Candidate(candidate) = projection else {
+        panic!("mock provider emitted a candidate")
+    };
+    assert_eq!(candidate.body.provider, provider(&request));
+    assert_eq!(
+        candidate.body.outputs[0].payload["artifact"],
+        "mock-runnable-web"
+    );
 }
 
 #[tokio::test]
@@ -313,11 +332,15 @@ async fn capability_adapter_rejects_an_unadmitted_exact_capability() {
         .invocations
         .first()
         .expect("one reserved request");
-    let adapter = CapabilityWorkTurnAdapter::new([fleetd::ExactIdentity::new(
-        "dev.fleetd.capability",
-        "different_capability",
-        "0.1.0",
-    )])
+    let adapter = CapabilityWorkTurnAdapter::new([CapabilityProviderDescriptor {
+        id: fleetd::ExactIdentity::new("dev.fleetd.provider", "different", "0.1.0"),
+        capability: fleetd::ExactIdentity::new(
+            "dev.fleetd.capability",
+            "different_capability",
+            "0.1.0",
+        ),
+        implementation_digest: format!("sha256:{}", "b".repeat(64)),
+    }])
     .expect("configure another capability");
 
     let error = adapter

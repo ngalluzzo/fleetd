@@ -8,12 +8,16 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::Message;
+
 pub const CAPABILITY_WORK_REQUEST_KIND: &str = "work.capability.request/v1";
 pub const CAPABILITY_WORK_ATTEMPT_KIND: &str = "work.capability.attempt/v1";
+pub const CAPABILITY_WORK_CANDIDATE_KIND: &str = "work.capability.candidate/v1";
 
 const MAX_IDENTITY_PART_BYTES: usize = 256;
 const MAX_FACTS: usize = 64;
 const MAX_CONFORMANCE_SUITE_BYTES: usize = 512;
+const MAX_DIAGNOSTICS: usize = 64;
 const SHA256_PREFIX: &str = "sha256:";
 
 /// One exact, independently versioned semantic identity.
@@ -146,6 +150,313 @@ impl CapabilityWorkRequest {
     }
 }
 
+/// Exact semantic provider selected by the capability-work adapter. This is
+/// distinct from the harness plugin and transport protocol used to run it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityProviderDescriptor {
+    pub id: ExactIdentity,
+    pub capability: ExactIdentity,
+    pub implementation_digest: String,
+}
+
+impl CapabilityProviderDescriptor {
+    /// Validates exact provider identity, capability, and implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for malformed identities or implementation digests.
+    pub fn validate(&self) -> Result<(), WorkContractError> {
+        validate_identity(&self.id)?;
+        validate_identity(&self.capability)?;
+        validate_sha256(&self.implementation_digest)
+    }
+}
+
+/// One unverified output claimed by a provider attempt.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateFact {
+    pub fact_type: ExactIdentity,
+    pub coverage: FactCoverage,
+    pub payload: Value,
+}
+
+/// Opaque reference to the immutable Fleetd attempt that was lifted.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttemptEvidence {
+    pub authority: String,
+    pub attempt_id: String,
+    pub invocation_id: String,
+    pub evidence_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityCandidateBody {
+    pub request_id: String,
+    pub provider: CapabilityProviderDescriptor,
+    pub outputs: Vec<CandidateFact>,
+    pub attempt: AttemptEvidence,
+}
+
+/// Provider-neutral candidate document emitted by strictly lifting a raw
+/// attempt. Matching output types do not establish conformance or trust.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityCandidate {
+    pub candidate_id: String,
+    #[serde(flatten)]
+    pub body: CapabilityCandidateBody,
+}
+
+impl CapabilityCandidate {
+    /// Binds exact candidate outputs and attempt evidence to a request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for any request, provider, output, or evidence mismatch.
+    pub fn bind(
+        request: &CapabilityWorkRequest,
+        body: CapabilityCandidateBody,
+    ) -> Result<Self, WorkContractError> {
+        validate_candidate_body(request, &body)?;
+        let candidate_id = canonical_digest(&body)?;
+        Ok(Self { candidate_id, body })
+    }
+
+    /// Revalidates a deserialized candidate and its content identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the candidate is malformed or no longer matches
+    /// its deterministic identity.
+    pub fn validate(&self, request: &CapabilityWorkRequest) -> Result<(), WorkContractError> {
+        validate_candidate_body(request, &self.body)?;
+        let expected = canonical_digest(&self.body)?;
+        if self.candidate_id != expected {
+            return Err(WorkContractError::CandidateIdentityMismatch {
+                expected,
+                actual: self.candidate_id.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// A provider may explicitly report that it could not produce a candidate.
+/// This remains durable attempt evidence and never becomes a semantic fact.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityUnable {
+    pub request_id: String,
+    pub provider: CapabilityProviderDescriptor,
+    pub attempt: AttemptEvidence,
+    pub diagnostics: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CapabilityAttemptProjection {
+    Candidate(CapabilityCandidate),
+    Unable(CapabilityUnable),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ProviderResponseStatus {
+    Candidate,
+    Unable,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ProviderConformanceStatus {
+    Unverified,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderResponse {
+    request_id: String,
+    status: ProviderResponseStatus,
+    outputs: Vec<CandidateFact>,
+    conformance_suite: String,
+    #[serde(rename = "conformance_status")]
+    _conformance_status: ProviderConformanceStatus,
+    #[serde(default)]
+    diagnostics: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AttemptResultContext {
+    request_id: String,
+    provider: CapabilityProviderDescriptor,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HarnessAttemptPayload {
+    status: String,
+    invocation_id: String,
+    stop_reason: String,
+    output_complete: bool,
+    assistant_messages: Vec<AttemptAssistantMessage>,
+    #[serde(rename = "usage")]
+    _usage: Value,
+    #[serde(rename = "session_persistence")]
+    _session_persistence: String,
+    result_context: AttemptResultContext,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AttemptAssistantMessage {
+    message_id: Option<String>,
+    content: Vec<Value>,
+    complete: bool,
+    first_event_seq: u64,
+    last_event_seq: u64,
+}
+
+/// Strictly lifts a known-complete harness attempt into either one exact
+/// unverified candidate or an explicit unable result. The raw attempt remains
+/// the evidence authority; prose and malformed JSON fail closed.
+///
+/// # Errors
+///
+/// Returns an error for incomplete terminal evidence, malformed provider JSON,
+/// or any request/provider/output mismatch.
+pub fn extract_capability_attempt(
+    request: &CapabilityWorkRequest,
+    authority: impl Into<String>,
+    attempt_id: impl Into<String>,
+    payload: &Value,
+) -> Result<CapabilityAttemptProjection, WorkContractError> {
+    request.validate()?;
+    let attempt: HarnessAttemptPayload = serde_json::from_value(payload.clone())
+        .map_err(|error| WorkContractError::MalformedAttempt(error.to_string()))?;
+    if attempt.status != "completed"
+        || attempt.stop_reason != "end_turn"
+        || !attempt.output_complete
+    {
+        return Err(WorkContractError::IncompleteAttempt);
+    }
+    if attempt.result_context.request_id != request.request_id {
+        return Err(WorkContractError::RequestMismatch);
+    }
+    attempt.result_context.provider.validate()?;
+    if attempt.result_context.provider.capability != request.body.capability {
+        return Err(WorkContractError::ProviderCapabilityMismatch);
+    }
+    let response_text = exact_assistant_json(&attempt.assistant_messages)?;
+    let response: ProviderResponse = serde_json::from_str(&response_text)
+        .map_err(|error| WorkContractError::MalformedProviderResponse(error.to_string()))?;
+    if response.request_id != request.request_id
+        || response.conformance_suite != request.body.conformance_suite
+    {
+        return Err(WorkContractError::RequestMismatch);
+    }
+    let evidence = AttemptEvidence {
+        authority: authority.into(),
+        attempt_id: attempt_id.into(),
+        invocation_id: attempt.invocation_id,
+        evidence_digest: canonical_digest(payload)?,
+    };
+    match response.status {
+        ProviderResponseStatus::Candidate => {
+            if !response.diagnostics.is_empty() {
+                return Err(WorkContractError::UnexpectedDiagnostics);
+            }
+            Ok(CapabilityAttemptProjection::Candidate(
+                CapabilityCandidate::bind(
+                    request,
+                    CapabilityCandidateBody {
+                        request_id: request.request_id.clone(),
+                        provider: attempt.result_context.provider,
+                        outputs: response.outputs,
+                        attempt: evidence,
+                    },
+                )?,
+            ))
+        }
+        ProviderResponseStatus::Unable => {
+            if !response.outputs.is_empty() || response.diagnostics.is_empty() {
+                return Err(WorkContractError::InvalidUnableResponse);
+            }
+            if response.diagnostics.len() > MAX_DIAGNOSTICS {
+                return Err(WorkContractError::TooMany {
+                    field: "diagnostics",
+                    limit: MAX_DIAGNOSTICS,
+                });
+            }
+            for diagnostic in &response.diagnostics {
+                validate_bounded("diagnostic", diagnostic, MAX_CONFORMANCE_SUITE_BYTES)?;
+            }
+            Ok(CapabilityAttemptProjection::Unable(CapabilityUnable {
+                request_id: request.request_id.clone(),
+                provider: attempt.result_context.provider,
+                attempt: evidence,
+                diagnostics: response.diagnostics,
+            }))
+        }
+    }
+}
+
+/// Strictly lifts one immutable Fleetd attempt message, deriving attempt
+/// authority and identity from the durable envelope instead of caller input.
+///
+/// # Errors
+///
+/// Returns an error when envelope kind, correlation, causation, payload, or
+/// candidate bindings do not match the exact request.
+pub fn extract_capability_message(
+    request: &CapabilityWorkRequest,
+    message: &Message,
+) -> Result<CapabilityAttemptProjection, WorkContractError> {
+    if message.kind != CAPABILITY_WORK_ATTEMPT_KIND {
+        return Err(WorkContractError::AttemptKindMismatch);
+    }
+    if message.correlation_id.as_deref() != Some(request.request_id.as_str()) {
+        return Err(WorkContractError::AttemptCorrelationMismatch);
+    }
+    if message.causation_id.is_none() {
+        return Err(WorkContractError::AttemptCausationMissing);
+    }
+    let authority = format!("dev.fleetd.agent/{}", message.sender_id);
+    let projection = extract_capability_attempt(request, authority, &message.id, &message.payload)?;
+    let evidence_digest = canonical_digest(message)?;
+    match projection {
+        CapabilityAttemptProjection::Candidate(mut candidate) => {
+            candidate.body.attempt.evidence_digest = evidence_digest;
+            Ok(CapabilityAttemptProjection::Candidate(
+                CapabilityCandidate::bind(request, candidate.body)?,
+            ))
+        }
+        CapabilityAttemptProjection::Unable(mut unable) => {
+            unable.attempt.evidence_digest = evidence_digest;
+            Ok(CapabilityAttemptProjection::Unable(unable))
+        }
+    }
+}
+
+/// Adapter-owned context persisted verbatim with raw terminal evidence.
+///
+/// # Errors
+///
+/// Returns an error if the exact context cannot be represented as JSON.
+pub fn capability_attempt_context(
+    request: &CapabilityWorkRequest,
+    provider: &CapabilityProviderDescriptor,
+) -> Result<Value, WorkContractError> {
+    serde_json::to_value(AttemptResultContext {
+        request_id: request.request_id.clone(),
+        provider: provider.clone(),
+    })
+    .map_err(|error| WorkContractError::Serialization(error.to_string()))
+}
+
 #[derive(Debug, Error)]
 pub enum WorkContractError {
     #[error("{0} must not be empty")]
@@ -169,7 +480,35 @@ pub enum WorkContractError {
     InvalidFactId(String),
     #[error("request identity mismatch: expected {expected}, received {actual}")]
     IdentityMismatch { expected: String, actual: String },
-    #[error("work request could not be serialized: {0}")]
+    #[error("candidate identity mismatch: expected {expected}, received {actual}")]
+    CandidateIdentityMismatch { expected: String, actual: String },
+    #[error("candidate does not bind the exact capability request")]
+    RequestMismatch,
+    #[error("configured provider does not implement the requested exact capability")]
+    ProviderCapabilityMismatch,
+    #[error("candidate outputs do not exactly match the requested output set")]
+    OutputSetMismatch,
+    #[error("candidate attempt evidence is malformed")]
+    InvalidAttemptEvidence,
+    #[error("harness attempt is not a complete successful terminal result")]
+    IncompleteAttempt,
+    #[error("harness attempt payload is malformed: {0}")]
+    MalformedAttempt(String),
+    #[error("message is not a capability attempt")]
+    AttemptKindMismatch,
+    #[error("attempt correlation does not equal the capability request identity")]
+    AttemptCorrelationMismatch,
+    #[error("capability attempt is missing request-message causation")]
+    AttemptCausationMissing,
+    #[error("provider response is malformed: {0}")]
+    MalformedProviderResponse(String),
+    #[error("provider attempt must contain exactly one complete JSON-only assistant message")]
+    AmbiguousAssistantOutput,
+    #[error("candidate response must not contain diagnostics")]
+    UnexpectedDiagnostics,
+    #[error("unable response must contain diagnostics and no outputs")]
+    InvalidUnableResponse,
+    #[error("work contract could not be serialized: {0}")]
     Serialization(String),
 }
 
@@ -235,6 +574,86 @@ fn validate_body(body: &CapabilityWorkBody) -> Result<(), WorkContractError> {
     Ok(())
 }
 
+fn validate_candidate_body(
+    request: &CapabilityWorkRequest,
+    body: &CapabilityCandidateBody,
+) -> Result<(), WorkContractError> {
+    request.validate()?;
+    if body.request_id != request.request_id {
+        return Err(WorkContractError::RequestMismatch);
+    }
+    body.provider.validate()?;
+    if body.provider.capability != request.body.capability {
+        return Err(WorkContractError::ProviderCapabilityMismatch);
+    }
+    validate_count("candidate outputs", body.outputs.len())?;
+    let mut outputs = BTreeSet::new();
+    for output in &body.outputs {
+        validate_identity(&output.fact_type)?;
+        if !outputs.insert(output.fact_type.clone()) {
+            return Err(WorkContractError::DuplicateIdentity {
+                field: "candidate output",
+                identity: output.fact_type.clone(),
+            });
+        }
+    }
+    if outputs != request.body.produces.iter().cloned().collect() {
+        return Err(WorkContractError::OutputSetMismatch);
+    }
+    validate_bounded(
+        "attempt authority",
+        &body.attempt.authority,
+        MAX_CONFORMANCE_SUITE_BYTES,
+    )?;
+    validate_bounded(
+        "attempt identity",
+        &body.attempt.attempt_id,
+        MAX_IDENTITY_PART_BYTES,
+    )?;
+    validate_bounded(
+        "invocation identity",
+        &body.attempt.invocation_id,
+        MAX_IDENTITY_PART_BYTES,
+    )?;
+    validate_sha256(&body.attempt.evidence_digest)
+        .map_err(|_| WorkContractError::InvalidAttemptEvidence)
+}
+
+fn exact_assistant_json(messages: &[AttemptAssistantMessage]) -> Result<String, WorkContractError> {
+    let [message] = messages else {
+        return Err(WorkContractError::AmbiguousAssistantOutput);
+    };
+    if !message.complete
+        || message.first_event_seq == 0
+        || message.first_event_seq > message.last_event_seq
+    {
+        return Err(WorkContractError::AmbiguousAssistantOutput);
+    }
+    let _ = &message.message_id;
+    if message.content.is_empty() {
+        return Err(WorkContractError::AmbiguousAssistantOutput);
+    }
+    let mut text = String::new();
+    for block in &message.content {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct TextBlock {
+            r#type: String,
+            text: String,
+        }
+        let block: TextBlock = serde_json::from_value(block.clone())
+            .map_err(|_| WorkContractError::AmbiguousAssistantOutput)?;
+        if block.r#type != "text" {
+            return Err(WorkContractError::AmbiguousAssistantOutput);
+        }
+        text.push_str(&block.text);
+    }
+    if text.trim().is_empty() {
+        return Err(WorkContractError::AmbiguousAssistantOutput);
+    }
+    Ok(text)
+}
+
 fn validate_identity(identity: &ExactIdentity) -> Result<(), WorkContractError> {
     validate_identity_part("identity package", &identity.package)?;
     validate_identity_part("identity name", &identity.name)?;
@@ -291,7 +710,11 @@ fn validate_sha256(value: &str) -> Result<(), WorkContractError> {
 }
 
 fn body_digest(body: &CapabilityWorkBody) -> Result<String, WorkContractError> {
-    let bytes = serde_json_canonicalizer::to_vec(body)
+    canonical_digest(body)
+}
+
+fn canonical_digest(value: &impl Serialize) -> Result<String, WorkContractError> {
+    let bytes = serde_json_canonicalizer::to_vec(value)
         .map_err(|error| WorkContractError::Serialization(error.to_string()))?;
     let digest = Sha256::digest(bytes);
     let mut output = String::with_capacity(SHA256_PREFIX.len() + digest.len() * 2);
@@ -391,5 +814,139 @@ mod tests {
         encoded["unknown_contract_field"] = json!(true);
 
         assert!(serde_json::from_value::<CapabilityWorkRequest>(encoded).is_err());
+    }
+
+    fn provider(request: &CapabilityWorkRequest) -> CapabilityProviderDescriptor {
+        CapabilityProviderDescriptor {
+            id: ExactIdentity::new("test.provider", "agent", "1.0.0"),
+            capability: request.body.capability.clone(),
+            implementation_digest: format!("sha256:{}", "b".repeat(64)),
+        }
+    }
+
+    fn attempt_payload(request: &CapabilityWorkRequest, response: &Value) -> Value {
+        json!({
+            "status": "completed",
+            "invocation_id": "invocation-1",
+            "stop_reason": "end_turn",
+            "output_complete": true,
+            "assistant_messages": [{
+                "message_id": null,
+                "content": [{"type": "text", "text": serde_json::to_string(&response).unwrap()}],
+                "complete": true,
+                "first_event_seq": 1,
+                "last_event_seq": 1
+            }],
+            "usage": {},
+            "session_persistence": "runtime_claimed",
+            "result_context": capability_attempt_context(request, &provider(request)).unwrap()
+        })
+    }
+
+    #[test]
+    fn exact_attempt_is_lifted_to_an_unverified_candidate() {
+        let request = request(FactCoverage::Complete);
+        let response = json!({
+            "request_id": request.request_id,
+            "status": "candidate",
+            "outputs": [{
+                "fact_type": request.body.produces[0],
+                "coverage": "complete",
+                "payload": {"artifact": "candidate"}
+            }],
+            "conformance_suite": request.body.conformance_suite,
+            "conformance_status": "unverified",
+            "diagnostics": []
+        });
+        let payload = attempt_payload(&request, &response);
+
+        let projection =
+            extract_capability_attempt(&request, "test.fleetd/worker@1", "attempt-1", &payload)
+                .expect("lift exact candidate");
+        let CapabilityAttemptProjection::Candidate(candidate) = projection else {
+            panic!("candidate response must lift to candidate")
+        };
+        candidate.validate(&request).expect("candidate validates");
+        assert!(candidate.candidate_id.starts_with(SHA256_PREFIX));
+        assert_eq!(candidate.body.provider, provider(&request));
+        assert_eq!(candidate.body.outputs[0].payload["artifact"], "candidate");
+        assert_eq!(candidate.body.attempt.invocation_id, "invocation-1");
+    }
+
+    #[test]
+    fn prose_or_markdown_cannot_be_mistaken_for_a_candidate() {
+        let request = request(FactCoverage::Complete);
+        let response = json!({
+            "request_id": request.request_id,
+            "status": "unable",
+            "outputs": [],
+            "conformance_suite": request.body.conformance_suite,
+            "conformance_status": "unverified",
+            "diagnostics": ["not implemented"]
+        });
+        let mut payload = attempt_payload(&request, &response);
+        let text = payload["assistant_messages"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        payload["assistant_messages"][0]["content"][0]["text"] =
+            json!(format!("```json\n{text}\n```"));
+
+        assert!(matches!(
+            extract_capability_attempt(&request, "fleetd", "attempt-1", &payload),
+            Err(WorkContractError::MalformedProviderResponse(_))
+        ));
+    }
+
+    #[test]
+    fn unable_attempt_remains_explicit_and_produces_no_candidate() {
+        let request = request(FactCoverage::Complete);
+        let response = json!({
+            "request_id": request.request_id,
+            "status": "unable",
+            "outputs": [],
+            "conformance_suite": request.body.conformance_suite,
+            "conformance_status": "unverified",
+            "diagnostics": ["workspace authority was insufficient"]
+        });
+        let payload = attempt_payload(&request, &response);
+
+        let projection =
+            extract_capability_attempt(&request, "fleetd", "attempt-1", &payload).unwrap();
+        let CapabilityAttemptProjection::Unable(unable) = projection else {
+            panic!("unable response must not become candidate")
+        };
+        assert_eq!(
+            unable.diagnostics,
+            vec!["workspace authority was insufficient"]
+        );
+    }
+
+    #[test]
+    fn checked_in_gooir_attempt_message_has_the_cross_repository_candidate_identity() {
+        let request: CapabilityWorkRequest = serde_json::from_str(include_str!(
+            "../tests/fixtures/gooir_runnable_web_request.json"
+        ))
+        .unwrap();
+        let attempt: Message = serde_json::from_str(include_str!(
+            "../tests/fixtures/gooir_runnable_web_attempt_message.json"
+        ))
+        .unwrap();
+
+        let projection = extract_capability_message(&request, &attempt).unwrap();
+        let CapabilityAttemptProjection::Candidate(candidate) = projection else {
+            panic!("checked-in attempt is a candidate")
+        };
+        assert_eq!(
+            candidate.candidate_id,
+            "sha256:a2262fbc6ce8af0f59b33c0ec67af7cec2398670b1c7ebb837ab8d256beb802e"
+        );
+
+        let mut wrong_envelope = attempt;
+        wrong_envelope.correlation_id = Some("different-request".to_owned());
+        assert!(matches!(
+            extract_capability_message(&request, &wrong_envelope),
+            Err(WorkContractError::AttemptCorrelationMismatch)
+        ));
     }
 }

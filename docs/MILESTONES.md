@@ -29,6 +29,10 @@
 
 - [x] Bind a GOOIR capability need to exact facts and carry it through one
   durable, owner-fenced provider attempt.
+- [x] Persist exact semantic-provider context and strictly lift a raw attempt
+  into a content-addressed candidate or explicit unable result.
+- Implement the first real independently identified conformance provider and
+  return its admitted result to the GOOIR graph.
 - Versioned task, progress, result, review, and approval contracts.
 - Dependency scheduling expressed outside the messaging kernel.
 - A complete author-reviewer loop exercised on fleetd itself.

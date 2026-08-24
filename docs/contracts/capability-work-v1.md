@@ -82,27 +82,63 @@ cargo run -- --token-file .fleetd/requester.token work submit \
   --request /path/to/runnable-web-request.json
 ```
 
-The capability worker configuration names the exact capabilities that seat may
-attempt. The adapter rejects any other capability before arming dispatch. A
-valid request receives a `per-work-contract` session lane keyed by
+The capability worker configuration names exact semantic providers: each has
+an identity, exact capability, and implementation digest. This is not the
+harness-plugin identity. The adapter rejects any other capability before
+arming dispatch. A valid request receives a `per-work-contract` session keyed by
 `request_id`; the existing invocation and session tables durably bind the
 immutable request message to binding generation and owner epoch.
 
 The first response kind is `work.capability.attempt/v1`. It is harness terminal
-evidence correlated to the request, not an accepted semantic output. The agent
-is instructed to return candidate produced facts and to mark conformance
-`unverified`. fleetd does not yet extract those candidates or run the named
-suite.
+evidence correlated to the request, not an accepted semantic output. The
+controller also persists adapter-owned `result_context` containing the exact
+request and semantic-provider identities. The agent cannot choose that context.
+
+The provider must return exactly one complete raw JSON object:
+
+```json
+{
+  "request_id": "sha256:...",
+  "status": "candidate",
+  "outputs": [
+    {
+      "fact_type": {
+        "package": "org.gooi.artifact.web",
+        "name": "runnable_fleetd_surface",
+        "version": "0.1.0"
+      },
+      "coverage": "complete",
+      "payload": {}
+    }
+  ],
+  "conformance_suite": "dev.fleetd.conformance.runnable_web_surface@0.1.0",
+  "conformance_status": "unverified",
+  "diagnostics": []
+}
+```
+
+An unable response uses `status: "unable"`, an empty output list, and at least
+one bounded diagnostic. A candidate has the exact requested output set and no
+diagnostics. Markdown fences, prose, non-text output, multiple assistant
+messages, missing or duplicate facts, and changed request/suite identities are
+rejected.
+
+`fleetd work extract` validates the immutable attempt message kind,
+correlation, and causation, derives provider-agent authority from the envelope,
+and hashes the complete message before emitting a provider-neutral
+`CapabilityCandidate`. Its `candidate_id` is lower-case
+`sha256:` over RFC 8785 canonical JSON of the request identity, configured
+provider, output facts, and attempt evidence. This lift establishes exact shape
+and provenance only. Fleetd does not run or assert the named conformance suite.
 
 ## Deliberate omissions
 
 - No capability broker chooses a recipient; submission selects one exact
   agent.
-- Agent eligibility is configured at the worker adapter and is not proof of
-  conformance.
+- Semantic-provider configuration means eligibility, not conformance.
 - No arbitrary validation commands or generic plugin execution method appear
   in the contract.
-- Progress, dependency, review, approval, and accepted-result contracts remain
-  separate M2 work.
+- The real runnable-web conformance provider, progress, dependency, review,
+  approval, and accepted-result publication remain separate M2 work.
 - A provider-specific protocol such as ACP or a vendor harness is not part of
   the request meaning.

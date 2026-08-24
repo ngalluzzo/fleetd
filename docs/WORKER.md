@@ -49,12 +49,15 @@ kernel.
 
 Set `adapter.kind` to `capability_work_v1` to use the first such adapter; see
 [`worker.capability.opencode.example.json`](../examples/worker.capability.opencode.example.json).
-Its `accepted_capabilities` list is exact: no name-only or version-range match
-is permitted. It validates `work.capability.request/v1`, requires message
-correlation to equal the request identity, rejects partial facts where the
-capability requires completeness, and uses one lane per work contract. The
-selected harness is still only a candidate provider. Its attempt result does
-not establish that the named conformance suite passed.
+Its `providers` list gives each semantic provider an exact identity,
+capability, and implementation digest; no name-only or version-range match is
+permitted. This identity is distinct from the selected harness plugin. The
+adapter validates `work.capability.request/v1`, requires message correlation to
+equal the request identity, rejects partial facts where the capability requires
+completeness, and uses one lane per work contract. It persists the provider
+descriptor beside raw terminal evidence so a later strict lift does not trust
+an agent to report its own identity. The extracted candidate still does not
+establish that the named conformance suite passed.
 
 The lease must cover the configured wall timeout, cancellation drain timeout,
 and a 60-second settlement margin. Permission requests are denied by the

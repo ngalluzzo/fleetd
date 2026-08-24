@@ -225,10 +225,25 @@ Run the selected seat with
 [`examples/worker.capability.opencode.example.json`](examples/worker.capability.opencode.example.json).
 The adapter accepts only configured exact capabilities and the existing
 invocation/session machinery binds the immutable request to one owner epoch.
-Its correlated `work.capability.attempt/v1` response is still an unverified
-candidate; result extraction and conformance admission are the next boundary.
+Each configured semantic provider has its own exact identity and implementation
+digest; neither is confused with OpenCode or ACP. Its correlated
+`work.capability.attempt/v1` response remains raw terminal evidence. Strictly
+lift a saved immutable attempt message without interpreting prose or manually
+supplying its authority:
+
+```sh
+cargo run -- work extract \
+  --request /tmp/fleetd-web-request.json \
+  --attempt-message /tmp/fleetd-web-attempt-message.json
+```
+
+The command emits an exact `CapabilityCandidate` or an explicit unable result.
+The candidate is still unverified; GOOIR runs the separately identified named
+suite before admitting any facts. Fleetd's checked-in attempt fixture and
+GOOIR's matching candidate fixture have the same RFC 8785/SHA-256 identity.
 See the [capability work contract](docs/contracts/capability-work-v1.md) and
-[ADR 0012](docs/adr/0012-capability-needs-become-durable-work.md).
+[ADR 0012](docs/adr/0012-capability-needs-become-durable-work.md) plus
+[ADR 0013](docs/adr/0013-raw-attempts-lift-to-unverified-candidates.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [API contract](docs/API_CONTRACT.md), [protocol](docs/PROTOCOL.md), and

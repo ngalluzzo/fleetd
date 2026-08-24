@@ -42,6 +42,8 @@ already-proven invocation and owner-epoch fences. Replacing the harness plugin
 does not change capability meaning. A wrong capability, changed body, partial
 complete-only input, or mismatched correlation fails before dispatch.
 
-This does not yet implement provider discovery, candidate-result extraction,
-conformance execution, review, or acceptance. Those remain visible next steps
-instead of being hidden in an agent prompt.
+Provider discovery, conformance execution, review, and acceptance remain
+visible next steps instead of being hidden in an agent prompt. Strict
+candidate-result extraction was added by
+[ADR 0013](0013-raw-attempts-lift-to-unverified-candidates.md); it does not
+retroactively make an attempt or candidate trusted.

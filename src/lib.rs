@@ -40,9 +40,12 @@ pub use session_binding::{
 };
 pub use store::{AppendMessageResult, Store};
 pub use work_contract::{
-    BoundFact, CAPABILITY_WORK_ATTEMPT_KIND, CAPABILITY_WORK_REQUEST_KIND, CapabilityWorkBody,
+    AttemptEvidence, BoundFact, CAPABILITY_WORK_ATTEMPT_KIND, CAPABILITY_WORK_CANDIDATE_KIND,
+    CAPABILITY_WORK_REQUEST_KIND, CandidateFact, CapabilityAttemptProjection, CapabilityCandidate,
+    CapabilityCandidateBody, CapabilityProviderDescriptor, CapabilityUnable, CapabilityWorkBody,
     CapabilityWorkRequest, ExactIdentity, FactAcceptance, FactCoverage, FactRequirement,
-    WorkContractError,
+    WorkContractError, capability_attempt_context, extract_capability_attempt,
+    extract_capability_message,
 };
 pub use worker::{
     CapabilityWorkTurnAdapter, ContinuousHarnessWorker, ContinuousWorkerConfig,

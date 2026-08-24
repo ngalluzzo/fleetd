@@ -1,0 +1,38 @@
+{
+  "status": "completed",
+  "invocation_id": "fixture-invocation-1",
+  "stop_reason": "end_turn",
+  "output_complete": true,
+  "assistant_messages": [
+    {
+      "message_id": null,
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"request_id\":\"sha256:1cfa575c40e4f44d7201fe1ccc7cf3cc912fc88aa14b80531d6a49c62ea9886f\",\"status\":\"candidate\",\"outputs\":[{\"fact_type\":{\"package\":\"org.gooi.artifact.web\",\"name\":\"runnable_fleetd_surface\",\"version\":\"0.1.0\"},\"coverage\":\"complete\",\"payload\":{\"artifact\":\"mock-runnable-web\"}}],\"conformance_suite\":\"dev.fleetd.conformance.runnable_web_surface@0.1.0\",\"conformance_status\":\"unverified\",\"diagnostics\":[]}"
+        }
+      ],
+      "complete": true,
+      "first_event_seq": 1,
+      "last_event_seq": 1
+    }
+  ],
+  "usage": {},
+  "session_persistence": "runtime_claimed",
+  "result_context": {
+    "request_id": "sha256:1cfa575c40e4f44d7201fe1ccc7cf3cc912fc88aa14b80531d6a49c62ea9886f",
+    "provider": {
+      "id": {
+        "package": "dev.fleetd.provider",
+        "name": "fixture_runnable_web",
+        "version": "0.1.0"
+      },
+      "capability": {
+        "package": "dev.fleetd.capability",
+        "name": "generate_runnable_web_surface",
+        "version": "0.1.0"
+      },
+      "implementation_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+}
