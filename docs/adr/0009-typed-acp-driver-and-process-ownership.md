@@ -1,5 +1,9 @@
 # ADR 0009: The ACP driver is typed and shares process ownership with its runtime
 
+> The generic production-driver portion of this ADR is superseded by
+> [ADR 0011](0011-vendor-owned-harness-plugins.md). Process ownership and typed
+> ACP translation now live in a policy-free shared host used by vendor plugins.
+
 - Status: accepted
 - Date: 2026-08-24
 

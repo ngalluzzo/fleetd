@@ -66,6 +66,7 @@ pub enum DriverError {
 }
 
 impl DriverError {
+    #[must_use]
     pub const fn code(&self) -> i64 {
         match self {
             Self::InvalidConfig(_) | Self::Protocol(_) | Self::Json(_) => -32602,
@@ -91,8 +92,9 @@ pub struct DriverRuntime {
 impl DriverRuntime {
     pub async fn start(
         config: DriverConfig,
+        allowed_environment: &[&str],
     ) -> Result<(Self, mpsc::Receiver<DriverNotification>), DriverError> {
-        config.validate()?;
+        config.validate(allowed_environment)?;
         let executable_digest = digest_file(&config.runtime.identity_path)?;
         let profile_digest = config.profile_digest.clone();
         let (commands, command_rx) = mpsc::channel(32);
@@ -210,7 +212,7 @@ impl DriverRuntime {
 }
 
 impl DriverConfig {
-    fn validate(&self) -> Result<(), DriverError> {
+    fn validate(&self, allowed_environment: &[&str]) -> Result<(), DriverError> {
         if self.profile_digest.trim().is_empty() {
             return Err(DriverError::InvalidConfig(
                 "profile_digest must not be empty".to_owned(),
@@ -226,10 +228,7 @@ impl DriverConfig {
             ));
         }
         for name in self.runtime.environment.keys() {
-            if !matches!(
-                name.as_str(),
-                "HOME" | "PATH" | "CODEX_HOME" | "DSH_HOME" | "NO_BROWSER" | "TERM" | "TMPDIR"
-            ) {
+            if !allowed_environment.contains(&name.as_str()) {
                 return Err(DriverError::InvalidConfig(format!(
                     "environment variable is not an approved non-secret setting: {name}"
                 )));
@@ -361,7 +360,7 @@ async fn run_acp(
 
     let connection = agent_client_protocol::Client
         .builder()
-        .name("fleetd-acp-driver")
+        .name("fleetd-acp-host")
         .on_receive_notification(
             async move |notification: RawSessionNotification, _connection| {
                 handle_session_update(&update_shared, &update_notifications, notification.0)
@@ -446,7 +445,7 @@ async fn initialize_runtime(
     profile_digest: String,
 ) -> Result<(DescribeResult, bool), DriverError> {
     let request = InitializeRequest::new(ProtocolVersion::V1).client_info(Implementation::new(
-        "fleetd-acp-driver",
+        "fleetd-acp-host",
         env!("CARGO_PKG_VERSION"),
     ));
     let raw_initialize = connection

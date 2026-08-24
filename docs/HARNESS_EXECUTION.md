@@ -1,9 +1,9 @@
 # Harness execution architecture
 
-Status: implementation baseline for M1. The typed host, generic driver,
+Status: implementation baseline for M1. The typed host, vendor-owned plugins,
 durable session owner fencing, and continuous local worker exist; the
-capability contract remains a draft until it passes the complete Codex and DSH
-qualification matrix.
+capability contract remains a draft until two independently versioned harness
+plugins pass the complete qualification matrix.
 
 This document defines the layer between fleetd's durable agent inbox and an
 agent harness. It deliberately does not add harness concepts to the messaging
@@ -41,11 +41,13 @@ flowchart TB
     end
 
     subgraph worker[Replaceable worker seat]
-        driver[fleetd ACP driver plugin<br/>typed fleet contract outside · ACP client inside]
-        acp[ACP harness process<br/>codex-acp or dsh-acp]
-        session[(Harness session store<br/>owned by Codex / DSH)]
+        driver[Harness plugin<br/>OpenCode · Codex · DSH]
+        host[Shared policy-free ACP host]
+        acp[Vendor ACP harness process]
+        session[(Harness session store<br/>owned by the vendor harness)]
 
-        driver <-->|ACP v1| acp
+        driver --- host
+        host <-->|ACP v1| acp
         acp <--> session
     end
 
@@ -67,10 +69,12 @@ local process against the same authoritative SQLite database. A future remote
 worker can exercise equivalent logic through a dedicated authenticated API
 only after transport and enrollment are designed.
 
-The ACP driver and harness are separate processes. The driver speaks fleetd's
-strict plugin lifecycle on its outer stdio and uses an authoritative ACP SDK on
-its inner connection. It is not a JSON-RPC tunnel: only the methods in the
-draft `harness.acp` capability cross the fleet boundary.
+Each harness plugin and its native runtime are separate processes. The plugin
+uses the shared ACP host to speak fleetd's strict lifecycle on outer stdio and
+an authoritative ACP SDK on the inner connection. Vendor identity, model
+selection, arguments, and environment grants belong to the plugin, never the
+shared host or worker. This is not a JSON-RPC tunnel: only methods in the draft
+`harness.acp` capability cross the fleet boundary.
 
 ## Four protocol layers
 
@@ -81,9 +85,9 @@ draft `harness.acp` capability cross the fleet boundary.
 | L2 | ACP v1 | Initialize an agent, create/load sessions, prompt, stream updates, request permission, and cancel | Harness/session authority |
 | L3 | Harness internals | Transcript, model loop, tools, sandbox, skills, compaction, provider calls | Harness-specific |
 
-ACP v1 is the qualified target today. The driver records the exact SDK/schema
-version and preserves ACP `_meta` and unknown update data. ACP v2 is currently
-an unstable, materially different prompt lifecycle and must earn a new driver
+ACP v1 is the qualified target today. The shared host records the exact
+SDK/schema version and preserves ACP `_meta` and unknown update data. ACP v2 is
+currently an unstable, materially different prompt lifecycle and must earn a new host
 qualification; it is not selected merely because a package contains its
 schema.
 
@@ -166,7 +170,7 @@ remain logical targets rather than migrations.
 An immutable desired/effective launch snapshot:
 
 - profile ID and content digest;
-- ACP driver executable digest and version;
+- harness plugin executable digest and version;
 - inner ACP executable digest and version;
 - exact arguments and explicitly granted environment names;
 - ACP SDK/schema version;
@@ -297,7 +301,7 @@ to the invocation grant or a versioned work policy, not the messaging kernel.
 sequenceDiagram
     participant K as Kernel / SQLite
     participant C as Worker controller
-    participant P as ACP driver plugin
+    participant P as Harness plugin
     participant A as ACP harness
     participant B as Capability broker
 
@@ -448,35 +452,35 @@ one of these enforcement strengths:
 | --- | --- |
 | Wall-clock deadline | `hard` in the controller |
 | Idle deadline | `hard` from valid observed activity |
-| Cancellation drain deadline | `hard` in controller and driver |
-| Captured event/output bytes | `hard` at the driver boundary |
+| Cancellation drain deadline | `hard` in controller and ACP host |
+| Captured event/output bytes | `hard` at the ACP host boundary |
 | Tool calls or batches | `observe_then_cancel` unless permission/MCP mediation gates admission |
 | Tokens | `provider_enforced` or `observe_then_cancel`; never inferred from prompt text |
 | External side effects | `hard` only through an idempotent or authorization-mediating capability |
 
 ACP tool updates may arrive after the harness has already admitted a tool. The
-driver therefore cannot advertise a hard tool budget merely because it counts
+ACP host therefore cannot advertise a hard tool budget merely because it counts
 updates. A hard budget requires ACP permission requests, brokered MCP tools, or
 another pre-execution gate.
 
 ACP is bidirectional internally: an agent may request permission or optional
 client filesystem/terminal services. The fleetd outer lifecycle intentionally
-does not accept plugin-initiated requests. The driver bridges permission with a
+does not accept plugin-initiated requests. The ACP host bridges permission with a
 typed notification followed by a host-initiated resolution call. Other ACP
 client services are disabled unless the effective profile advertises a
-separately typed, brokered implementation; the driver never turns them into a
+separately typed, brokered implementation; the ACP host never turns them into a
 generic host-call escape hatch.
 
 Cancellation is a protocol, not a signal:
 
 1. controller fences the invocation as cancelling;
-2. driver sends ACP `session/cancel`;
-3. driver continues accepting final `session/update` tool events;
+2. ACP host sends ACP `session/cancel`;
+3. ACP host continues accepting final `session/update` tool events;
 4. permission requests are answered as cancelled;
 5. original prompt reaches a cancelled terminal response;
 6. only then is the session quiescent and reusable.
 
-If the drain deadline expires, the driver kills the ACP process group and the
+If the drain deadline expires, the plugin host kills the ACP process group and the
 outcome is unknown.
 
 ## Evidence and metrics
@@ -494,7 +498,7 @@ Every normalized value retains provenance:
 ```
 
 Missing is not zero. Cumulative counters are converted to turn deltas only when
-the driver has an unbroken baseline. If a counter disappears, regresses, or
+the ACP host has an unbroken baseline. If a counter disappears, regresses, or
 changes identity, reliability becomes false and stays false for that native
 session unless a protocol-defined reset is observed.
 
@@ -513,7 +517,7 @@ opaque JSON so a newer observer can reinterpret old evidence.
 There are three different credential classes:
 
 1. **Fleet identity:** held only by the trusted controller. Never passed to the
-   driver, ACP harness, MCP tool process, or model environment.
+   harness plugin, ACP runtime, MCP tool process, or model environment.
 2. **Model-provider credential:** supplied to the harness through an explicit
    broker, file descriptor, keychain lookup, or narrowly allowlisted launch
    field. It is never copied into a profile snapshot or log.
@@ -526,17 +530,19 @@ not inherit the fleet credential. This is authority minimization, not an OS
 sandbox: same-UID processes may still inspect user-readable files unless a
 stronger sandbox is added.
 
-The outer driver starts with an empty environment. It launches an absolute ACP
-executable without a shell and constructs a fresh allowlisted environment for
-that child. This specifically prevents leaked `GIT_CONFIG_*`, provider, and
-desktop-process variables from becoming accidental runtime inputs.
+The outer harness plugin starts with an empty environment. Its shared host
+launches an absolute ACP executable without a shell, while the vendor plugin
+constructs the fresh allowlisted environment for that child. The host contains
+no vendor environment names. This specifically prevents leaked `GIT_CONFIG_*`,
+provider, and desktop-process variables from becoming accidental runtime
+inputs.
 
 ## Profiles, qualification, and hot replacement
 
 A runtime is not "DSH" or "Codex" in the abstract. It is an exact profile:
 
 ```text
-driver digest
+harness plugin digest
 + ACP SDK/schema version
 + ACP adapter digest/version
 + harness composition digest
@@ -585,14 +591,14 @@ The first vertical slice now implements:
 
 1. **Descendant cleanup.** The supervisor launches a plugin into a dedicated
    process group, and startup failure, forced shutdown, observed exit, and drop
-   kill that complete group. The driver joins its ACP adapter to the same group
+   kill that complete group. The shared host joins the ACP runtime to the same group
    without a shell. A lifecycle test proves a descendant is reaped on drop.
 2. **Typed domain calls.** `HarnessAcpClient` owns the draft calls and validates
    session bounds, exact fences, and contiguous event sequences. The underlying
    generic JSON-RPC call remains crate-private.
 3. **Explicit backpressure.** The host provides a blocking notification drain;
    buffer overflow becomes a protocol failure rather than deadlock or silent
-   loss. The driver emits bounded ordered updates. Persistent event storage and
+   loss. The shared host emits bounded ordered updates. Persistent event storage and
    safe fragment coalescing remain pending.
 4. **Observed instance evidence.** `describe` reports the profile digest,
    adapter digest, exact runtime identity, ACP SDK/protocol version, effective
@@ -642,7 +648,7 @@ The `harness.acp` capability is not stable until the same tests pass through
 both `codex-acp` and `dsh-acp`:
 
 1. initialize and capture exact effective capabilities;
-2. create a session, finish a turn, restart the driver, and resume a second
+2. create a session, finish a turn, restart the plugin, and resume a second
    turn when the harness advertises support;
 3. preserve text, reasoning, tool, plan, usage, and unknown update data;
 4. reject a stale terminal event after owner epoch changes;
@@ -664,19 +670,22 @@ one ACP session, one correlated result, and one acknowledgement. Workflow,
 review, Git, and multi-agent planning remain later contracts built on that
 loop.
 
-The 2026-08-24 checkpoint has a full mock loop and a real Codex session/turn.
-DSH initialization and exact identity capture pass, while session creation is
-blocked by the local DSH runtime's authentication requirement. See the
-[qualification record](qualification/acp-driver-2026-08-24.md). This partial
-result does not stabilize the capability or satisfy the matrix above.
+The historical 2026-08-24 reference-plugin checkpoint has a full mock loop and
+a real Codex session/turn. OpenCode is now the first separately identified
+plugin with a strict launch schema and mock end-to-end turn. A real OpenCode
+turn and a second vendor-owned plugin are still required. See the
+[qualification record](qualification/acp-driver-2026-08-24.md). These partial
+results and the
+[OpenCode plugin checkpoint](qualification/opencode-plugin-2026-08-24.md) do
+not stabilize the capability or satisfy the matrix above.
 
 ## Deliberate exclusions
 
-- The ACP driver does not schedule a fleet.
+- A harness plugin does not schedule a fleet.
 - DSH Agent Teams are not fleet identities or durable fleet deliveries.
 - The messaging kernel does not parse prompts, transcripts, tool calls, or
   stop reasons.
-- The driver does not expose arbitrary ACP or JSON-RPC methods.
+- The ACP host does not expose arbitrary ACP or JSON-RPC methods.
 - fleetd does not duplicate the DSH or Codex transcript.
 - WebSocket delivery is not work ownership.
 - Session resumption is never inferred from a coincidentally reusable string

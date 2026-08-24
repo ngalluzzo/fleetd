@@ -1,8 +1,8 @@
 [package]
-name = "fleetd-acp-driver"
+name = "fleetd-acp-host"
 version = "0.1.0"
 edition = "2024"
-description = "Typed fleetd harness driver for Agent Client Protocol v1 agents"
+description = "Policy-free typed ACP host shared by fleetd harness plugins"
 license = "MIT"
 
 [dependencies]

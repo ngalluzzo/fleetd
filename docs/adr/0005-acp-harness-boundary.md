@@ -1,5 +1,9 @@
 # ADR 0005: Use ACP inside the harness execution boundary
 
+> The single generic production-driver decision in this ADR is superseded by
+> [ADR 0011](0011-vendor-owned-harness-plugins.md). The typed ACP boundary
+> remains in force; launch policy now belongs to vendor-owned plugins.
+
 - Status: proposed
 - Date: 2026-08-24
 

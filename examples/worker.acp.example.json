@@ -5,8 +5,8 @@
   "additional_directories": [],
   "mcp_grants": [],
   "plugin": {
-    "id": "fleetd.acp-driver",
-    "executable": "/absolute/path/to/fleetd/target/debug/fleetd-acp-driver",
+    "id": "fleetd.acp-reference",
+    "executable": "/absolute/path/to/fleetd/target/debug/fleetd-acp-reference",
     "args": [],
     "config": {
       "profile_digest": "replace-with-qualified-profile-identity",

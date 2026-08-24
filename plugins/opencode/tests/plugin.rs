@@ -9,43 +9,43 @@ use fleetd::{
 use serde_json::json;
 
 fn fixture_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_acp_agent.py")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_opencode.py")
 }
 
-fn driver_spec() -> PluginSpec {
-    PluginSpec::new("fleetd.acp-driver", env!("CARGO_BIN_EXE_fleetd-acp-driver"))
-        .with_config(json!({
-            "profile_digest": "sha256:mock-profile",
-            "runtime": {
-                "expected_name": "mock-acp",
-                "expected_version": "1.0.0",
-                "executable": "/usr/bin/python3",
-                "identity_path": fixture_path(),
-                "args": [fixture_path()],
-                "environment": {}
-            }
-        }))
-        .require(Capability {
-            name: "harness.acp".to_owned(),
-            version: 1,
-        })
-        .with_initialize_timeout(Duration::from_secs(5))
-        .with_request_timeout(Duration::from_secs(5))
+fn plugin_spec() -> PluginSpec {
+    PluginSpec::new(
+        "fleetd.harness.opencode",
+        env!("CARGO_BIN_EXE_fleetd-harness-opencode"),
+    )
+    .with_config(json!({
+        "executable": fixture_path(),
+        "expected_version": "1.4.0",
+        "model": "zai-coding-plan/glm-5.3",
+        "home": std::env::temp_dir(),
+        "path": "/usr/bin:/bin",
+        "term": "xterm-256color",
+        "tmpdir": std::env::temp_dir(),
+    }))
+    .require(Capability {
+        name: "harness.acp".to_owned(),
+        version: 1,
+    })
+    .with_initialize_timeout(Duration::from_secs(5))
+    .with_request_timeout(Duration::from_secs(5))
+    .with_shutdown_timeout(Duration::from_secs(5))
 }
 
 #[tokio::test]
-async fn real_driver_translates_one_typed_acp_turn() {
-    let process = PluginProcess::start(driver_spec())
+async fn opencode_is_a_distinct_typed_harness_plugin() {
+    let process = PluginProcess::start(plugin_spec())
         .await
-        .expect("start ACP driver");
+        .expect("start OpenCode plugin");
+    assert_eq!(process.manifest().plugin.id, "fleetd.harness.opencode");
     let mut harness = process.into_harness_acp().expect("typed harness");
     let description = harness.describe().await.expect("describe");
-    assert_eq!(description.runtime.name, "mock-acp");
-    assert_eq!(description.profile_digest, "sha256:mock-profile");
-    assert_eq!(
-        description.raw_initialize_result["_meta"]["mock"]["preserved"],
-        true
-    );
+    assert_eq!(description.runtime.name, "OpenCode");
+    assert_eq!(description.runtime.version, "1.4.0");
+    assert!(description.profile_digest.starts_with("sha256:"));
 
     let session = harness
         .open_session(&OpenSession {
@@ -58,16 +58,10 @@ async fn real_driver_translates_one_typed_acp_turn() {
             working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
             additional_directories: Vec::new(),
             mcp_grants: Vec::new(),
-            profile_digest: "sha256:mock-profile".to_owned(),
+            profile_digest: description.profile_digest,
         })
         .await
-        .expect("open session");
-    assert_eq!(session.session_ref, "native-session-1");
-    assert_eq!(
-        session.raw_session_result["_meta"]["new"]["preserved"],
-        true
-    );
-
+        .expect("open OpenCode session");
     harness
         .start_turn(&StartTurn {
             fence: ExecutionFence {
@@ -106,22 +100,14 @@ async fn real_driver_translates_one_typed_acp_turn() {
         .expect("start turn");
 
     let event = harness.next_notification().await.expect("turn event");
-    let HarnessAcpNotification::TurnEvent(event) = event else {
-        panic!("expected turn event");
-    };
-    assert_eq!(event.raw_update["mockUnknownField"]["preserved"], true);
+    assert!(matches!(event, HarnessAcpNotification::TurnEvent(_)));
     let terminal = harness.next_notification().await.expect("terminal");
     let HarnessAcpNotification::TurnTerminal(terminal) = terminal else {
         panic!("expected terminal");
     };
-    assert_eq!(terminal.stop_reason, "end_turn");
     assert_eq!(
         terminal.assistant_messages[0].content[0]["text"],
-        "mock answer"
+        "OpenCode answer"
     );
-    assert_eq!(
-        terminal.raw_prompt_response["_meta"]["prompt"]["preserved"],
-        true
-    );
-    harness.shutdown().await.expect("shutdown driver");
+    harness.shutdown().await.expect("shutdown OpenCode plugin");
 }

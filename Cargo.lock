@@ -808,7 +808,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fleetd-acp-driver"
+name = "fleetd-acp-host"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
@@ -821,6 +821,30 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "fleetd-acp-reference"
+version = "0.1.0"
+dependencies = [
+ "fleetd",
+ "fleetd-acp-host",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "fleetd-harness-opencode"
+version = "0.1.0"
+dependencies = [
+ "fleetd",
+ "fleetd-acp-host",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
  "uuid",
 ]
 

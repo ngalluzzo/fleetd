@@ -7,7 +7,7 @@ description = "A local-first control plane for cooperating software agents"
 license = "MIT"
 
 [workspace]
-members = [".", "plugins/acp-driver"]
+members = [".", "crates/acp-host", "plugins/acp-reference", "plugins/opencode"]
 resolver = "2"
 
 [dependencies]

@@ -167,8 +167,9 @@ environment, owns their complete process group, and does not give plugins
 fleetd credentials.
 
 The workspace now includes an experimental typed `harness.acp` host client, a
-generic ACP v1 driver built on the official Rust SDK, and a continuous worker
-that composes inbox reservation, durable session acquisition, owner-epoch
+policy-free ACP v1 host library built on the official Rust SDK, an independently
+identified OpenCode harness plugin, and a continuous worker that composes inbox
+reservation, durable session acquisition, owner-epoch
 fencing, write-ahead arming, prompt drain, atomic completion, conservative
 unknown-outcome parking, and process restart. Compatible restarts resume under
 a higher owner epoch; incompatible profiles rotate the binding generation;
@@ -180,9 +181,8 @@ messaging kernel. Its desired state is an explicit versioned JSON file:
 
 ```sh
 cargo build --workspace
-cp examples/worker.acp.example.json .fleetd/worker.json
-# Fill in the agent ID, absolute paths, exact runtime identity, and allowlisted
-# non-secret environment values.
+cp examples/worker.opencode.example.json .fleetd/worker.json
+# Fill in the agent ID, exact OpenCode executable/version and typed model route.
 cargo run --bin fleetd -- worker run --db .fleetd/fleetd.db \
   --config .fleetd/worker.json
 ```
@@ -193,18 +193,20 @@ completion or a durable block before the plugin generation is stopped. See the
 [worker operations guide](docs/WORKER.md) for configuration and failure
 semantics.
 
-The driver has completed a real Codex turn. DSH initialization and identity
-verification pass, but local session qualification is currently blocked by an
-unconfigured DSH credential, so the capability remains experimental. Persisted
-event evidence and runtime-generation records are the next reliability
-boundary. See
+The old development reference plugin completed a real Codex turn and
+initialized DSH, but deployable integrations now require vendor-owned plugin
+identities. OpenCode is the first production-shaped implementation. A second
+independent harness plugin and persisted event/runtime-generation evidence
+remain the next reliability boundaries. See
 [the harness execution architecture](docs/HARNESS_EXECUTION.md),
 [ADR 0004](docs/adr/0004-out-of-process-capability-plugins.md),
 [ADR 0005](docs/adr/0005-acp-harness-boundary.md),
 [ADR 0008](docs/adr/0008-write-ahead-invocation-fence.md),
 [ADR 0009](docs/adr/0009-typed-acp-driver-and-process-ownership.md),
-[ADR 0010](docs/adr/0010-durable-session-bindings-and-owner-epochs.md), and the
-[qualification record](docs/qualification/acp-driver-2026-08-24.md).
+[ADR 0010](docs/adr/0010-durable-session-bindings-and-owner-epochs.md),
+[ADR 0011](docs/adr/0011-vendor-owned-harness-plugins.md), and the
+[historical reference qualification](docs/qualification/acp-driver-2026-08-24.md)
+and [OpenCode plugin qualification](docs/qualification/opencode-plugin-2026-08-24.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [API contract](docs/API_CONTRACT.md), [protocol](docs/PROTOCOL.md), and

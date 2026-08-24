@@ -7,12 +7,13 @@ not add harness concepts to the public API or messaging kernel.
 
 ## Start one seat
 
-Build the daemon and ACP driver, copy the example desired-state file, then fill
-in every placeholder with an absolute path or exact observed identity:
+Build the daemon and the selected harness plugin, copy its desired-state
+example, then fill in every placeholder with an absolute path or exact observed
+identity. For an OpenCode seat:
 
 ```sh
 cargo build --workspace
-cp examples/worker.acp.example.json .fleetd/worker.json
+cp examples/worker.opencode.example.json .fleetd/worker.json
 cargo run --bin fleetd -- worker run --db .fleetd/fleetd.db \
   --config .fleetd/worker.json
 ```
@@ -22,20 +23,20 @@ qualification run. Without it, the process polls until `Ctrl-C`. Run only one
 seat for a given agent during this first slice; durable session fencing remains
 safe with competing processes, but they will produce avoidable retries.
 
-The configuration schema is versioned and rejects unknown fields. JSON does
-not interpolate environment variables. The values under
-`plugin.config.runtime.environment` are copied literally and must contain only
-the non-secret names accepted by the ACP driver. Never put a fleetd bearer
-credential, provider key, or other secret in this file. The driver starts with
-an empty environment and reconstructs only the explicit allowlist.
+The worker configuration schema is versioned and rejects unknown fields. Each
+harness plugin then validates its own opaque configuration with a strict
+plugin-owned schema. Never put a fleetd bearer credential, provider key, or
+other secret in this file. The plugin process starts with an empty environment;
+the selected plugin constructs only the native settings its integration owns.
 
-`plugin.config.profile_digest` is an operator-owned identifier for the complete
-behavioral profile. Change it when the adapter, model route, arguments, or
-behavior-affecting settings change. The driver separately hashes the adapter at
-`identity_path` and verifies the exact runtime name and version. By default the
-worker resumes only an exact profile digest. Set `compatibility_digest` only
-after a separately qualified set of profiles has proven native-session
-compatibility.
+Harness configuration is plugin-owned. The OpenCode plugin accepts a typed
+model route and exact executable/version, constructs native configuration
+internally, and computes the effective profile digest. It rejects arbitrary
+environment and credential fields. The development-only ACP reference plugin
+retains an operator-supplied profile digest for protocol qualification; do not
+use it as a production vendor adapter. By default the worker resumes only an
+exact observed profile digest. Set `compatibility_digest` only after a
+separately qualified set of profiles has proven native-session compatibility.
 
 ## Turn and lane behavior
 

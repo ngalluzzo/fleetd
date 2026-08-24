@@ -1,5 +1,9 @@
 # ACP driver qualification checkpoint — 2026-08-24
 
+> Historical record: this qualification used the development reference plugin.
+> ADR 0011 now requires deployable harnesses to own separate plugin identities
+> and launch-policy schemas.
+
 This record captures observed behavior of the experimental `harness.acp` v1
 slice. It is not a declaration that the complete acceptance matrix passes.
 

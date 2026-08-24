@@ -81,11 +81,13 @@ storage or authority. See
 
 ## Harness boundary
 
-The experimental harness layer implements one generic ACP v1 driver plugin and
-a typed host client. ACP remains the inner harness protocol; a narrow fleetd
-capability adds invocation identity, session fencing, deadlines, and evidence
-without exposing a generic protocol tunnel. The supervisor owns the driver and
-its ACP runtime as one process group.
+The experimental harness layer has a policy-free typed ACP host library and
+separately identified harness plugins. ACP remains the inner harness protocol;
+a narrow fleetd capability adds invocation identity, session fencing,
+deadlines, and evidence without exposing a generic protocol tunnel. OpenCode,
+Codex, DSH, and future integrations own their launch configuration and
+environment grants in their own plugin packages. The supervisor owns each
+plugin and its ACP runtime as one process group.
 
 A continuous local worker composes atomic reservation with durable session
 binding, exclusive owner epochs, write-ahead dispatch arming, typed prompt
@@ -107,8 +109,9 @@ restart policy remain outside the messaging kernel. See the
 [harness execution architecture](HARNESS_EXECUTION.md),
 [worker operations guide](WORKER.md),
 [ADR 0005](adr/0005-acp-harness-boundary.md),
+[ADR 0011](adr/0011-vendor-owned-harness-plugins.md),
 [ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md), and the
-[qualification record](qualification/acp-driver-2026-08-24.md).
+[OpenCode plugin qualification](qualification/opencode-plugin-2026-08-24.md).
 
 ## Identity boundary
 

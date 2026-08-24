@@ -82,44 +82,39 @@ fn parse_arguments() -> Result<QualificationArgs, Box<dyn std::error::Error>> {
 fn plugin_spec(arguments: &QualificationArgs, profile_digest: &str) -> PluginSpec {
     let mut inner_args = vec![arguments.adapter.clone()];
     inner_args.extend(arguments.runtime_args.clone());
-    PluginSpec::new("fleetd.acp-driver", PathBuf::from(arguments.driver.clone()))
-        .with_config(json!({
-            "profile_digest": profile_digest,
-            "runtime": {
-                "expected_name": arguments.expected_name,
-                "expected_version": arguments.expected_version,
-                "executable": arguments.node,
-                "identity_path": arguments.adapter,
-                "args": inner_args,
-                "environment": allowed_environment(),
-            }
-        }))
-        .require(Capability {
-            name: "harness.acp".to_owned(),
-            version: 1,
-        })
-        .with_initialize_timeout(Duration::from_secs(30))
-        .with_request_timeout(Duration::from_secs(30))
-        .with_shutdown_timeout(Duration::from_secs(5))
+    PluginSpec::new(
+        "fleetd.acp-reference",
+        PathBuf::from(arguments.driver.clone()),
+    )
+    .with_config(json!({
+        "profile_digest": profile_digest,
+        "runtime": {
+            "expected_name": arguments.expected_name,
+            "expected_version": arguments.expected_version,
+            "executable": arguments.node,
+            "identity_path": arguments.adapter,
+            "args": inner_args,
+            "environment": allowed_environment(),
+        }
+    }))
+    .require(Capability {
+        name: "harness.acp".to_owned(),
+        version: 1,
+    })
+    .with_initialize_timeout(Duration::from_secs(30))
+    .with_request_timeout(Duration::from_secs(30))
+    .with_shutdown_timeout(Duration::from_secs(5))
 }
 
 fn allowed_environment() -> BTreeMap<String, String> {
-    [
-        "HOME",
-        "PATH",
-        "CODEX_HOME",
-        "DSH_HOME",
-        "NO_BROWSER",
-        "TERM",
-        "TMPDIR",
-    ]
-    .into_iter()
-    .filter_map(|name| {
-        std::env::var(name)
-            .ok()
-            .map(|value| (name.to_owned(), value))
-    })
-    .collect()
+    ["HOME", "PATH", "TERM", "TMPDIR"]
+        .into_iter()
+        .filter_map(|name| {
+            std::env::var(name)
+                .ok()
+                .map(|value| (name.to_owned(), value))
+        })
+        .collect()
 }
 
 async fn run_prompt(

@@ -15,9 +15,10 @@
   idempotent result append.
 - [x] Atomic delivery reservation and write-ahead invocation dispatch fence.
 - [x] Atomic idempotent result publication and input acknowledgement.
-- [ ] One generic ACP driver qualified against Codex and DSH. The typed driver
-  and real Codex turn pass; DSH initialization passes but session creation is
-  blocked on an approved credential path.
+- [ ] Two independently versioned harness plugins qualified against the shared
+  typed ACP host. OpenCode is the first production-shaped plugin; historical
+  Codex and DSH qualification used the development reference plugin and must
+  move behind their own identities.
 - [x] A managed local worker controller that continuously consumes addressed
   messages and replies with correlation and causation intact, with supervised
   plugin restart and durable native-session adoption.
