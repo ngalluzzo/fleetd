@@ -1,6 +1,21 @@
 #!/bin/sh
 set -eu
 
+cargo run --quiet --bin export-openapi
+git diff --exit-code -- openapi/fleetd-v1.json
+(
+    cd clients/typescript
+    npm ci
+    npm run generate
+    npm run typecheck
+    npm audit --audit-level=moderate
+    if grep -q "streamChannelMessages" src/generated/index.ts; then
+        echo "WebSocket upgrades must not be emitted as Fetch operations" >&2
+        exit 1
+    fi
+)
+git diff --exit-code -- clients/typescript/src/generated
+
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features

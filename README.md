@@ -189,5 +189,5 @@ the next boundary. See
 [qualification record](docs/qualification/acp-driver-2026-08-24.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
-[protocol](docs/PROTOCOL.md), and [milestones](docs/MILESTONES.md) for the
-intended boundaries and next slices.
+[API contract](docs/API_CONTRACT.md), [protocol](docs/PROTOCOL.md), and
+[milestones](docs/MILESTONES.md) for the intended boundaries and next slices.

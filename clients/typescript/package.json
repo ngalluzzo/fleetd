@@ -1,0 +1,25 @@
+{
+  "name": "@fleetd/client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.4.2",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": "./src/generated/index.ts",
+    "./client": "./src/generated/client.gen.ts"
+  },
+  "scripts": {
+    "generate": "openapi-ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@hey-api/openapi-ts": "0.97.3",
+    "typescript": "6.0.3"
+  },
+  "overrides": {
+    "js-yaml": "5.3.0"
+  }
+}

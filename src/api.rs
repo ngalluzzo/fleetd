@@ -7,15 +7,15 @@ use axum::{
     http::{StatusCode, header::AUTHORIZATION},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
 };
-use serde::Deserialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
+use utoipa::{IntoParams, Modify, OpenApi, ToSchema};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::{AuthService, Principal},
-    error::FleetError,
+    error::{ErrorResponse, FleetError},
     model::{
         AckDelivery, AddMember, ArmInvocation, BlockDelivery, ClaimDeliveries, CompleteInvocation,
         CreateAgent, CreateChannel, CreateMessage, Message, ResolveDeliveryBlock, RetryDelivery,
@@ -23,6 +23,47 @@ use crate::{
     },
     store::Store,
 };
+
+const BEARER_AUTH: &str = "bearerAuth";
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "fleetd API",
+        version = "1.0.0",
+        description = "Versioned control-plane contract for cooperating software agents."
+    ),
+    tags(
+        (name = "system", description = "Process health and API discovery"),
+        (name = "agents", description = "Agent identity and credential administration"),
+        (name = "channels", description = "Channel membership and durable messaging"),
+        (name = "deliveries", description = "Leased agent inbox delivery"),
+        (name = "invocations", description = "Crash-safe managed invocation fencing")
+    ),
+    modifiers(&SecurityAddon)
+)]
+struct ApiDoc;
+
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
+
+        openapi
+            .components
+            .get_or_insert_with(Default::default)
+            .add_security_scheme(
+                BEARER_AUTH,
+                SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+            );
+    }
+}
+
+#[derive(Serialize, ToSchema)]
+struct HealthResponse {
+    status: String,
+}
 
 /// Shared dependencies for the HTTP and WebSocket interfaces.
 #[derive(Clone)]
@@ -47,58 +88,59 @@ impl AppState {
 
 /// Builds fleetd's versioned API.
 pub fn router(state: AppState) -> Router {
-    let protected = Router::new()
-        .route("/v1/agents", post(create_agent).get(list_agents))
-        .route(
-            "/v1/agents/{agent_id}/credentials/rotate",
-            post(rotate_agent_credential),
-        )
-        .route("/v1/channels", post(create_channel).get(list_channels))
-        .route("/v1/channels/{channel_id}/members", post(add_member))
-        .route(
-            "/v1/channels/{channel_id}/messages",
-            post(append_message).get(list_messages),
-        )
-        .route("/v1/channels/{channel_id}/stream", get(stream))
-        .route(
-            "/v1/agents/{agent_id}/deliveries/claim",
-            post(claim_deliveries),
-        )
-        .route(
-            "/v1/agents/{agent_id}/deliveries/{message_id}/ack",
-            post(acknowledge_delivery),
-        )
-        .route(
-            "/v1/agents/{agent_id}/deliveries/{message_id}/retry",
-            post(retry_delivery),
-        )
-        .route(
-            "/v1/agents/{agent_id}/deliveries/{message_id}/block",
-            post(block_delivery),
-        )
-        .route("/v1/delivery-blocks", get(list_delivery_blocks))
-        .route(
-            "/v1/delivery-blocks/{block_id}/resolve",
-            post(resolve_delivery_block),
-        )
-        .route(
-            "/v1/agents/{agent_id}/invocations/reserve",
-            post(reserve_invocations),
-        )
-        .route(
-            "/v1/agents/{agent_id}/invocations/{invocation_id}/arm",
-            post(arm_invocation),
-        )
-        .route(
-            "/v1/agents/{agent_id}/invocations/{invocation_id}/complete",
-            post(complete_invocation),
-        )
-        .route("/v1/invocations", get(list_invocations))
-        .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
-    Router::new()
-        .route("/health", get(health))
-        .merge(protected)
-        .with_state(state)
+    let protected: Router<AppState> = protected_contract().into();
+    let protected =
+        protected.route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
+    let public: Router<AppState> = public_contract().into();
+    public.merge(protected).with_state(state)
+}
+
+/// Returns the exact `OpenAPI` document collected from the registered handlers.
+#[must_use]
+pub fn openapi_document() -> utoipa::openapi::OpenApi {
+    public_contract().merge(protected_contract()).into_openapi()
+}
+
+fn public_contract() -> OpenApiRouter<AppState> {
+    OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .routes(routes!(health))
+        .routes(routes!(serve_openapi))
+}
+
+fn protected_contract() -> OpenApiRouter<AppState> {
+    OpenApiRouter::default()
+        .routes(routes!(create_agent, list_agents))
+        .routes(routes!(rotate_agent_credential))
+        .routes(routes!(create_channel, list_channels))
+        .routes(routes!(add_member))
+        .routes(routes!(append_message, list_messages))
+        .routes(routes!(stream))
+        .routes(routes!(claim_deliveries))
+        .routes(routes!(acknowledge_delivery))
+        .routes(routes!(retry_delivery))
+        .routes(routes!(block_delivery))
+        .routes(routes!(list_delivery_blocks))
+        .routes(routes!(resolve_delivery_block))
+        .routes(routes!(reserve_invocations))
+        .routes(routes!(arm_invocation))
+        .routes(routes!(complete_invocation))
+        .routes(routes!(list_invocations))
+}
+
+#[utoipa::path(
+    get,
+    path = "/openapi.json",
+    operation_id = "getOpenApiDocument",
+    tag = "system",
+    summary = "Read the API contract",
+    responses((
+        status = 200,
+        description = "The fleetd OpenAPI 3.1 document",
+        body = serde_json::Value
+    ))
+)]
+async fn serve_openapi() -> Json<utoipa::openapi::OpenApi> {
+    Json(openapi_document())
 }
 
 async fn authenticate(
@@ -128,10 +170,38 @@ fn parse_bearer_token(header: &str) -> Option<&str> {
     Some(token)
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(json!({ "status": "ok" }))
+#[utoipa::path(
+    get,
+    path = "/health",
+    operation_id = "getHealth",
+    tag = "system",
+    summary = "Check process health",
+    responses((status = 200, description = "fleetd is running", body = HealthResponse))
+)]
+async fn health() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "ok".to_owned(),
+    })
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/agents",
+    operation_id = "createAgent",
+    tag = "agents",
+    summary = "Register an agent",
+    description = "Operator-only. Returns the new credential token exactly once.",
+    security(("bearerAuth" = [])),
+    request_body = CreateAgent,
+    responses(
+        (status = 201, description = "Agent registered", body = crate::model::RegisteredAgent),
+        (status = 400, description = "Invalid registration", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 409, description = "Agent name conflicts with existing state", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn create_agent(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -142,6 +212,21 @@ async fn create_agent(
     Ok((StatusCode::CREATED, Json(registration)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/agents",
+    operation_id = "listAgents",
+    tag = "agents",
+    summary = "List agents",
+    description = "Operator-only.",
+    security(("bearerAuth" = [])),
+    responses(
+        (status = 200, description = "Registered agents", body = [crate::model::Agent]),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn list_agents(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -150,6 +235,23 @@ async fn list_agents(
     Ok(Json(state.store.list_agents().await?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/agents/{agent_id}/credentials/rotate",
+    operation_id = "rotateAgentCredential",
+    tag = "agents",
+    summary = "Rotate an agent credential",
+    description = "Operator-only. Immediately revokes earlier credentials and returns the replacement token exactly once.",
+    security(("bearerAuth" = [])),
+    params(("agent_id" = String, Path, description = "Stable agent ID")),
+    responses(
+        (status = 200, description = "Replacement credential", body = crate::model::IssuedCredential),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 404, description = "Agent not found", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn rotate_agent_credential(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -159,6 +261,25 @@ async fn rotate_agent_credential(
     Ok(Json(state.auth.rotate_agent_credential(&agent_id).await?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/channels",
+    operation_id = "createChannel",
+    tag = "channels",
+    summary = "Create a channel",
+    description = "Operator-only. Initial membership is committed with the channel.",
+    security(("bearerAuth" = [])),
+    request_body = CreateChannel,
+    responses(
+        (status = 201, description = "Channel created", body = crate::model::Channel),
+        (status = 400, description = "Invalid channel", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 404, description = "Initial member not found", body = ErrorResponse),
+        (status = 409, description = "Channel conflicts with existing state", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn create_channel(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -169,6 +290,21 @@ async fn create_channel(
     Ok((StatusCode::CREATED, Json(channel)))
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/channels",
+    operation_id = "listChannels",
+    tag = "channels",
+    summary = "List channels",
+    description = "Operator-only.",
+    security(("bearerAuth" = [])),
+    responses(
+        (status = 200, description = "Channels", body = [crate::model::Channel]),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn list_channels(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -177,6 +313,24 @@ async fn list_channels(
     Ok(Json(state.store.list_channels().await?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/channels/{channel_id}/members",
+    operation_id = "addChannelMember",
+    tag = "channels",
+    summary = "Add a channel member",
+    description = "Operator-only. Membership is permanent for the channel lifetime.",
+    security(("bearerAuth" = [])),
+    params(("channel_id" = String, Path, description = "Channel ID")),
+    request_body = AddMember,
+    responses(
+        (status = 204, description = "Member added or already present"),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 404, description = "Channel or agent not found", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn add_member(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -188,6 +342,25 @@ async fn add_member(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/agents/{agent_id}/deliveries/claim",
+    operation_id = "claimDeliveries",
+    tag = "deliveries",
+    summary = "Lease inbox deliveries",
+    description = "Requires the credential bound to the path agent. Returns an empty batch when no work is eligible.",
+    security(("bearerAuth" = [])),
+    params(("agent_id" = String, Path, description = "Agent ID bound to the credential")),
+    request_body = ClaimDeliveries,
+    responses(
+        (status = 200, description = "Leased delivery batch", body = crate::model::ClaimBatch),
+        (status = 400, description = "Invalid lease bounds", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
+        (status = 404, description = "Agent not found", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn claim_deliveries(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -198,6 +371,29 @@ async fn claim_deliveries(
     Ok(Json(state.store.claim_deliveries(&agent_id, input).await?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/agents/{agent_id}/deliveries/{message_id}/ack",
+    operation_id = "acknowledgeDelivery",
+    tag = "deliveries",
+    summary = "Acknowledge a delivery",
+    description = "Requires the bound agent and active lease. Exact settlement replays are idempotent.",
+    security(("bearerAuth" = [])),
+    params(
+        ("agent_id" = String, Path, description = "Agent ID bound to the credential"),
+        ("message_id" = String, Path, description = "Delivered message ID")
+    ),
+    request_body = AckDelivery,
+    responses(
+        (status = 204, description = "Delivery acknowledged"),
+        (status = 400, description = "Invalid lease token", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
+        (status = 404, description = "Delivery not found", body = ErrorResponse),
+        (status = 409, description = "Lease is expired, stale, or mismatched", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn acknowledge_delivery(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -212,6 +408,29 @@ async fn acknowledge_delivery(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/agents/{agent_id}/deliveries/{message_id}/retry",
+    operation_id = "retryDelivery",
+    tag = "deliveries",
+    summary = "Release a delivery for retry",
+    description = "Requires the bound agent and active lease. An armed invocation cannot be retried as ordinary failure.",
+    security(("bearerAuth" = [])),
+    params(
+        ("agent_id" = String, Path, description = "Agent ID bound to the credential"),
+        ("message_id" = String, Path, description = "Delivered message ID")
+    ),
+    request_body = RetryDelivery,
+    responses(
+        (status = 204, description = "Delivery scheduled for retry"),
+        (status = 400, description = "Invalid retry request", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
+        (status = 404, description = "Delivery not found", body = ErrorResponse),
+        (status = 409, description = "Lease conflict or invocation already armed", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn retry_delivery(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -226,6 +445,30 @@ async fn retry_delivery(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/agents/{agent_id}/deliveries/{message_id}/block",
+    operation_id = "blockDelivery",
+    tag = "deliveries",
+    summary = "Park an ambiguously executed delivery",
+    description = "Requires the bound agent and active lease. First creation returns 201; an exact replay returns 200.",
+    security(("bearerAuth" = [])),
+    params(
+        ("agent_id" = String, Path, description = "Agent ID bound to the credential"),
+        ("message_id" = String, Path, description = "Delivered message ID")
+    ),
+    request_body = BlockDelivery,
+    responses(
+        (status = 200, description = "Existing block returned for an exact replay", body = crate::model::BlockedDelivery),
+        (status = 201, description = "Delivery blocked", body = crate::model::BlockedDelivery),
+        (status = 400, description = "Invalid block evidence", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
+        (status = 404, description = "Delivery not found", body = ErrorResponse),
+        (status = 409, description = "Lease conflict or changed replay evidence", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn block_delivery(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -245,11 +488,29 @@ async fn block_delivery(
     Ok((status, Json(blocked)))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 struct DeliveryBlockQuery {
+    /// Limit results to one agent ID.
     agent: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/delivery-blocks",
+    operation_id = "listDeliveryBlocks",
+    tag = "deliveries",
+    summary = "List unresolved delivery blocks",
+    description = "Operator-only. Results may be limited to one agent.",
+    security(("bearerAuth" = [])),
+    params(DeliveryBlockQuery),
+    responses(
+        (status = 200, description = "Unresolved delivery blocks", body = [crate::model::BlockedDelivery]),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn list_delivery_blocks(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -264,6 +525,26 @@ async fn list_delivery_blocks(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/delivery-blocks/{block_id}/resolve",
+    operation_id = "resolveDeliveryBlock",
+    tag = "deliveries",
+    summary = "Resolve a blocked delivery",
+    description = "Operator-only. An identical decision is idempotent; a changed second decision conflicts.",
+    security(("bearerAuth" = [])),
+    params(("block_id" = i64, Path, minimum = 1, description = "Positive delivery block ID")),
+    request_body = ResolveDeliveryBlock,
+    responses(
+        (status = 204, description = "Block resolved"),
+        (status = 400, description = "Invalid resolution", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 404, description = "Block not found", body = ErrorResponse),
+        (status = 409, description = "Block changed or was resolved differently", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn resolve_delivery_block(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -275,6 +556,25 @@ async fn resolve_delivery_block(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/agents/{agent_id}/invocations/reserve",
+    operation_id = "reserveInvocations",
+    tag = "invocations",
+    summary = "Lease and reserve managed invocations",
+    description = "Requires the bound agent. Atomically creates one durable invocation fence per leased delivery.",
+    security(("bearerAuth" = [])),
+    params(("agent_id" = String, Path, description = "Agent ID bound to the credential")),
+    request_body = ClaimDeliveries,
+    responses(
+        (status = 200, description = "Reserved invocation batch", body = crate::model::InvocationBatch),
+        (status = 400, description = "Invalid lease bounds", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
+        (status = 404, description = "Agent not found", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn reserve_invocations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -287,6 +587,29 @@ async fn reserve_invocations(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/agents/{agent_id}/invocations/{invocation_id}/arm",
+    operation_id = "armInvocation",
+    tag = "invocations",
+    summary = "Arm an invocation for effectful dispatch",
+    description = "Requires the bound agent and both active tokens. The durable arm must commit before external dispatch.",
+    security(("bearerAuth" = [])),
+    params(
+        ("agent_id" = String, Path, description = "Agent ID bound to the credential"),
+        ("invocation_id" = String, Path, description = "Invocation ID")
+    ),
+    request_body = ArmInvocation,
+    responses(
+        (status = 200, description = "Armed invocation", body = crate::model::Invocation),
+        (status = 400, description = "Invalid tokens", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
+        (status = 404, description = "Invocation not found", body = ErrorResponse),
+        (status = 409, description = "Lease, fence, or invocation state conflict", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn arm_invocation(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -302,6 +625,30 @@ async fn arm_invocation(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/agents/{agent_id}/invocations/{invocation_id}/complete",
+    operation_id = "completeInvocation",
+    tag = "invocations",
+    summary = "Publish a result and complete an invocation",
+    description = "Requires the bound agent and a live armed invocation. The result, input acknowledgement, and terminal state commit atomically. First completion returns 201; an exact replay returns 200.",
+    security(("bearerAuth" = [])),
+    params(
+        ("agent_id" = String, Path, description = "Agent ID bound to the credential"),
+        ("invocation_id" = String, Path, description = "Invocation ID")
+    ),
+    request_body = CompleteInvocation,
+    responses(
+        (status = 200, description = "Existing completion returned for an exact replay", body = crate::model::InvocationCompletion),
+        (status = 201, description = "Invocation completed", body = crate::model::InvocationCompletion),
+        (status = 400, description = "Invalid completion", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
+        (status = 404, description = "Invocation not found", body = ErrorResponse),
+        (status = 409, description = "Lease, fence, state, or changed replay conflict", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn complete_invocation(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -324,11 +671,29 @@ async fn complete_invocation(
     Ok((status, Json(completion)))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 struct InvocationQuery {
+    /// Limit results to one agent ID.
     agent: Option<String>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/invocations",
+    operation_id = "listInvocations",
+    tag = "invocations",
+    summary = "List managed invocations",
+    description = "Operator-only. Returns the latest durable invocation records, optionally for one agent.",
+    security(("bearerAuth" = [])),
+    params(InvocationQuery),
+    responses(
+        (status = 200, description = "Managed invocations", body = [crate::model::Invocation]),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn list_invocations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -340,6 +705,27 @@ async fn list_invocations(
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/v1/channels/{channel_id}/messages",
+    operation_id = "createChannelMessage",
+    tag = "channels",
+    summary = "Append a channel message",
+    description = "Agent-only. The server derives sender_id from the credential. First idempotent append returns 201; an exact replay returns 200.",
+    security(("bearerAuth" = [])),
+    params(("channel_id" = String, Path, description = "Channel ID")),
+    request_body = SendMessage,
+    responses(
+        (status = 200, description = "Existing message returned for an exact idempotency replay", body = Message),
+        (status = 201, description = "Message appended", body = Message),
+        (status = 400, description = "Invalid message", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Agent credential and sender or recipient channel membership required", body = ErrorResponse),
+        (status = 404, description = "Channel not found", body = ErrorResponse),
+        (status = 409, description = "Idempotency key was reused for different content", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn append_message(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -362,10 +748,15 @@ async fn append_message(
     Ok((status, Json(result.message)))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 struct PageQuery {
+    /// Exclusive global message sequence cursor.
+    #[param(minimum = 0, default = 0)]
     #[serde(default)]
     after: i64,
+    /// Requested page size. Values above 500 are clamped to 500.
+    #[param(minimum = 1, maximum = 500, default = 100)]
     #[serde(default = "default_page_limit")]
     limit: u32,
 }
@@ -374,6 +765,27 @@ const fn default_page_limit() -> u32 {
     100
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/channels/{channel_id}/messages",
+    operation_id = "listChannelMessages",
+    tag = "channels",
+    summary = "Read channel history",
+    description = "Operators or channel members. Direct-message visibility is filtered to the authenticated member.",
+    security(("bearerAuth" = [])),
+    params(
+        ("channel_id" = String, Path, description = "Channel ID"),
+        PageQuery
+    ),
+    responses(
+        (status = 200, description = "Messages strictly after the cursor", body = crate::model::MessagePage),
+        (status = 400, description = "Invalid cursor", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Channel membership required", body = ErrorResponse),
+        (status = 404, description = "Channel not found", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
 async fn list_messages(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -389,12 +801,45 @@ async fn list_messages(
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
 struct StreamQuery {
+    /// Exclusive global message sequence cursor to replay before live delivery.
+    #[param(minimum = 0, default = 0)]
     #[serde(default)]
     after: i64,
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/channels/{channel_id}/stream",
+    operation_id = "streamChannelMessages",
+    tag = "channels",
+    summary = "Replay and stream channel messages",
+    description = "WebSocket upgrade for operators or channel members. Each server text frame is one Message JSON object. Reconnect with the highest durably processed seq as `after`. Client frames other than Close are ignored.",
+    security(("bearerAuth" = [])),
+    params(
+        ("channel_id" = String, Path, description = "Channel ID"),
+        StreamQuery
+    ),
+    responses(
+        (status = 101, description = "WebSocket protocol switched"),
+        (status = 400, description = "Invalid cursor or upgrade request", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Channel membership required", body = ErrorResponse),
+        (status = 404, description = "Channel not found", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    ),
+    extensions(
+        ("x-fleetd-websocket" = json!({
+            "direction": "server-to-client",
+            "frameType": "text",
+            "messageSchema": { "$ref": "#/components/schemas/Message" },
+            "ordering": "ascending seq after replay cursor",
+            "clientMessages": "ignored except Close"
+        }))
+    )
+)]
 async fn stream(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,

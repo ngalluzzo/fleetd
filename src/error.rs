@@ -3,8 +3,15 @@ use axum::{
     http::{HeaderValue, StatusCode, header::WWW_AUTHENTICATE},
     response::{IntoResponse, Response},
 };
-use serde_json::json;
+use serde::Serialize;
 use thiserror::Error;
+use utoipa::ToSchema;
+
+/// Stable JSON envelope returned for fleetd domain errors.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ErrorResponse {
+    pub error: String,
+}
 
 /// Errors produced by fleetd's domain and persistence boundary.
 #[derive(Debug, Error)]
@@ -63,7 +70,9 @@ impl IntoResponse for FleetError {
             }
             _ => self.to_string(),
         };
-        let body = Json(json!({ "error": public_message }));
+        let body = Json(ErrorResponse {
+            error: public_message,
+        });
         let mut response = (status, body).into_response();
         if status == StatusCode::UNAUTHORIZED {
             response

@@ -2,9 +2,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use utoipa::ToSchema;
 
 /// An addressable participant in the fleet.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct Agent {
     pub id: String,
     pub name: String,
@@ -13,7 +14,7 @@ pub struct Agent {
 }
 
 /// Input for registering an agent.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct CreateAgent {
     pub name: String,
     #[serde(default = "empty_object")]
@@ -22,7 +23,7 @@ pub struct CreateAgent {
 
 /// A newly issued credential. Its token is returned once and never persisted
 /// in plaintext by fleetd.
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, ToSchema)]
 pub struct IssuedCredential {
     pub id: String,
     pub token: String,
@@ -41,14 +42,14 @@ impl fmt::Debug for IssuedCredential {
 }
 
 /// An agent registration and its one-time credential response.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
 pub struct RegisteredAgent {
     pub agent: Agent,
     pub credential: IssuedCredential,
 }
 
 /// A durable conversation shared by a bounded set of agents.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct Channel {
     pub id: String,
     pub name: String,
@@ -57,7 +58,7 @@ pub struct Channel {
 }
 
 /// Input for creating a channel and its initial membership.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct CreateChannel {
     pub name: String,
     #[serde(default = "empty_object")]
@@ -67,13 +68,13 @@ pub struct CreateChannel {
 }
 
 /// Input for adding one agent to a channel.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct AddMember {
     pub agent_id: String,
 }
 
 /// An immutable message envelope in the global event sequence.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct Message {
     pub seq: i64,
     pub id: String,
@@ -88,7 +89,7 @@ pub struct Message {
 }
 
 /// Input for appending a message to a channel.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct CreateMessage {
     pub sender_id: String,
     pub idempotency_key: Option<String>,
@@ -102,7 +103,7 @@ pub struct CreateMessage {
 
 /// Authenticated input for sending a message. The server supplies `sender_id`
 /// from the bound agent credential.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SendMessage {
     pub idempotency_key: Option<String>,
@@ -131,23 +132,25 @@ impl SendMessage {
 }
 
 /// A cursor-addressed page from a channel's message history.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct MessagePage {
     pub messages: Vec<Message>,
     pub next_cursor: i64,
 }
 
 /// Input for atomically leasing work from an agent inbox.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct ClaimDeliveries {
     #[serde(default = "default_claim_limit")]
+    #[schema(default = 1, minimum = 1, maximum = 100)]
     pub limit: u32,
     #[serde(default = "default_lease_duration_ms")]
+    #[schema(default = 300_000, minimum = 1, maximum = 3_600_000)]
     pub lease_duration_ms: u64,
 }
 
 /// One leased inbox entry and the immutable message it carries.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct Delivery {
     pub message: Message,
     pub attempt: i64,
@@ -156,7 +159,7 @@ pub struct Delivery {
 }
 
 /// A set of deliveries owned by one expiring lease token.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct ClaimBatch {
     pub lease_token: String,
     pub lease_expires_at_ms: i64,
@@ -164,29 +167,30 @@ pub struct ClaimBatch {
 }
 
 /// Input for acknowledging a successfully processed delivery.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct AckDelivery {
     pub lease_token: String,
 }
 
 /// Input for releasing a failed delivery for a later attempt.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct RetryDelivery {
     pub lease_token: String,
     #[serde(default)]
+    #[schema(default = 0, maximum = 86_400_000)]
     pub retry_after_ms: u64,
     pub error: Option<String>,
 }
 
 /// Input for parking an ambiguously executed delivery under its active lease.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct BlockDelivery {
     pub lease_token: String,
     pub reason: String,
 }
 
 /// One unresolved blocked delivery and its immutable source message.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct BlockedDelivery {
     pub block_id: i64,
     pub agent_id: String,
@@ -197,7 +201,7 @@ pub struct BlockedDelivery {
 }
 
 /// Operator decision for a blocked delivery.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BlockResolution {
     Requeue,
@@ -205,16 +209,17 @@ pub enum BlockResolution {
 }
 
 /// Input for resolving one exact blocked-delivery record.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct ResolveDeliveryBlock {
     pub resolution: BlockResolution,
     #[serde(default)]
+    #[schema(default = 0, maximum = 86_400_000)]
     pub retry_after_ms: u64,
     pub note: Option<String>,
 }
 
 /// Durable lifecycle state for one managed delivery attempt.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum InvocationState {
     Reserved,
@@ -223,7 +228,7 @@ pub enum InvocationState {
 }
 
 /// What fleetd can prove about an invocation's external execution.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecutionCertainty {
     NotStarted,
@@ -232,7 +237,7 @@ pub enum ExecutionCertainty {
 }
 
 /// One durable managed attempt reserved together with its inbox lease.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct Invocation {
     pub id: String,
     pub agent_id: String,
@@ -251,13 +256,13 @@ pub struct Invocation {
 }
 
 /// A batch of delivery attempts atomically leased and durably reserved.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct InvocationBatch {
     pub invocations: Vec<Invocation>,
 }
 
 /// Input for the write-ahead fence immediately before effectful dispatch.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ArmInvocation {
     pub lease_token: String,
@@ -265,7 +270,7 @@ pub struct ArmInvocation {
 }
 
 /// Input for atomically publishing one result and acknowledging its invocation.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CompleteInvocation {
     pub lease_token: String,
@@ -276,7 +281,7 @@ pub struct CompleteInvocation {
 }
 
 /// Durable result of completing one managed invocation.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct InvocationCompletion {
     pub invocation: Invocation,
     pub result: Message,

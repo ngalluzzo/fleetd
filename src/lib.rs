@@ -11,10 +11,10 @@ pub mod plugin;
 pub mod session_binding;
 pub mod store;
 
-pub use api::{AppState, router};
+pub use api::{AppState, openapi_document, router};
 pub use auth::{AuthService, OperatorBootstrap, Principal};
 pub use controller::{ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnOutcome};
-pub use error::FleetError;
+pub use error::{ErrorResponse, FleetError};
 pub use model::{
     AckDelivery, AddMember, Agent, ArmInvocation, BlockDelivery, BlockResolution, BlockedDelivery,
     Channel, ClaimBatch, ClaimDeliveries, CompleteInvocation, CreateAgent, CreateChannel,

@@ -1,0 +1,2534 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "fleetd API",
+    "description": "Versioned control-plane contract for cooperating software agents.",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Check process health",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "fleetd is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Read the API contract",
+        "operationId": "getOpenApiDocument",
+        "responses": {
+          "200": {
+            "description": "The fleetd OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/agents": {
+      "get": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "List agents",
+        "description": "Operator-only.",
+        "operationId": "listAgents",
+        "responses": {
+          "200": {
+            "description": "Registered agents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Agent"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Register an agent",
+        "description": "Operator-only. Returns the new credential token exactly once.",
+        "operationId": "createAgent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAgent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Agent registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredAgent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid registration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Agent name conflicts with existing state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/credentials/rotate": {
+      "post": {
+        "tags": [
+          "agents"
+        ],
+        "summary": "Rotate an agent credential",
+        "description": "Operator-only. Immediately revokes earlier credentials and returns the replacement token exactly once.",
+        "operationId": "rotateAgentCredential",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "description": "Stable agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Replacement credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedCredential"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/deliveries/claim": {
+      "post": {
+        "tags": [
+          "deliveries"
+        ],
+        "summary": "Lease inbox deliveries",
+        "description": "Requires the credential bound to the path agent. Returns an empty batch when no work is eligible.",
+        "operationId": "claimDeliveries",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "description": "Agent ID bound to the credential",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimDeliveries"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Leased delivery batch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimBatch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid lease bounds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Credential is not bound to this agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/deliveries/{message_id}/ack": {
+      "post": {
+        "tags": [
+          "deliveries"
+        ],
+        "summary": "Acknowledge a delivery",
+        "description": "Requires the bound agent and active lease. Exact settlement replays are idempotent.",
+        "operationId": "acknowledgeDelivery",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "description": "Agent ID bound to the credential",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "description": "Delivered message ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AckDelivery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Delivery acknowledged"
+          },
+          "400": {
+            "description": "Invalid lease token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Credential is not bound to this agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Delivery not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Lease is expired, stale, or mismatched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/deliveries/{message_id}/block": {
+      "post": {
+        "tags": [
+          "deliveries"
+        ],
+        "summary": "Park an ambiguously executed delivery",
+        "description": "Requires the bound agent and active lease. First creation returns 201; an exact replay returns 200.",
+        "operationId": "blockDelivery",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "description": "Agent ID bound to the credential",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "description": "Delivered message ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockDelivery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing block returned for an exact replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockedDelivery"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Delivery blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockedDelivery"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid block evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Credential is not bound to this agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Delivery not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Lease conflict or changed replay evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/deliveries/{message_id}/retry": {
+      "post": {
+        "tags": [
+          "deliveries"
+        ],
+        "summary": "Release a delivery for retry",
+        "description": "Requires the bound agent and active lease. An armed invocation cannot be retried as ordinary failure.",
+        "operationId": "retryDelivery",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "description": "Agent ID bound to the credential",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "description": "Delivered message ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryDelivery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Delivery scheduled for retry"
+          },
+          "400": {
+            "description": "Invalid retry request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Credential is not bound to this agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Delivery not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Lease conflict or invocation already armed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/invocations/reserve": {
+      "post": {
+        "tags": [
+          "invocations"
+        ],
+        "summary": "Lease and reserve managed invocations",
+        "description": "Requires the bound agent. Atomically creates one durable invocation fence per leased delivery.",
+        "operationId": "reserveInvocations",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "description": "Agent ID bound to the credential",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimDeliveries"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Reserved invocation batch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvocationBatch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid lease bounds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Credential is not bound to this agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/invocations/{invocation_id}/arm": {
+      "post": {
+        "tags": [
+          "invocations"
+        ],
+        "summary": "Arm an invocation for effectful dispatch",
+        "description": "Requires the bound agent and both active tokens. The durable arm must commit before external dispatch.",
+        "operationId": "armInvocation",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "description": "Agent ID bound to the credential",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "invocation_id",
+            "in": "path",
+            "description": "Invocation ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArmInvocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Armed invocation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invocation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Credential is not bound to this agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Invocation not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Lease, fence, or invocation state conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/invocations/{invocation_id}/complete": {
+      "post": {
+        "tags": [
+          "invocations"
+        ],
+        "summary": "Publish a result and complete an invocation",
+        "description": "Requires the bound agent and a live armed invocation. The result, input acknowledgement, and terminal state commit atomically. First completion returns 201; an exact replay returns 200.",
+        "operationId": "completeInvocation",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "description": "Agent ID bound to the credential",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "invocation_id",
+            "in": "path",
+            "description": "Invocation ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteInvocation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing completion returned for an exact replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvocationCompletion"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Invocation completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvocationCompletion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid completion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Credential is not bound to this agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Invocation not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Lease, fence, state, or changed replay conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/channels": {
+      "get": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "List channels",
+        "description": "Operator-only.",
+        "operationId": "listChannels",
+        "responses": {
+          "200": {
+            "description": "Channels",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Channel"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "Create a channel",
+        "description": "Operator-only. Initial membership is committed with the channel.",
+        "operationId": "createChannel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChannel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Channel created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Channel"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Initial member not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Channel conflicts with existing state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/channels/{channel_id}/members": {
+      "post": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "Add a channel member",
+        "description": "Operator-only. Membership is permanent for the channel lifetime.",
+        "operationId": "addChannelMember",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "Channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMember"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Member added or already present"
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Channel or agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/channels/{channel_id}/messages": {
+      "get": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "Read channel history",
+        "description": "Operators or channel members. Direct-message visibility is filtered to the authenticated member.",
+        "operationId": "listChannelMessages",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "Channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Exclusive global message sequence cursor.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Requested page size. Values above 500 are clamped to 500.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Messages strictly after the cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Channel membership required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Channel not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "Append a channel message",
+        "description": "Agent-only. The server derives sender_id from the credential. First idempotent append returns 201; an exact replay returns 200.",
+        "operationId": "createChannelMessage",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "Channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessage"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing message returned for an exact idempotency replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Message appended",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Message"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Agent credential and sender or recipient channel membership required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Channel not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key was reused for different content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/channels/{channel_id}/stream": {
+      "get": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "Replay and stream channel messages",
+        "description": "WebSocket upgrade for operators or channel members. Each server text frame is one Message JSON object. Reconnect with the highest durably processed seq as `after`. Client frames other than Close are ignored.",
+        "operationId": "streamChannelMessages",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "Channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Exclusive global message sequence cursor to replay before live delivery.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "default": 0,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket protocol switched"
+          },
+          "400": {
+            "description": "Invalid cursor or upgrade request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Channel membership required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Channel not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-fleetd-websocket": {
+          "clientMessages": "ignored except Close",
+          "direction": "server-to-client",
+          "frameType": "text",
+          "messageSchema": {
+            "$ref": "#/components/schemas/Message"
+          },
+          "ordering": "ascending seq after replay cursor"
+        }
+      }
+    },
+    "/v1/delivery-blocks": {
+      "get": {
+        "tags": [
+          "deliveries"
+        ],
+        "summary": "List unresolved delivery blocks",
+        "description": "Operator-only. Results may be limited to one agent.",
+        "operationId": "listDeliveryBlocks",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Limit results to one agent ID.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Unresolved delivery blocks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BlockedDelivery"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/delivery-blocks/{block_id}/resolve": {
+      "post": {
+        "tags": [
+          "deliveries"
+        ],
+        "summary": "Resolve a blocked delivery",
+        "description": "Operator-only. An identical decision is idempotent; a changed second decision conflicts.",
+        "operationId": "resolveDeliveryBlock",
+        "parameters": [
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Positive delivery block ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveDeliveryBlock"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Block resolved"
+          },
+          "400": {
+            "description": "Invalid resolution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Block not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Block changed or was resolved differently",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/invocations": {
+      "get": {
+        "tags": [
+          "invocations"
+        ],
+        "summary": "List managed invocations",
+        "description": "Operator-only. Returns the latest durable invocation records, optionally for one agent.",
+        "operationId": "listInvocations",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Limit results to one agent ID.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Managed invocations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Invocation"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AckDelivery": {
+        "type": "object",
+        "description": "Input for acknowledging a successfully processed delivery.",
+        "required": [
+          "lease_token"
+        ],
+        "properties": {
+          "lease_token": {
+            "type": "string"
+          }
+        }
+      },
+      "AddMember": {
+        "type": "object",
+        "description": "Input for adding one agent to a channel.",
+        "required": [
+          "agent_id"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Agent": {
+        "type": "object",
+        "description": "An addressable participant in the fleet.",
+        "required": [
+          "id",
+          "name",
+          "metadata",
+          "created_at_ms"
+        ],
+        "properties": {
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "metadata": {},
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ArmInvocation": {
+        "type": "object",
+        "description": "Input for the write-ahead fence immediately before effectful dispatch.",
+        "required": [
+          "lease_token",
+          "fence_token"
+        ],
+        "properties": {
+          "fence_token": {
+            "type": "string"
+          },
+          "lease_token": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlockDelivery": {
+        "type": "object",
+        "description": "Input for parking an ambiguously executed delivery under its active lease.",
+        "required": [
+          "lease_token",
+          "reason"
+        ],
+        "properties": {
+          "lease_token": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "BlockResolution": {
+        "type": "string",
+        "description": "Operator decision for a blocked delivery.",
+        "enum": [
+          "requeue",
+          "abandon"
+        ]
+      },
+      "BlockedDelivery": {
+        "type": "object",
+        "description": "One unresolved blocked delivery and its immutable source message.",
+        "required": [
+          "block_id",
+          "agent_id",
+          "message",
+          "attempt",
+          "reason",
+          "blocked_at_ms"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "block_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "blocked_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "message": {
+            "$ref": "#/components/schemas/Message"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "Channel": {
+        "type": "object",
+        "description": "A durable conversation shared by a bounded set of agents.",
+        "required": [
+          "id",
+          "name",
+          "metadata",
+          "created_at_ms"
+        ],
+        "properties": {
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "metadata": {},
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ClaimBatch": {
+        "type": "object",
+        "description": "A set of deliveries owned by one expiring lease token.",
+        "required": [
+          "lease_token",
+          "lease_expires_at_ms",
+          "deliveries"
+        ],
+        "properties": {
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Delivery"
+            }
+          },
+          "lease_expires_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lease_token": {
+            "type": "string"
+          }
+        }
+      },
+      "ClaimDeliveries": {
+        "type": "object",
+        "description": "Input for atomically leasing work from an agent inbox.",
+        "properties": {
+          "lease_duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "default": 300000,
+            "maximum": 3600000,
+            "minimum": 1
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "default": 1,
+            "maximum": 100,
+            "minimum": 1
+          }
+        }
+      },
+      "CompleteInvocation": {
+        "type": "object",
+        "description": "Input for atomically publishing one result and acknowledging its invocation.",
+        "required": [
+          "lease_token",
+          "fence_token",
+          "payload"
+        ],
+        "properties": {
+          "fence_token": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "lease_token": {
+            "type": "string"
+          },
+          "payload": {}
+        },
+        "additionalProperties": false
+      },
+      "CreateAgent": {
+        "type": "object",
+        "description": "Input for registering an agent.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "metadata": {},
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateChannel": {
+        "type": "object",
+        "description": "Input for creating a channel and its initial membership.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "member_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metadata": {},
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "Delivery": {
+        "type": "object",
+        "description": "One leased inbox entry and the immutable message it carries.",
+        "required": [
+          "message",
+          "attempt",
+          "lease_expires_at_ms"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lease_expires_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "message": {
+            "$ref": "#/components/schemas/Message"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "Stable JSON envelope returned for fleetd domain errors.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "ExecutionCertainty": {
+        "type": "string",
+        "description": "What fleetd can prove about an invocation's external execution.",
+        "enum": [
+          "not_started",
+          "outcome_known",
+          "outcome_unknown"
+        ]
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "Invocation": {
+        "type": "object",
+        "description": "One durable managed attempt reserved together with its inbox lease.",
+        "required": [
+          "id",
+          "agent_id",
+          "message",
+          "delivery_attempt",
+          "lease_token",
+          "lease_expires_at_ms",
+          "fence_token",
+          "state",
+          "reserved_at_ms"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "delivery_attempt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "dispatch_armed_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "execution_certainty": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExecutionCertainty"
+              }
+            ]
+          },
+          "fence_token": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "lease_expires_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lease_token": {
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/components/schemas/Message"
+          },
+          "reserved_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "result_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/InvocationState"
+          },
+          "terminal_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "terminal_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "InvocationBatch": {
+        "type": "object",
+        "description": "A batch of delivery attempts atomically leased and durably reserved.",
+        "required": [
+          "invocations"
+        ],
+        "properties": {
+          "invocations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Invocation"
+            }
+          }
+        }
+      },
+      "InvocationCompletion": {
+        "type": "object",
+        "description": "Durable result of completing one managed invocation.",
+        "required": [
+          "invocation",
+          "result"
+        ],
+        "properties": {
+          "invocation": {
+            "$ref": "#/components/schemas/Invocation"
+          },
+          "result": {
+            "$ref": "#/components/schemas/Message"
+          }
+        }
+      },
+      "InvocationState": {
+        "type": "string",
+        "description": "Durable lifecycle state for one managed delivery attempt.",
+        "enum": [
+          "reserved",
+          "dispatch_armed",
+          "terminal"
+        ]
+      },
+      "IssuedCredential": {
+        "type": "object",
+        "description": "A newly issued credential. Its token is returned once and never persisted\nin plaintext by fleetd.",
+        "required": [
+          "id",
+          "token",
+          "created_at_ms"
+        ],
+        "properties": {
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "description": "An immutable message envelope in the global event sequence.",
+        "required": [
+          "seq",
+          "id",
+          "channel_id",
+          "sender_id",
+          "kind",
+          "payload",
+          "created_at_ms"
+        ],
+        "properties": {
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "correlation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {},
+          "recipient_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sender_id": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "MessagePage": {
+        "type": "object",
+        "description": "A cursor-addressed page from a channel's message history.",
+        "required": [
+          "messages",
+          "next_cursor"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Message"
+            }
+          },
+          "next_cursor": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RegisteredAgent": {
+        "type": "object",
+        "description": "An agent registration and its one-time credential response.",
+        "required": [
+          "agent",
+          "credential"
+        ],
+        "properties": {
+          "agent": {
+            "$ref": "#/components/schemas/Agent"
+          },
+          "credential": {
+            "$ref": "#/components/schemas/IssuedCredential"
+          }
+        }
+      },
+      "ResolveDeliveryBlock": {
+        "type": "object",
+        "description": "Input for resolving one exact blocked-delivery record.",
+        "required": [
+          "resolution"
+        ],
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolution": {
+            "$ref": "#/components/schemas/BlockResolution"
+          },
+          "retry_after_ms": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0,
+            "maximum": 86400000,
+            "minimum": 0
+          }
+        }
+      },
+      "RetryDelivery": {
+        "type": "object",
+        "description": "Input for releasing a failed delivery for a later attempt.",
+        "required": [
+          "lease_token"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lease_token": {
+            "type": "string"
+          },
+          "retry_after_ms": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0,
+            "maximum": 86400000,
+            "minimum": 0
+          }
+        }
+      },
+      "SendMessage": {
+        "type": "object",
+        "description": "Authenticated input for sending a message. The server supplies `sender_id`\nfrom the bound agent credential.",
+        "required": [
+          "payload"
+        ],
+        "properties": {
+          "causation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "correlation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {},
+          "recipient_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "system",
+      "description": "Process health and API discovery"
+    },
+    {
+      "name": "agents",
+      "description": "Agent identity and credential administration"
+    },
+    {
+      "name": "channels",
+      "description": "Channel membership and durable messaging"
+    },
+    {
+      "name": "deliveries",
+      "description": "Leased agent inbox delivery"
+    },
+    {
+      "name": "invocations",
+      "description": "Crash-safe managed invocation fencing"
+    }
+  ]
+}

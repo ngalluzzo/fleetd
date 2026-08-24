@@ -1,7 +1,7 @@
 /target/
+node_modules/
 /fleetd.db
 /fleetd.db-shm
 /fleetd.db-wal
 /.fleetd/
 .DS_Store
-

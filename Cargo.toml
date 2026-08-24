@@ -28,6 +28,8 @@ tokio-tungstenite = "0.29"
 tokio-util = { version = "0.7", features = ["codec"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+utoipa = { version = "5.5.0", features = ["axum_extras"] }
+utoipa-axum = "0.2.0"
 uuid = { version = "1", features = ["serde", "v4"] }
 
 [target.'cfg(unix)'.dependencies]
