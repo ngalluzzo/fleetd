@@ -80,13 +80,16 @@ impl AuthService {
 
     /// Reconciles a private operator token file with its database digest.
     ///
-    /// The local file is authoritative. A newly created or changed file rotates
-    /// active operator credentials transactionally to the file's token.
+    /// The local file is authoritative. An unchanged file is a no-op, a new or
+    /// unknown digest revokes every prior operator credential transactionally,
+    /// and a file holding a previously revoked credential fails closed rather
+    /// than resurrecting it.
     ///
     /// # Errors
     ///
     /// Returns an error when the token file cannot be secured, entropy is
-    /// unavailable, or credential state cannot be persisted.
+    /// unavailable, the file holds a revoked credential, or credential state
+    /// cannot be persisted.
     pub async fn ensure_operator_credential(
         &self,
         token_path: impl AsRef<Path>,
@@ -95,22 +98,31 @@ impl AuthService {
         let token = ensure_token_file(token_path)?;
         validate_token(&token, OPERATOR_TOKEN_PREFIX)?;
         let digest = token_digest(&token);
-        let active_id: Option<String> = sqlx::query_scalar(
+        let revoked_at_ms: Option<Option<i64>> = sqlx::query_scalar(
             r"
-            SELECT id
+            SELECT revoked_at_ms
             FROM auth_credentials
             WHERE principal_kind = 'operator'
-              AND revoked_at_ms IS NULL
               AND token_digest = ?
             ",
         )
         .bind(&digest[..])
         .fetch_optional(&self.store.pool)
         .await?;
-        let credential_rotated = active_id.is_none();
-        if credential_rotated {
-            self.rotate_operator_digest(&digest).await?;
-        }
+        let credential_rotated = match revoked_at_ms {
+            Some(None) => false,
+            Some(Some(_)) => {
+                return Err(FleetError::Credential(format!(
+                    "operator token file {} holds a credential that was explicitly \
+                     revoked; delete the file to provision a replacement",
+                    token_path.display()
+                )));
+            }
+            None => {
+                self.rotate_operator_digest(&digest).await?;
+                true
+            }
+        };
         Ok(OperatorBootstrap {
             token_path: token_path.to_owned(),
             credential_rotated,
@@ -235,31 +247,18 @@ impl AuthService {
         .bind(now)
         .execute(&mut *transaction)
         .await?;
-        let reactivated = sqlx::query(
+        sqlx::query(
             r"
-            UPDATE auth_credentials
-            SET revoked_at_ms = NULL, created_at_ms = ?
-            WHERE principal_kind = 'operator' AND token_digest = ?
+            INSERT INTO auth_credentials (
+                id, principal_kind, token_digest, created_at_ms
+            ) VALUES (?, 'operator', ?, ?)
             ",
         )
-        .bind(now)
+        .bind(Uuid::new_v4().to_string())
         .bind(&digest[..])
+        .bind(now)
         .execute(&mut *transaction)
         .await?;
-        if reactivated.rows_affected() == 0 {
-            sqlx::query(
-                r"
-                INSERT INTO auth_credentials (
-                    id, principal_kind, token_digest, created_at_ms
-                ) VALUES (?, 'operator', ?, ?)
-                ",
-            )
-            .bind(Uuid::new_v4().to_string())
-            .bind(&digest[..])
-            .bind(now)
-            .execute(&mut *transaction)
-            .await?;
-        }
         transaction.commit().await?;
         Ok(())
     }

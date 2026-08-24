@@ -13,9 +13,16 @@ or distinguish a compromised adapter from the operator.
 
 The first-run daemon creates an operator credential in a file readable only by
 its operating-system user. That file is authoritative for the local node; its
-digest is reconciled transactionally at startup. Registering an agent returns
-one 256-bit random bearer credential exactly once. The database stores only a
-SHA-256 digest and credential metadata.
+digest is reconciled transactionally at startup. Reconciliation never
+resurrects: an unchanged file is a no-op, a new digest revokes every prior
+operator credential and adopts the file, and a file whose digest matches a
+revoked credential blocks startup until it is deleted. Replacing or deleting
+the file is the operator rotation procedure; deletion provisions a fresh
+credential on the next start. Multiple daemons may share one database only
+through the same token file; distinct files take authority last-writer-wins on
+restart. Registering an agent returns one 256-bit random bearer credential
+exactly once. The database stores only a SHA-256 digest and credential
+metadata.
 
 Operator credentials manage agents, membership, and policy. Agent credentials
 may claim and settle only their own inbox and may send only as their bound agent
@@ -37,6 +44,8 @@ unauthenticated compatibility mode.
 - Direct messages surface in history and streams only to their sender,
   recipient, and operator scope.
 - Revocation takes effect on the next request.
+- Operator revocation is permanent: a restored file holding a revoked digest
+  fails startup instead of reactivating the credential.
 - A lost create response does not silently create an unrecoverable identity;
   the operator can rotate its credential.
 - Existing unauthenticated databases migrate without an unauthenticated window.

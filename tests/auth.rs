@@ -73,7 +73,7 @@ async fn agent_rotation_revokes_the_old_token_without_changing_identity() {
 }
 
 #[tokio::test]
-async fn a_previous_operator_file_can_become_authoritative_again() {
+async fn a_revoked_operator_file_refuses_to_reconcile() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let store = Store::open(directory.path().join("fleetd.db"))
         .await
@@ -84,26 +84,57 @@ async fn a_previous_operator_file_can_become_authoritative_again() {
     auth.ensure_operator_credential(&first_path)
         .await
         .expect("first operator");
-    let first = fs::read_to_string(&first_path).expect("read first token");
     auth.ensure_operator_credential(&second_path)
         .await
         .expect("second operator");
+    let first = fs::read_to_string(&first_path).expect("read first token");
     let second = fs::read_to_string(&second_path).expect("read second token");
-    assert!(matches!(
-        auth.authenticate(first.trim()).await,
-        Err(FleetError::Unauthorized)
-    ));
 
-    auth.ensure_operator_credential(&first_path)
-        .await
-        .expect("reactivate first operator");
+    match auth.ensure_operator_credential(&first_path).await {
+        Err(FleetError::Credential(message)) => assert!(message.contains("revoked")),
+        other => panic!("expected revoked credential error, got {other:?}"),
+    }
+
     assert!(matches!(
-        auth.authenticate(first.trim()).await,
+        auth.authenticate(second.trim()).await,
         Ok(Principal::Operator { .. })
     ));
     assert!(matches!(
-        auth.authenticate(second.trim()).await,
+        auth.authenticate(first.trim()).await,
         Err(FleetError::Unauthorized)
+    ));
+}
+
+#[tokio::test]
+async fn a_fresh_database_adopts_an_existing_operator_file() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let token_path = directory.path().join("operator.token");
+    let first_store = Store::open(directory.path().join("first.db"))
+        .await
+        .expect("open first store");
+    AuthService::new(first_store)
+        .ensure_operator_credential(&token_path)
+        .await
+        .expect("bootstrap operator");
+    let token = fs::read_to_string(&token_path)
+        .expect("read token")
+        .trim()
+        .to_owned();
+
+    let second_store = Store::open(directory.path().join("second.db"))
+        .await
+        .expect("open second store");
+    let adoption = AuthService::new(second_store.clone())
+        .ensure_operator_credential(&token_path)
+        .await
+        .expect("adopt existing file");
+    assert!(adoption.credential_rotated);
+    assert!(matches!(
+        AuthService::new(second_store)
+            .authenticate(&token)
+            .await
+            .expect("authenticate adopted operator"),
+        Principal::Operator { .. }
     ));
 }
 

@@ -66,9 +66,11 @@ the messaging kernel.
 ## Identity boundary
 
 The local operator token file is authoritative for node administration and is
-readable only by its operating-system user. Agent credentials are independently
-rotatable and bound to one stable agent ID. SQLite stores only SHA-256 digests of
-256-bit random bearer tokens.
+readable only by its operating-system user. Its digest is reconciled
+transactionally at startup, and revocation is permanent: a file holding a
+revoked digest fails startup rather than reviving the credential. Agent
+credentials are independently rotatable and bound to one stable agent ID.
+SQLite stores only SHA-256 digests of 256-bit random bearer tokens.
 
 Authentication is read-only on the request hot path. The API derives message
 attribution from the principal, restricts inbox settlement to that agent, and
