@@ -22,8 +22,10 @@ All messages share one immutable envelope:
 kernel transports unknown contracts without interpreting or rewriting them.
 
 A channel message with no recipient is visible to every member. A direct
-recipient must also be a member of the channel. Consumers should retain unknown
-envelope fields when they proxy or persist messages.
+message is visible only to its sender, its recipient, and an operator; HTTP
+history and WebSocket streams enforce this against the authenticated
+principal. A direct recipient must also be a member of the channel. Consumers
+should retain unknown envelope fields when they proxy or persist messages.
 
 HTTP history uses an exclusive `after` cursor. WebSocket streams first replay
 every durable message after the cursor and then continue with live messages.

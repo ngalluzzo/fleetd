@@ -66,7 +66,7 @@ async fn messages_are_durable_ordered_and_cursor_addressable() {
 
     assert!(second.seq > first.seq);
     let page = store
-        .list_messages(&channel.id, first.seq, 100)
+        .list_messages(&channel.id, None, first.seq, 100)
         .await
         .expect("list after cursor");
     assert_eq!(page.messages, vec![second.clone()]);
@@ -77,10 +77,123 @@ async fn messages_are_durable_ordered_and_cursor_addressable() {
         .await
         .expect("reopen store");
     let durable = reopened
-        .list_messages(&channel.id, 0, 100)
+        .list_messages(&channel.id, None, 0, 100)
         .await
         .expect("read durable messages");
     assert_eq!(durable.messages, vec![first, second]);
+}
+
+#[tokio::test]
+async fn direct_messages_are_scoped_to_their_sender_and_recipient() {
+    let (_directory, store) = test_store().await;
+    let piler = agent(&store, "piler").await;
+    let weaver = agent(&store, "weaver").await;
+    let eavesdropper = agent(&store, "eavesdropper").await;
+    let channel = store
+        .create_channel(CreateChannel {
+            name: "scoped".to_owned(),
+            metadata: json!({}),
+            member_ids: vec![piler.id.clone(), weaver.id.clone(), eavesdropper.id.clone()],
+        })
+        .await
+        .expect("create channel");
+
+    let broadcast = append_text(&store, &channel.id, &piler.id, None, "standup").await;
+    let inbound = append_text(
+        &store,
+        &channel.id,
+        &weaver.id,
+        Some(&piler.id),
+        "for piler",
+    )
+    .await;
+    let outbound = append_text(
+        &store,
+        &channel.id,
+        &piler.id,
+        Some(&weaver.id),
+        "for weaver",
+    )
+    .await;
+    let later_broadcast = append_text(&store, &channel.id, &weaver.id, None, "standup again").await;
+
+    let operator_view = store
+        .list_messages(&channel.id, None, 0, 100)
+        .await
+        .expect("operator view");
+    assert_eq!(
+        operator_view.messages,
+        vec![
+            broadcast.clone(),
+            inbound.clone(),
+            outbound.clone(),
+            later_broadcast.clone()
+        ]
+    );
+
+    let participant_view = store
+        .list_messages(&channel.id, Some(&piler.id), 0, 100)
+        .await
+        .expect("participant view");
+    assert_eq!(
+        participant_view.messages,
+        vec![
+            broadcast.clone(),
+            inbound,
+            outbound,
+            later_broadcast.clone()
+        ]
+    );
+
+    let first_page = store
+        .list_messages(&channel.id, Some(&eavesdropper.id), 0, 1)
+        .await
+        .expect("eavesdropper first page");
+    assert_eq!(first_page.messages, vec![broadcast.clone()]);
+    assert_eq!(first_page.next_cursor, broadcast.seq);
+    let second_page = store
+        .list_messages(
+            &channel.id,
+            Some(&eavesdropper.id),
+            first_page.next_cursor,
+            1,
+        )
+        .await
+        .expect("eavesdropper second page");
+    assert_eq!(second_page.messages, vec![later_broadcast]);
+}
+
+async fn agent(store: &Store, name: &str) -> fleetd::Agent {
+    store
+        .create_agent(CreateAgent {
+            name: name.to_owned(),
+            metadata: json!({}),
+        })
+        .await
+        .expect("create agent")
+}
+
+async fn append_text(
+    store: &Store,
+    channel_id: &str,
+    sender_id: &str,
+    recipient_id: Option<&str>,
+    text: &str,
+) -> fleetd::Message {
+    store
+        .append_message(
+            channel_id,
+            CreateMessage {
+                sender_id: sender_id.to_owned(),
+                recipient_id: recipient_id.map(str::to_owned),
+                kind: "text".to_owned(),
+                payload: json!({ "text": text }),
+                correlation_id: None,
+                causation_id: None,
+            },
+        )
+        .await
+        .expect("append message")
 }
 
 #[tokio::test]

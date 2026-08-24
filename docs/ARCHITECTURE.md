@@ -72,5 +72,6 @@ rotatable and bound to one stable agent ID. SQLite stores only SHA-256 digests o
 
 Authentication is read-only on the request hot path. The API derives message
 attribution from the principal, restricts inbox settlement to that agent, and
-checks channel membership for history and streams. See
+scopes channel reads: members see broadcasts plus direct messages they sent or
+received, while operators see everything. See
 [ADR 0003](adr/0003-agent-bound-local-credentials.md).

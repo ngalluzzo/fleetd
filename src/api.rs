@@ -237,7 +237,7 @@ async fn list_messages(
     Ok(Json(
         state
             .store
-            .list_messages(&channel_id, query.after, query.limit)
+            .list_messages(&channel_id, principal.agent_id(), query.after, query.limit)
             .await?,
     ))
 }
@@ -258,12 +258,20 @@ async fn stream(
     require_channel_access(&state, &principal, &channel_id).await?;
     state
         .store
-        .list_messages(&channel_id, query.after, 1)
+        .list_messages(&channel_id, principal.agent_id(), query.after, 1)
         .await?;
     let receiver = state.messages.subscribe();
+    let viewer = principal.agent_id().map(str::to_owned);
     Ok(upgrade
         .on_upgrade(move |socket| {
-            stream_messages(socket, state.store, receiver, channel_id, query.after)
+            stream_messages(
+                socket,
+                state.store,
+                receiver,
+                channel_id,
+                viewer,
+                query.after,
+            )
         })
         .into_response())
 }
@@ -314,11 +322,18 @@ async fn stream_messages(
     store: Store,
     mut receiver: broadcast::Receiver<Message>,
     channel_id: String,
+    viewer: Option<String>,
     mut cursor: i64,
 ) {
-    if replay(&mut socket, &store, &channel_id, &mut cursor)
-        .await
-        .is_err()
+    if replay(
+        &mut socket,
+        &store,
+        &channel_id,
+        viewer.as_deref(),
+        &mut cursor,
+    )
+    .await
+    .is_err()
     {
         return;
     }
@@ -332,7 +347,11 @@ async fn stream_messages(
             }
             message = receiver.recv() => {
                 match message {
-                    Ok(message) if message.channel_id == channel_id && message.seq > cursor => {
+                    Ok(message)
+                        if message.channel_id == channel_id
+                            && message.seq > cursor
+                            && message_visible_to(viewer.as_deref(), &message) =>
+                    {
                         cursor = message.seq;
                         if send_message(&mut socket, &message).await.is_err() {
                             return;
@@ -340,7 +359,16 @@ async fn stream_messages(
                     }
                     Ok(_) => {}
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        if replay(&mut socket, &store, &channel_id, &mut cursor).await.is_err() {
+                        if replay(
+                            &mut socket,
+                            &store,
+                            &channel_id,
+                            viewer.as_deref(),
+                            &mut cursor,
+                        )
+                        .await
+                        .is_err()
+                        {
                             return;
                         }
                     }
@@ -351,15 +379,29 @@ async fn stream_messages(
     }
 }
 
+/// Applies read visibility: operators see everything, while a member sees
+/// broadcasts plus direct messages they sent or received.
+fn message_visible_to(viewer_agent_id: Option<&str>, message: &Message) -> bool {
+    let Some(agent_id) = viewer_agent_id else {
+        return true;
+    };
+    message
+        .recipient_id
+        .as_deref()
+        .is_none_or(|recipient| recipient == agent_id)
+        || message.sender_id == agent_id
+}
+
 async fn replay(
     socket: &mut WebSocket,
     store: &Store,
     channel_id: &str,
+    viewer_agent_id: Option<&str>,
     cursor: &mut i64,
 ) -> Result<(), ()> {
     loop {
         let page = store
-            .list_messages(channel_id, *cursor, 500)
+            .list_messages(channel_id, viewer_agent_id, *cursor, 500)
             .await
             .map_err(|_| ())?;
         let count = page.messages.len();

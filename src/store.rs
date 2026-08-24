@@ -285,6 +285,10 @@ impl Store {
 
     /// Reads a page of channel messages strictly after the supplied cursor.
     ///
+    /// When `viewer_agent_id` is supplied, direct messages are limited to those
+    /// the viewer sent or received. `None` reads every message and is reserved
+    /// for operator scope.
+    ///
     /// # Errors
     ///
     /// Returns an error for an invalid cursor, an unknown channel, or a read or
@@ -292,6 +296,7 @@ impl Store {
     pub async fn list_messages(
         &self,
         channel_id: &str,
+        viewer_agent_id: Option<&str>,
         after: i64,
         limit: u32,
     ) -> Result<MessagePage, FleetError> {
@@ -311,21 +316,34 @@ impl Store {
                 id: channel_id.to_owned(),
             });
         }
-        let rows = sqlx::query(
-            r"
-            SELECT seq, id, channel_id, sender_id, recipient_id, kind, payload_json,
-                   correlation_id, causation_id, created_at_ms
-            FROM messages
-            WHERE channel_id = ? AND seq > ?
-            ORDER BY seq
-            LIMIT ?
-            ",
-        )
-        .bind(channel_id)
-        .bind(after)
-        .bind(i64::from(limit))
-        .fetch_all(&self.pool)
-        .await?;
+        let mut query = match viewer_agent_id {
+            Some(_) => sqlx::query(
+                r"
+                SELECT seq, id, channel_id, sender_id, recipient_id, kind, payload_json,
+                       correlation_id, causation_id, created_at_ms
+                FROM messages
+                WHERE channel_id = ? AND seq > ?
+                  AND (recipient_id IS NULL OR recipient_id = ? OR sender_id = ?)
+                ORDER BY seq
+                LIMIT ?
+                ",
+            ),
+            None => sqlx::query(
+                r"
+                SELECT seq, id, channel_id, sender_id, recipient_id, kind, payload_json,
+                       correlation_id, causation_id, created_at_ms
+                FROM messages
+                WHERE channel_id = ? AND seq > ?
+                ORDER BY seq
+                LIMIT ?
+                ",
+            ),
+        };
+        query = query.bind(channel_id).bind(after);
+        if let Some(viewer) = viewer_agent_id {
+            query = query.bind(viewer).bind(viewer);
+        }
+        let rows = query.bind(i64::from(limit)).fetch_all(&self.pool).await?;
         let messages: Vec<_> = rows
             .iter()
             .map(message_from_row)

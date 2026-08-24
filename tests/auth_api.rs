@@ -1,6 +1,6 @@
 use fleetd::{
     AppState, AuthService, ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel,
-    IssuedCredential, Message, RegisteredAgent, SendMessage, Store, router,
+    IssuedCredential, Message, MessagePage, RegisteredAgent, SendMessage, Store, router,
 };
 use serde_json::json;
 
@@ -220,6 +220,72 @@ async fn credential_rotation_revokes_the_old_token_on_the_next_request() {
     assert_eq!(old.status(), reqwest::StatusCode::UNAUTHORIZED);
     let current = claim(&server, &agent.agent.id, &replacement.token).await;
     assert_eq!(current.status(), reqwest::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn channel_history_scopes_direct_messages_to_their_participants() {
+    let server = TestServer::start().await;
+    let alice = server.register("alice").await;
+    let bob = server.register("bob").await;
+    let channel = server.channel(&[&alice.agent.id, &bob.agent.id]).await;
+
+    let direct = send_message(&server, &channel.id, &alice, &bob.agent.id).await;
+    let broadcast: Message = server
+        .post(
+            &format!("/v1/channels/{}/messages", channel.id),
+            Some(&alice.credential.token),
+        )
+        .json(&SendMessage {
+            recipient_id: None,
+            kind: "text".to_owned(),
+            payload: json!({ "text": "standup" }),
+            correlation_id: None,
+            causation_id: None,
+        })
+        .send()
+        .await
+        .expect("broadcast request")
+        .error_for_status()
+        .expect("broadcast response")
+        .json()
+        .await
+        .expect("broadcast body");
+
+    let expected = vec![direct.clone(), broadcast.clone()];
+    for (role, token) in [
+        ("sender", &alice.credential.token),
+        ("recipient", &bob.credential.token),
+    ] {
+        let page: MessagePage = server
+            .get(
+                &format!("/v1/channels/{}/messages", channel.id),
+                Some(token),
+            )
+            .send()
+            .await
+            .expect("member history response")
+            .error_for_status()
+            .expect("member history status")
+            .json()
+            .await
+            .expect("member history body");
+        assert_eq!(page.messages, expected, "{role} history");
+    }
+
+    let operator_page: MessagePage = server
+        .get(
+            &format!("/v1/channels/{}/messages", channel.id),
+            Some(&server.operator_token),
+        )
+        .send()
+        .await
+        .expect("operator history response")
+        .error_for_status()
+        .expect("operator history status")
+        .json()
+        .await
+        .expect("operator history body");
+    assert_eq!(operator_page.messages, vec![direct, broadcast]);
 }
 
 async fn send_message(

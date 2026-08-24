@@ -102,6 +102,124 @@ async fn websocket_replays_history_then_delivers_live_messages() {
     server.abort();
 }
 
+#[tokio::test]
+async fn streams_do_not_leak_direct_messages_between_other_members() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let store = Store::open(directory.path().join("fleetd.db"))
+        .await
+        .expect("open store");
+    let author = create_member(&store, "author").await;
+    let recipient = create_member(&store, "recipient").await;
+    let watcher = create_member(&store, "watcher").await;
+    let auth = AuthService::new(store.clone());
+    let author_credential = auth
+        .rotate_agent_credential(&author)
+        .await
+        .expect("issue author credential");
+    let watcher_credential = auth
+        .rotate_agent_credential(&watcher)
+        .await
+        .expect("issue watcher credential");
+    let channel = store
+        .create_channel(CreateChannel {
+            name: "discreet".to_owned(),
+            metadata: json!({}),
+            member_ids: vec![author.clone(), recipient.clone(), watcher.clone()],
+        })
+        .await
+        .expect("create channel");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test server");
+    let address = listener.local_addr().expect("server address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router(AppState::new(store)))
+            .await
+            .expect("serve API");
+    });
+
+    let stream_url = format!("ws://{address}/v1/channels/{}/stream?after=0", channel.id);
+    let (mut live_socket, _) = tokio_tungstenite::connect_async(authenticated_socket_request(
+        &stream_url,
+        &watcher_credential.token,
+    ))
+    .await
+    .expect("connect live stream");
+
+    post_message(
+        address,
+        &channel.id,
+        &author_credential.token,
+        &SendMessage {
+            recipient_id: Some(recipient),
+            kind: "text".to_owned(),
+            payload: json!({ "text": "only for recipient" }),
+            correlation_id: None,
+            causation_id: None,
+        },
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let broadcast = post_message(
+        address,
+        &channel.id,
+        &author_credential.token,
+        &SendMessage {
+            recipient_id: None,
+            kind: "text".to_owned(),
+            payload: json!({ "text": "for everyone" }),
+            correlation_id: None,
+            causation_id: None,
+        },
+    )
+    .await;
+
+    let delivered = next_message(&mut live_socket).await;
+    assert_eq!(delivered, broadcast);
+
+    let (mut replay_socket, _) = tokio_tungstenite::connect_async(authenticated_socket_request(
+        &stream_url,
+        &watcher_credential.token,
+    ))
+    .await
+    .expect("connect replay stream");
+    let replayed = next_message(&mut replay_socket).await;
+    assert_eq!(replayed, broadcast);
+    server.abort();
+}
+
+async fn create_member(store: &Store, name: &str) -> String {
+    store
+        .create_agent(CreateAgent {
+            name: name.to_owned(),
+            metadata: json!({}),
+        })
+        .await
+        .expect("create agent")
+        .id
+}
+
+async fn post_message(
+    address: std::net::SocketAddr,
+    channel_id: &str,
+    token: &str,
+    input: &SendMessage,
+) -> Message {
+    let response = reqwest::Client::new()
+        .post(format!(
+            "http://{address}/v1/channels/{channel_id}/messages"
+        ))
+        .bearer_auth(token)
+        .json(input)
+        .send()
+        .await
+        .expect("send message");
+    assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+    response.json().await.expect("decode message")
+}
+
 async fn claim_and_ack(address: std::net::SocketAddr, delivered: &Message, agent_token: &str) {
     let claim: ClaimBatch = reqwest::Client::new()
         .post(format!(

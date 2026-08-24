@@ -34,6 +34,8 @@ unauthenticated compatibility mode.
 
 - Tokens never appear in logs, list responses, or persisted plaintext.
 - Cross-agent claim, settlement, and sender spoofing fail in integration tests.
+- Direct messages surface in history and streams only to their sender,
+  recipient, and operator scope.
 - Revocation takes effect on the next request.
 - A lost create response does not silently create an unrecoverable identity;
   the operator can rotate its credential.
