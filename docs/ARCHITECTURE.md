@@ -2,13 +2,14 @@
 
 ## Kernel boundary
 
-The kernel owns five concepts:
+The kernel owns six concepts:
 
 - **Agent:** an addressable participant with opaque metadata.
 - **Channel:** a durable, bounded conversation.
 - **Membership:** permission to send or receive within a channel.
 - **Message:** an immutable envelope in a globally ordered sequence.
 - **Delivery:** a recipient snapshot and its durable processing state.
+- **Principal:** an operator or one authenticated agent identity.
 
 The kernel does not know what Codex, DSH, a task, a pull request, or a model is.
 Those concepts are expressed by adapters and versioned message contracts.
@@ -42,3 +43,15 @@ inbox is the work guarantee. See
 The next layer authenticates an inbox adapter as one agent. It leases addressed
 messages, invokes a harness, posts correlated responses, and settles the lease.
 Harness invocation and session resumption remain outside the messaging kernel.
+
+## Identity boundary
+
+The local operator token file is authoritative for node administration and is
+readable only by its operating-system user. Agent credentials are independently
+rotatable and bound to one stable agent ID. SQLite stores only SHA-256 digests of
+256-bit random bearer tokens.
+
+Authentication is read-only on the request hot path. The API derives message
+attribution from the principal, restricts inbox settlement to that agent, and
+checks channel membership for history and streams. See
+[ADR 0003](adr/0003-agent-bound-local-credentials.md).

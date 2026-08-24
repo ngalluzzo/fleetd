@@ -1,10 +1,11 @@
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{
-        Path, Query, State, WebSocketUpgrade,
+        Path, Query, Request, State, WebSocketUpgrade,
         ws::{Message as WebSocketMessage, WebSocket},
     },
-    http::StatusCode,
+    http::{StatusCode, header::AUTHORIZATION},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -13,10 +14,11 @@ use serde_json::json;
 use tokio::sync::broadcast;
 
 use crate::{
+    auth::{AuthService, Principal},
     error::FleetError,
     model::{
         AckDelivery, AddMember, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
-        Message, RetryDelivery,
+        Message, RetryDelivery, SendMessage,
     },
     store::Store,
 };
@@ -25,6 +27,7 @@ use crate::{
 #[derive(Clone)]
 pub struct AppState {
     store: Store,
+    auth: AuthService,
     messages: broadcast::Sender<Message>,
 }
 
@@ -33,15 +36,22 @@ impl AppState {
     #[must_use]
     pub fn new(store: Store) -> Self {
         let (messages, _) = broadcast::channel(1_024);
-        Self { store, messages }
+        Self {
+            auth: AuthService::new(store.clone()),
+            store,
+            messages,
+        }
     }
 }
 
 /// Builds fleetd's versioned API.
 pub fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/health", get(health))
+    let protected = Router::new()
         .route("/v1/agents", post(create_agent).get(list_agents))
+        .route(
+            "/v1/agents/{agent_id}/credentials/rotate",
+            post(rotate_agent_credential),
+        )
         .route("/v1/channels", post(create_channel).get(list_channels))
         .route("/v1/channels/{channel_id}/members", post(add_member))
         .route(
@@ -61,7 +71,38 @@ pub fn router(state: AppState) -> Router {
             "/v1/agents/{agent_id}/deliveries/{message_id}/retry",
             post(retry_delivery),
         )
+        .route_layer(middleware::from_fn_with_state(state.clone(), authenticate));
+    Router::new()
+        .route("/health", get(health))
+        .merge(protected)
         .with_state(state)
+}
+
+async fn authenticate(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Result<Response, FleetError> {
+    let header = request
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(FleetError::Unauthorized)?;
+    let token = parse_bearer_token(header).ok_or(FleetError::Unauthorized)?;
+    let principal = state.auth.authenticate(token).await?;
+    request.extensions_mut().insert(principal);
+    Ok(next.run(request).await)
+}
+
+fn parse_bearer_token(header: &str) -> Option<&str> {
+    let (scheme, token) = header.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer")
+        || token.is_empty()
+        || token.chars().any(char::is_whitespace)
+    {
+        return None;
+    }
+    Some(token)
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -70,54 +111,77 @@ async fn health() -> Json<serde_json::Value> {
 
 async fn create_agent(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Json(input): Json<CreateAgent>,
-) -> Result<(StatusCode, Json<crate::model::Agent>), FleetError> {
-    let agent = state.store.create_agent(input).await?;
-    Ok((StatusCode::CREATED, Json(agent)))
+) -> Result<(StatusCode, Json<crate::model::RegisteredAgent>), FleetError> {
+    require_operator(&principal)?;
+    let registration = state.auth.register_agent(input).await?;
+    Ok((StatusCode::CREATED, Json(registration)))
 }
 
 async fn list_agents(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
 ) -> Result<Json<Vec<crate::model::Agent>>, FleetError> {
+    require_operator(&principal)?;
     Ok(Json(state.store.list_agents().await?))
+}
+
+async fn rotate_agent_credential(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<crate::model::IssuedCredential>, FleetError> {
+    require_operator(&principal)?;
+    Ok(Json(state.auth.rotate_agent_credential(&agent_id).await?))
 }
 
 async fn create_channel(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Json(input): Json<CreateChannel>,
 ) -> Result<(StatusCode, Json<crate::model::Channel>), FleetError> {
+    require_operator(&principal)?;
     let channel = state.store.create_channel(input).await?;
     Ok((StatusCode::CREATED, Json(channel)))
 }
 
 async fn list_channels(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
 ) -> Result<Json<Vec<crate::model::Channel>>, FleetError> {
+    require_operator(&principal)?;
     Ok(Json(state.store.list_channels().await?))
 }
 
 async fn add_member(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
     Json(input): Json<AddMember>,
 ) -> Result<StatusCode, FleetError> {
+    require_operator(&principal)?;
     state.store.add_member(&channel_id, &input.agent_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn claim_deliveries(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(agent_id): Path<String>,
     Json(input): Json<ClaimDeliveries>,
 ) -> Result<Json<crate::model::ClaimBatch>, FleetError> {
+    require_bound_agent(&principal, &agent_id)?;
     Ok(Json(state.store.claim_deliveries(&agent_id, input).await?))
 }
 
 async fn acknowledge_delivery(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path((agent_id, message_id)): Path<(String, String)>,
     Json(input): Json<AckDelivery>,
 ) -> Result<StatusCode, FleetError> {
+    require_bound_agent(&principal, &agent_id)?;
     state
         .store
         .acknowledge_delivery(&agent_id, &message_id, &input.lease_token)
@@ -127,9 +191,11 @@ async fn acknowledge_delivery(
 
 async fn retry_delivery(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path((agent_id, message_id)): Path<(String, String)>,
     Json(input): Json<RetryDelivery>,
 ) -> Result<StatusCode, FleetError> {
+    require_bound_agent(&principal, &agent_id)?;
     state
         .store
         .retry_delivery(&agent_id, &message_id, input)
@@ -139,9 +205,11 @@ async fn retry_delivery(
 
 async fn append_message(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
-    Json(input): Json<CreateMessage>,
+    Json(input): Json<SendMessage>,
 ) -> Result<(StatusCode, Json<Message>), FleetError> {
+    let input: CreateMessage = input.attributed_to(require_agent(&principal)?);
     let message = state.store.append_message(&channel_id, input).await?;
     let _unused = state.messages.send(message.clone());
     Ok((StatusCode::CREATED, Json(message)))
@@ -161,9 +229,11 @@ const fn default_page_limit() -> u32 {
 
 async fn list_messages(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
     Query(query): Query<PageQuery>,
 ) -> Result<Json<crate::model::MessagePage>, FleetError> {
+    require_channel_access(&state, &principal, &channel_id).await?;
     Ok(Json(
         state
             .store
@@ -180,10 +250,12 @@ struct StreamQuery {
 
 async fn stream(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
     Query(query): Query<StreamQuery>,
     upgrade: WebSocketUpgrade,
 ) -> Result<Response, FleetError> {
+    require_channel_access(&state, &principal, &channel_id).await?;
     state
         .store
         .list_messages(&channel_id, query.after, 1)
@@ -194,6 +266,47 @@ async fn stream(
             stream_messages(socket, state.store, receiver, channel_id, query.after)
         })
         .into_response())
+}
+
+fn require_operator(principal: &Principal) -> Result<(), FleetError> {
+    if principal.is_operator() {
+        return Ok(());
+    }
+    Err(FleetError::Forbidden(
+        "operator credential required".to_owned(),
+    ))
+}
+
+fn require_agent(principal: &Principal) -> Result<&str, FleetError> {
+    principal
+        .agent_id()
+        .ok_or_else(|| FleetError::Forbidden("agent credential required".to_owned()))
+}
+
+fn require_bound_agent(principal: &Principal, expected_agent_id: &str) -> Result<(), FleetError> {
+    if require_agent(principal)? == expected_agent_id {
+        return Ok(());
+    }
+    Err(FleetError::Forbidden(
+        "credential is bound to another agent".to_owned(),
+    ))
+}
+
+async fn require_channel_access(
+    state: &AppState,
+    principal: &Principal,
+    channel_id: &str,
+) -> Result<(), FleetError> {
+    if principal.is_operator() {
+        return Ok(());
+    }
+    let agent_id = require_agent(principal)?;
+    if state.store.is_member(channel_id, agent_id).await? {
+        return Ok(());
+    }
+    Err(FleetError::Forbidden(
+        "agent is not a member of this channel".to_owned(),
+    ))
 }
 
 async fn stream_messages(

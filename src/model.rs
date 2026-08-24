@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -16,6 +18,33 @@ pub struct CreateAgent {
     pub name: String,
     #[serde(default = "empty_object")]
     pub metadata: Value,
+}
+
+/// A newly issued credential. Its token is returned once and never persisted
+/// in plaintext by fleetd.
+#[derive(Deserialize, Serialize)]
+pub struct IssuedCredential {
+    pub id: String,
+    pub token: String,
+    pub created_at_ms: i64,
+}
+
+impl fmt::Debug for IssuedCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("IssuedCredential")
+            .field("id", &self.id)
+            .field("token", &"[REDACTED]")
+            .field("created_at_ms", &self.created_at_ms)
+            .finish()
+    }
+}
+
+/// An agent registration and its one-time credential response.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RegisteredAgent {
+    pub agent: Agent,
+    pub credential: IssuedCredential,
 }
 
 /// A durable conversation shared by a bounded set of agents.
@@ -68,6 +97,34 @@ pub struct CreateMessage {
     pub payload: Value,
     pub correlation_id: Option<String>,
     pub causation_id: Option<String>,
+}
+
+/// Authenticated input for sending a message. The server supplies `sender_id`
+/// from the bound agent credential.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SendMessage {
+    pub recipient_id: Option<String>,
+    #[serde(default = "default_message_kind")]
+    pub kind: String,
+    pub payload: Value,
+    pub correlation_id: Option<String>,
+    pub causation_id: Option<String>,
+}
+
+impl SendMessage {
+    /// Attributes this wire input to an authenticated agent.
+    #[must_use]
+    pub fn attributed_to(self, sender_id: impl Into<String>) -> CreateMessage {
+        CreateMessage {
+            sender_id: sender_id.into(),
+            recipient_id: self.recipient_id,
+            kind: self.kind,
+            payload: self.payload,
+            correlation_id: self.correlation_id,
+            causation_id: self.causation_id,
+        }
+    }
 }
 
 /// A cursor-addressed page from a channel's message history.

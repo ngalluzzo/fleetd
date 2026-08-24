@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use fleetd::{
-    AckDelivery, AppState, ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
-    Message, Store, router,
+    AckDelivery, AppState, AuthService, ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel,
+    CreateMessage, Message, SendMessage, Store, router,
 };
 use futures_util::StreamExt;
 use serde_json::json;
@@ -27,6 +27,15 @@ async fn websocket_replays_history_then_delivers_live_messages() {
         })
         .await
         .expect("create receiver");
+    let auth = AuthService::new(store.clone());
+    let sender_credential = auth
+        .rotate_agent_credential(&sender.id)
+        .await
+        .expect("issue sender credential");
+    let receiver_credential = auth
+        .rotate_agent_credential(&receiver.id)
+        .await
+        .expect("issue receiver credential");
     let channel = store
         .create_channel(CreateChannel {
             name: "network-test".to_owned(),
@@ -61,15 +70,15 @@ async fn websocket_replays_history_then_delivers_live_messages() {
     });
 
     let stream_url = format!("ws://{address}/v1/channels/{}/stream?after=0", channel.id);
-    let (mut socket, _) = tokio_tungstenite::connect_async(stream_url)
+    let request = authenticated_socket_request(&stream_url, &receiver_credential.token);
+    let (mut socket, _) = tokio_tungstenite::connect_async(request)
         .await
         .expect("connect stream");
     let replayed = next_message(&mut socket).await;
     assert_eq!(replayed, history);
 
-    let live_input = CreateMessage {
-        sender_id: receiver.id,
-        recipient_id: Some(sender.id),
+    let live_input = SendMessage {
+        recipient_id: Some(sender.id.clone()),
         kind: "text".to_owned(),
         payload: json!({ "text": "after connect" }),
         correlation_id: None,
@@ -80,6 +89,7 @@ async fn websocket_replays_history_then_delivers_live_messages() {
             "http://{address}/v1/channels/{}/messages",
             channel.id
         ))
+        .bearer_auth(&receiver_credential.token)
         .json(&live_input)
         .send()
         .await
@@ -88,16 +98,17 @@ async fn websocket_replays_history_then_delivers_live_messages() {
     let expected: Message = response.json().await.expect("decode live message");
     let delivered = next_message(&mut socket).await;
     assert_eq!(delivered, expected);
-    claim_and_ack(address, &delivered).await;
+    claim_and_ack(address, &delivered, &sender_credential.token).await;
     server.abort();
 }
 
-async fn claim_and_ack(address: std::net::SocketAddr, delivered: &Message) {
+async fn claim_and_ack(address: std::net::SocketAddr, delivered: &Message, agent_token: &str) {
     let claim: ClaimBatch = reqwest::Client::new()
         .post(format!(
             "http://{address}/v1/agents/{}/deliveries/claim",
             delivered.recipient_id.as_deref().expect("direct recipient")
         ))
+        .bearer_auth(agent_token)
         .json(&ClaimDeliveries {
             limit: 10,
             lease_duration_ms: 10_000,
@@ -118,6 +129,7 @@ async fn claim_and_ack(address: std::net::SocketAddr, delivered: &Message) {
             "http://{address}/v1/agents/{agent_id}/deliveries/{}/ack",
             delivered.id
         ))
+        .bearer_auth(agent_token)
         .json(&AckDelivery {
             lease_token: claim.lease_token,
         })
@@ -125,6 +137,20 @@ async fn claim_and_ack(address: std::net::SocketAddr, delivered: &Message) {
         .await
         .expect("acknowledge through API");
     assert_eq!(acknowledgement.status(), reqwest::StatusCode::NO_CONTENT);
+}
+
+fn authenticated_socket_request(
+    url: &str,
+    token: &str,
+) -> tokio_tungstenite::tungstenite::http::Request<()> {
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue};
+
+    let mut request = url.into_client_request().expect("websocket request");
+    request.headers_mut().insert(
+        tokio_tungstenite::tungstenite::http::header::AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {token}")).expect("authorization header"),
+    );
+    request
 }
 
 async fn next_message<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>) -> Message

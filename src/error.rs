@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header::WWW_AUTHENTICATE},
     response::{IntoResponse, Response},
 };
 use serde_json::json;
@@ -18,6 +18,10 @@ pub enum FleetError {
     },
     #[error("invalid input: {0}")]
     Invalid(String),
+    #[error("authentication required")]
+    Unauthorized,
+    #[error("forbidden: {0}")]
+    Forbidden(String),
     #[error("conflict: {0}")]
     Conflict(String),
     #[error("lease conflict: {0}")]
@@ -28,20 +32,44 @@ pub enum FleetError {
     Migration(#[from] sqlx::migrate::MigrateError),
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+    #[error("credential error: {0}")]
+    Credential(String),
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl IntoResponse for FleetError {
     fn into_response(self) -> Response {
-        let status = match self {
+        let status = match &self {
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
-            Self::NotMember { .. } => StatusCode::FORBIDDEN,
+            Self::NotMember { .. } | Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::Invalid(_) => StatusCode::BAD_REQUEST,
+            Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Conflict(_) | Self::LeaseConflict(_) => StatusCode::CONFLICT,
-            Self::Database(_) | Self::Migration(_) | Self::Serialization(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            Self::Database(_)
+            | Self::Migration(_)
+            | Self::Serialization(_)
+            | Self::Credential(_)
+            | Self::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        let body = Json(json!({ "error": self.to_string() }));
-        (status, body).into_response()
+        let public_message = match &self {
+            Self::Database(_)
+            | Self::Migration(_)
+            | Self::Serialization(_)
+            | Self::Credential(_)
+            | Self::Io(_) => {
+                tracing::error!(error = %self, "request failed");
+                "internal server error".to_owned()
+            }
+            _ => self.to_string(),
+        };
+        let body = Json(json!({ "error": public_message }));
+        let mut response = (status, body).into_response();
+        if status == StatusCode::UNAUTHORIZED {
+            response
+                .headers_mut()
+                .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        }
+        response
     }
 }

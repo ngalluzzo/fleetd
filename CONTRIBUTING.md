@@ -18,3 +18,7 @@ applicable. Never describe delivery as exactly-once.
 
 Use one branch for one coherent change and keep `main` releasable. Migration
 files are immutable after they have shipped; correct them with a new migration.
+
+Credential-bearing types must redact secrets from `Debug`. Authentication must
+remain read-only on the request hot path, and authorization changes require
+cross-principal integration tests.

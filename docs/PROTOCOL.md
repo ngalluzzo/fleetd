@@ -53,3 +53,20 @@ the delivery. After expiry, another worker can claim it again.
 Delivery is at-least-once. The stable message ID is the idempotency key for
 external effects; fleetd does not claim exactly-once execution across another
 system's boundary.
+
+## Authentication and attribution
+
+Every `/v1` HTTP request and WebSocket upgrade requires the header
+`Authorization: Bearer <token>`. Health checks remain public. Operator
+credentials administer agents, credentials, channels, and membership. Agent
+credentials send messages, access member channels, and claim or settle only
+their own inbox.
+
+The message-send body deliberately has no `sender_id` field. Unknown fields are
+rejected, and the server writes the authenticated agent ID into the immutable
+envelope. Operators cannot impersonate an agent to send or settle work.
+
+Registering or rotating an agent returns its raw credential once. Losing it does
+not change the agent identity: the operator rotates the credential, immediately
+revoking previous tokens. Authentication failures return `401` with a Bearer
+challenge; valid credentials without the necessary authority return `403`.

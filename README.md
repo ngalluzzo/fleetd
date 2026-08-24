@@ -14,13 +14,19 @@ understand a particular model harness, or require a federated identity protocol.
 cargo run -- serve --db .fleetd/fleetd.db
 ```
 
-In another terminal, register two agents. Save the `id` fields printed by these
-commands:
+The daemon creates `.fleetd/operator.token` with owner-only permissions. The CLI
+uses it automatically for administrative commands. In another terminal,
+register two agents and save their credentials directly to private files:
 
 ```sh
-cargo run -- agent add --name piler --metadata '{"harness":"dsh"}'
-cargo run -- agent add --name weaver --metadata '{"harness":"codex"}'
+cargo run -- agent add --name piler --metadata '{"harness":"dsh"}' \
+  --credential-file .fleetd/piler.token
+cargo run -- agent add --name weaver --metadata '{"harness":"codex"}' \
+  --credential-file .fleetd/weaver.token
 ```
+
+Each response contains `agent.id` but omits the raw token when a credential file
+is requested. fleetd never overwrites an existing credential file.
 
 Create a channel containing both IDs:
 
@@ -32,26 +38,28 @@ cargo run -- channel create --name gooir-001 \
 Watch it from one process:
 
 ```sh
-cargo run -- message watch --channel CHANNEL_ID
+cargo run -- --token-file .fleetd/weaver.token message watch \
+  --channel CHANNEL_ID
 ```
 
 Then send a durable message from another:
 
 ```sh
-cargo run -- message send --channel CHANNEL_ID --from Piler_ID \
-  --to Weaver_ID --text 'review commit 5fe343f'
+cargo run -- --token-file .fleetd/piler.token message send \
+  --channel CHANNEL_ID --to Weaver_ID --text 'review commit 5fe343f'
 ```
 
 Weaver's adapter can atomically lease the message:
 
 ```sh
-cargo run -- inbox claim --agent Weaver_ID --limit 1 --lease-ms 300000
+cargo run -- --token-file .fleetd/weaver.token inbox claim \
+  --agent Weaver_ID --limit 1 --lease-ms 300000
 ```
 
 After completing the work, it acknowledges the returned message and lease IDs:
 
 ```sh
-cargo run -- inbox ack --agent Weaver_ID \
+cargo run -- --token-file .fleetd/weaver.token inbox ack --agent Weaver_ID \
   --message MESSAGE_ID --lease LEASE_TOKEN
 ```
 
@@ -62,13 +70,17 @@ worker can claim the delivery with an incremented attempt count.
 Every message also accepts a machine-readable JSON payload, a semantic `kind`,
 and optional correlation and causation IDs.
 
-## Current trust model
+## Security boundary
 
-Version 0.1 binds only to localhost by default and assumes every local client is
-trusted. The API does not authenticate `sender_id`, so it must not be exposed to
-a network yet. The daemon rejects non-loopback listen addresses while this is
-true. Agent-bound bearer authentication is the next security boundary and must
-land before remote workers are supported.
+Every versioned API request requires an operator or agent-bound bearer
+credential. Administrative actions require the operator. Inbox operations are
+restricted to the credential's agent, and message attribution is constructed by
+the server rather than accepted from request data. Raw tokens are returned once
+and stored only in owner-readable files; SQLite contains cryptographic digests.
+
+The daemon still rejects non-loopback listen addresses. Authentication is not a
+substitute for encrypted transport, so remote workers remain unsupported until
+TLS and enrollment are designed.
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [protocol](docs/PROTOCOL.md), and [milestones](docs/MILESTONES.md) for the

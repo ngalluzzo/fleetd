@@ -163,6 +163,32 @@ impl Store {
         Ok(())
     }
 
+    /// Returns whether an agent is currently a member of a channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown channel or a persistence failure.
+    pub async fn is_member(&self, channel_id: &str, agent_id: &str) -> Result<bool, FleetError> {
+        let channel_exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM channels WHERE id = ?")
+            .bind(channel_id)
+            .fetch_one(&self.pool)
+            .await?;
+        if channel_exists == 0 {
+            return Err(FleetError::NotFound {
+                entity: "channel",
+                id: channel_id.to_owned(),
+            });
+        }
+        let membership: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM channel_members WHERE channel_id = ? AND agent_id = ?",
+        )
+        .bind(channel_id)
+        .bind(agent_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(membership == 1)
+    }
+
     /// Appends one immutable message after validating its channel membership.
     ///
     /// # Errors
@@ -312,7 +338,7 @@ impl Store {
     }
 }
 
-fn validate_name(entity: &str, name: &str) -> Result<(), FleetError> {
+pub(crate) fn validate_name(entity: &str, name: &str) -> Result<(), FleetError> {
     if name.trim().is_empty() {
         return Err(FleetError::Invalid(format!(
             "{entity} name must not be empty"
@@ -321,7 +347,7 @@ fn validate_name(entity: &str, name: &str) -> Result<(), FleetError> {
     Ok(())
 }
 
-fn map_unique_conflict(
+pub(crate) fn map_unique_conflict(
     result: Result<sqlx::sqlite::SqliteQueryResult, sqlx::Error>,
     field: &str,
 ) -> Result<(), FleetError> {

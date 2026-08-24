@@ -9,7 +9,7 @@
 
 ## M1 — Harness inbox
 
-- Local bearer credentials bound to agent identities.
+- [x] Local bearer credentials bound to agent identities.
 - A generic adapter SDK.
 - Codex and DSH adapters that consume addressed messages and reply with
   correlation and causation intact.
