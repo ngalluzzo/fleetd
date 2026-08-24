@@ -1,7 +1,11 @@
-use std::{collections::HashSet, path::Path, time::SystemTime};
+use std::{collections::HashSet, path::Path, time::Duration, time::SystemTime};
 
 use serde_json::Value;
-use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
+use sqlx::{
+    Row, SqlitePool,
+    migrate::Migrator,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+};
 use uuid::Uuid;
 
 use crate::{
@@ -9,10 +13,12 @@ use crate::{
     model::{Agent, Channel, CreateAgent, CreateChannel, CreateMessage, Message, MessagePage},
 };
 
+static MIGRATOR: Migrator = sqlx::migrate!();
+
 /// SQLite-backed durable state for the coordination kernel.
 #[derive(Clone)]
 pub struct Store {
-    pool: SqlitePool,
+    pub(crate) pool: SqlitePool,
 }
 
 impl Store {
@@ -25,57 +31,17 @@ impl Store {
         let options = SqliteConnectOptions::new()
             .filename(path)
             .create_if_missing(true)
-            .foreign_keys(true);
-        let pool = SqlitePool::connect_with(options).await?;
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(8)
+            .connect_with(options)
+            .await?;
         let store = Self { pool };
-        store.migrate().await?;
+        MIGRATOR.run(&store.pool).await?;
         Ok(store)
-    }
-
-    async fn migrate(&self) -> Result<(), FleetError> {
-        sqlx::raw_sql(
-            r"
-            CREATE TABLE IF NOT EXISTS agents (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                metadata_json TEXT NOT NULL,
-                created_at_ms INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS channels (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                metadata_json TEXT NOT NULL,
-                created_at_ms INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS channel_members (
-                channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-                agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-                joined_at_ms INTEGER NOT NULL,
-                PRIMARY KEY (channel_id, agent_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS messages (
-                seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                id TEXT NOT NULL UNIQUE,
-                channel_id TEXT NOT NULL REFERENCES channels(id),
-                sender_id TEXT NOT NULL REFERENCES agents(id),
-                recipient_id TEXT REFERENCES agents(id),
-                kind TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                correlation_id TEXT,
-                causation_id TEXT,
-                created_at_ms INTEGER NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS messages_channel_seq
-                ON messages(channel_id, seq);
-            ",
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(())
     }
 
     /// Registers a new addressable agent.
@@ -241,8 +207,42 @@ impl Store {
         .bind(created_at_ms)
         .execute(&mut *transaction)
         .await?;
+        let message_seq = result.last_insert_rowid();
+        if let Some(recipient_id) = &input.recipient_id {
+            sqlx::query(
+                r"
+                INSERT INTO agent_deliveries (
+                    message_seq, agent_id, available_at_ms, created_at_ms
+                ) VALUES (?, ?, ?, ?)
+                ",
+            )
+            .bind(message_seq)
+            .bind(recipient_id)
+            .bind(created_at_ms)
+            .bind(created_at_ms)
+            .execute(&mut *transaction)
+            .await?;
+        } else {
+            sqlx::query(
+                r"
+                INSERT INTO agent_deliveries (
+                    message_seq, agent_id, available_at_ms, created_at_ms
+                )
+                SELECT ?, agent_id, ?, ?
+                FROM channel_members
+                WHERE channel_id = ? AND agent_id != ?
+                ",
+            )
+            .bind(message_seq)
+            .bind(created_at_ms)
+            .bind(created_at_ms)
+            .bind(channel_id)
+            .bind(&input.sender_id)
+            .execute(&mut *transaction)
+            .await?;
+        }
         let message = Message {
-            seq: result.last_insert_rowid(),
+            seq: message_seq,
             id,
             channel_id: channel_id.to_owned(),
             sender_id: input.sender_id,
@@ -393,7 +393,7 @@ fn channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Channel, FleetError
     })
 }
 
-fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Message, FleetError> {
+pub(crate) fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Message, FleetError> {
     Ok(Message {
         seq: row.try_get("seq")?,
         id: row.try_get("id")?,
@@ -412,7 +412,7 @@ fn parse_json(value: &str) -> Result<Value, FleetError> {
     Ok(serde_json::from_str(value)?)
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     let millis = SystemTime::UNIX_EPOCH
         .elapsed()
         .map_or(0, |time| time.as_millis());

@@ -13,4 +13,8 @@ cargo test --all-targets --all-features
 ```
 
 Each behavioral change should include a test at the narrowest stable boundary.
+Changes to delivery behavior must cover concurrency and restart or expiry where
+applicable. Never describe delivery as exactly-once.
 
+Use one branch for one coherent change and keep `main` releasable. Migration
+files are immutable after they have shipped; correct them with a new migration.

@@ -20,8 +20,12 @@ pub enum FleetError {
     Invalid(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    #[error("lease conflict: {0}")]
+    LeaseConflict(String),
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+    #[error("migration error: {0}")]
+    Migration(#[from] sqlx::migrate::MigrateError),
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 }
@@ -32,8 +36,10 @@ impl IntoResponse for FleetError {
             Self::NotFound { .. } => StatusCode::NOT_FOUND,
             Self::NotMember { .. } => StatusCode::FORBIDDEN,
             Self::Invalid(_) => StatusCode::BAD_REQUEST,
-            Self::Conflict(_) => StatusCode::CONFLICT,
-            Self::Database(_) | Self::Serialization(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Conflict(_) | Self::LeaseConflict(_) => StatusCode::CONFLICT,
+            Self::Database(_) | Self::Migration(_) | Self::Serialization(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         let body = Json(json!({ "error": self.to_string() }));
         (status, body).into_response()

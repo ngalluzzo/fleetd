@@ -29,3 +29,27 @@ HTTP history uses an exclusive `after` cursor. WebSocket streams first replay
 every durable message after the cursor and then continue with live messages.
 Clients may reconnect with the highest sequence they durably processed.
 
+## Agent inbox delivery
+
+Appending a direct message creates one delivery for its recipient. Appending a
+broadcast snapshots all current channel members except the sender. Membership
+changes never create or remove deliveries for an existing message.
+
+`POST /v1/agents/{agent_id}/deliveries/claim` accepts a bounded batch size and
+lease duration. It atomically returns the oldest eligible deliveries, one lease
+token for the batch, an expiry time, and a monotonically increasing attempt
+count per delivery.
+
+The worker settles each delivery by message ID:
+
+- `POST .../{message_id}/ack` records successful processing.
+- `POST .../{message_id}/retry` records failure evidence and makes the delivery
+  eligible after a bounded delay.
+
+Settlement requires the active lease token. Retrying the same settlement after
+a lost HTTP response is idempotent. An expired or superseded owner cannot settle
+the delivery. After expiry, another worker can claim it again.
+
+Delivery is at-least-once. The stable message ID is the idempotency key for
+external effects; fleetd does not claim exactly-once execution across another
+system's boundary.

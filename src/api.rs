@@ -14,7 +14,10 @@ use tokio::sync::broadcast;
 
 use crate::{
     error::FleetError,
-    model::{AddMember, CreateAgent, CreateChannel, CreateMessage, Message},
+    model::{
+        AckDelivery, AddMember, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
+        Message, RetryDelivery,
+    },
     store::Store,
 };
 
@@ -46,6 +49,18 @@ pub fn router(state: AppState) -> Router {
             post(append_message).get(list_messages),
         )
         .route("/v1/channels/{channel_id}/stream", get(stream))
+        .route(
+            "/v1/agents/{agent_id}/deliveries/claim",
+            post(claim_deliveries),
+        )
+        .route(
+            "/v1/agents/{agent_id}/deliveries/{message_id}/ack",
+            post(acknowledge_delivery),
+        )
+        .route(
+            "/v1/agents/{agent_id}/deliveries/{message_id}/retry",
+            post(retry_delivery),
+        )
         .with_state(state)
 }
 
@@ -87,6 +102,38 @@ async fn add_member(
     Json(input): Json<AddMember>,
 ) -> Result<StatusCode, FleetError> {
     state.store.add_member(&channel_id, &input.agent_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn claim_deliveries(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(input): Json<ClaimDeliveries>,
+) -> Result<Json<crate::model::ClaimBatch>, FleetError> {
+    Ok(Json(state.store.claim_deliveries(&agent_id, input).await?))
+}
+
+async fn acknowledge_delivery(
+    State(state): State<AppState>,
+    Path((agent_id, message_id)): Path<(String, String)>,
+    Json(input): Json<AckDelivery>,
+) -> Result<StatusCode, FleetError> {
+    state
+        .store
+        .acknowledge_delivery(&agent_id, &message_id, &input.lease_token)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn retry_delivery(
+    State(state): State<AppState>,
+    Path((agent_id, message_id)): Path<(String, String)>,
+    Json(input): Json<RetryDelivery>,
+) -> Result<StatusCode, FleetError> {
+    state
+        .store
+        .retry_delivery(&agent_id, &message_id, input)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

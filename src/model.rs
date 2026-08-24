@@ -77,10 +77,59 @@ pub struct MessagePage {
     pub next_cursor: i64,
 }
 
+/// Input for atomically leasing work from an agent inbox.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClaimDeliveries {
+    #[serde(default = "default_claim_limit")]
+    pub limit: u32,
+    #[serde(default = "default_lease_duration_ms")]
+    pub lease_duration_ms: u64,
+}
+
+/// One leased inbox entry and the immutable message it carries.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Delivery {
+    pub message: Message,
+    pub attempt: i64,
+    pub lease_expires_at_ms: i64,
+    pub last_error: Option<String>,
+}
+
+/// A set of deliveries owned by one expiring lease token.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClaimBatch {
+    pub lease_token: String,
+    pub lease_expires_at_ms: i64,
+    pub deliveries: Vec<Delivery>,
+}
+
+/// Input for acknowledging a successfully processed delivery.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AckDelivery {
+    pub lease_token: String,
+}
+
+/// Input for releasing a failed delivery for a later attempt.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RetryDelivery {
+    pub lease_token: String,
+    #[serde(default)]
+    pub retry_after_ms: u64,
+    pub error: Option<String>,
+}
+
 fn empty_object() -> Value {
     json!({})
 }
 
 fn default_message_kind() -> String {
     "text".to_owned()
+}
+
+const fn default_claim_limit() -> u32 {
+    1
+}
+
+const fn default_lease_duration_ms() -> u64 {
+    300_000
 }

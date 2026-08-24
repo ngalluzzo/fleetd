@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use fleetd::{AppState, CreateAgent, CreateChannel, CreateMessage, Message, Store, router};
+use fleetd::{
+    AckDelivery, AppState, ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
+    Message, Store, router,
+};
 use futures_util::StreamExt;
 use serde_json::json;
 
@@ -85,8 +88,43 @@ async fn websocket_replays_history_then_delivers_live_messages() {
     let expected: Message = response.json().await.expect("decode live message");
     let delivered = next_message(&mut socket).await;
     assert_eq!(delivered, expected);
-
+    claim_and_ack(address, &delivered).await;
     server.abort();
+}
+
+async fn claim_and_ack(address: std::net::SocketAddr, delivered: &Message) {
+    let claim: ClaimBatch = reqwest::Client::new()
+        .post(format!(
+            "http://{address}/v1/agents/{}/deliveries/claim",
+            delivered.recipient_id.as_deref().expect("direct recipient")
+        ))
+        .json(&ClaimDeliveries {
+            limit: 10,
+            lease_duration_ms: 10_000,
+        })
+        .send()
+        .await
+        .expect("claim inbox through API")
+        .error_for_status()
+        .expect("successful claim")
+        .json()
+        .await
+        .expect("decode claim batch");
+    assert_eq!(claim.deliveries.len(), 1);
+    assert_eq!(&claim.deliveries[0].message, delivered);
+    let agent_id = delivered.recipient_id.as_deref().expect("direct recipient");
+    let acknowledgement = reqwest::Client::new()
+        .post(format!(
+            "http://{address}/v1/agents/{agent_id}/deliveries/{}/ack",
+            delivered.id
+        ))
+        .json(&AckDelivery {
+            lease_token: claim.lease_token,
+        })
+        .send()
+        .await
+        .expect("acknowledge through API");
+    assert_eq!(acknowledgement.status(), reqwest::StatusCode::NO_CONTENT);
 }
 
 async fn next_message<S>(socket: &mut tokio_tungstenite::WebSocketStream<S>) -> Message

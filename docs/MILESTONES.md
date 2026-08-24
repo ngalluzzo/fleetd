@@ -13,7 +13,7 @@
 - A generic adapter SDK.
 - Codex and DSH adapters that consume addressed messages and reply with
   correlation and causation intact.
-- Delivery leases, acknowledgement, retry, and restart resumption.
+- [x] Delivery leases, acknowledgement, retry, and restart resumption.
 
 ## M2 — Work contracts
 
@@ -33,4 +33,3 @@
 - A small web dashboard backed exclusively by the public API.
 - Fleet health, blocked work, message traces, and model throughput.
 - Remote workers only after authenticated transport is complete.
-

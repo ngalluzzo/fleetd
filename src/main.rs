@@ -2,7 +2,8 @@ use std::{error::Error, net::SocketAddr, path::PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 use fleetd::{
-    AddMember, AppState, CreateAgent, CreateChannel, CreateMessage, MessagePage, Store, router,
+    AckDelivery, AddMember, AppState, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
+    MessagePage, RetryDelivery, Store, router,
 };
 use futures_util::StreamExt;
 use serde::Serialize;
@@ -38,6 +39,11 @@ enum Command {
     Message {
         #[command(subcommand)]
         command: MessageCommand,
+    },
+    /// Lease and settle durable work addressed to an agent.
+    Inbox {
+        #[command(subcommand)]
+        command: InboxCommand,
     },
 }
 
@@ -115,6 +121,38 @@ enum MessageCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum InboxCommand {
+    Claim {
+        #[arg(long)]
+        agent: String,
+        #[arg(long, default_value_t = 1)]
+        limit: u32,
+        #[arg(long, default_value_t = 300_000)]
+        lease_ms: u64,
+    },
+    Ack {
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        message: String,
+        #[arg(long)]
+        lease: String,
+    },
+    Retry {
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        message: String,
+        #[arg(long)]
+        lease: String,
+        #[arg(long, default_value_t = 0)]
+        retry_after_ms: u64,
+        #[arg(long)]
+        error: Option<String>,
+    },
+}
+
 #[tokio::main]
 async fn main() -> MainResult<()> {
     tracing_subscriber::fmt()
@@ -126,10 +164,70 @@ async fn main() -> MainResult<()> {
         Command::Agent { command } => agent_command(&cli.server, command).await,
         Command::Channel { command } => channel_command(&cli.server, command).await,
         Command::Message { command } => message_command(&cli.server, command).await,
+        Command::Inbox { command } => inbox_command(&cli.server, command).await,
     }
 }
 
+async fn inbox_command(server: &str, command: InboxCommand) -> MainResult<()> {
+    let client = reqwest::Client::new();
+    let response = match command {
+        InboxCommand::Claim {
+            agent,
+            limit,
+            lease_ms,
+        } => {
+            let url = format!("{}/v1/agents/{agent}/deliveries/claim", base_url(server));
+            client
+                .post(url)
+                .json(&ClaimDeliveries {
+                    limit,
+                    lease_duration_ms: lease_ms,
+                })
+                .send()
+                .await?
+        }
+        InboxCommand::Ack {
+            agent,
+            message,
+            lease,
+        } => {
+            let url = format!(
+                "{}/v1/agents/{agent}/deliveries/{message}/ack",
+                base_url(server)
+            );
+            client
+                .post(url)
+                .json(&AckDelivery { lease_token: lease })
+                .send()
+                .await?
+        }
+        InboxCommand::Retry {
+            agent,
+            message,
+            lease,
+            retry_after_ms,
+            error,
+        } => {
+            let url = format!(
+                "{}/v1/agents/{agent}/deliveries/{message}/retry",
+                base_url(server)
+            );
+            client
+                .post(url)
+                .json(&RetryDelivery {
+                    lease_token: lease,
+                    retry_after_ms,
+                    error,
+                })
+                .send()
+                .await?
+        }
+    };
+    print_response(response).await
+}
+
 async fn serve(args: ServeArgs) -> MainResult<()> {
+    validate_listen_address(args.listen)?;
     if let Some(parent) = args.db.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -141,6 +239,16 @@ async fn serve(args: ServeArgs) -> MainResult<()> {
     axum::serve(listener, router(AppState::new(store)))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    Ok(())
+}
+
+fn validate_listen_address(address: SocketAddr) -> MainResult<()> {
+    if !address.ip().is_loopback() {
+        return Err(
+            "fleetd cannot listen beyond loopback until authenticated transport is configured"
+                .into(),
+        );
+    }
     Ok(())
 }
 
@@ -209,7 +317,9 @@ async fn message_command(server: &str, command: MessageCommand) -> MainResult<()
                 (Some(text), None) => json!({ "text": text }),
                 (None, Some(payload)) => parse_json(&payload)?,
                 (None, None) => json!({}),
-                (Some(_), Some(_)) => unreachable!("clap rejects conflicting arguments"),
+                (Some(_), Some(_)) => {
+                    return Err("message text and payload are mutually exclusive".into());
+                }
             };
             let input = CreateMessage {
                 sender_id: sender,
@@ -290,4 +400,23 @@ fn print_json(value: &impl Serialize) -> MainResult<()> {
 
 fn base_url(server: &str) -> &str {
     server.trim_end_matches('/')
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    use super::validate_listen_address;
+
+    #[test]
+    fn loopback_listen_addresses_are_allowed() {
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7419);
+        assert!(validate_listen_address(address).is_ok());
+    }
+
+    #[test]
+    fn non_loopback_listen_addresses_are_rejected() {
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 7419);
+        assert!(validate_listen_address(address).is_err());
+    }
 }
