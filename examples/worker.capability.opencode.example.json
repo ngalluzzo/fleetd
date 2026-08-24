@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "agent_id": "REPLACE_WITH_FLEETD_AGENT_ID",
   "working_directory": "/absolute/path/to/worktree",
   "additional_directories": [],

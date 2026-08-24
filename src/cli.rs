@@ -12,9 +12,10 @@ use fleetd::{
     CAPABILITY_WORK_REQUEST_KIND, Capability, CapabilityAttemptProjection,
     CapabilityProviderDescriptor, CapabilityWorkRequest, CapabilityWorkTurnAdapter,
     ClaimDeliveries, CompleteInvocation, ContinuousHarnessWorker, ContinuousWorkerConfig,
-    CreateAgent, CreateChannel, EnvelopeTurnAdapter, Invocation, IssuedCredential, Message,
-    MessagePage, PluginSpec, PreparedTurn, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery,
-    SendMessage, Store, ToolBudget, TurnAdapter, TurnPolicy, extract_capability_message, router,
+    CreateAgent, CreateChannel, EnvelopeTurnAdapter, InboundAcceptance, Invocation,
+    IssuedCredential, Message, MessagePage, PluginSpec, PreparedTurn, RegisteredAgent,
+    ResolveDeliveryBlock, RetryDelivery, SendMessage, Store, ToolBudget, TurnAdapter, TurnPolicy,
+    extract_capability_message, router,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -307,8 +308,7 @@ struct WorkerFileConfig {
     #[serde(default)]
     compatibility_digest: Option<String>,
     plugin: WorkerPluginConfig,
-    #[serde(default)]
-    adapter: Option<WorkerAdapterConfig>,
+    adapter: WorkerAdapterConfig,
     #[serde(default = "default_result_kind")]
     result_kind: String,
     #[serde(default = "default_worker_lease_ms")]
@@ -326,10 +326,19 @@ struct WorkerFileConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WorkerAdapterConfig {
-    Envelope,
+    Envelope {
+        inbound: InboundAcceptanceConfig,
+    },
     CapabilityWorkV1 {
         providers: Vec<CapabilityProviderDescriptor>,
     },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InboundAcceptanceConfig {
+    schema_version: u32,
+    message_kinds: Vec<String>,
 }
 
 enum ConfiguredTurnAdapter {
@@ -338,6 +347,13 @@ enum ConfiguredTurnAdapter {
 }
 
 impl TurnAdapter for ConfiguredTurnAdapter {
+    fn inbound_acceptance(&self) -> &InboundAcceptance {
+        match self {
+            Self::Envelope(adapter) => adapter.inbound_acceptance(),
+            Self::CapabilityWorkV1(adapter) => adapter.inbound_acceptance(),
+        }
+    }
+
     fn prepare(&self, invocation: &Invocation) -> Result<PreparedTurn, String> {
         match self {
             Self::Envelope(adapter) => adapter.prepare(invocation),
@@ -517,19 +533,28 @@ async fn worker_command(command: WorkerCommand) -> MainResult<()> {
 
 async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
     let raw = fs::read(&args.config)?;
-    let desired: WorkerFileConfig = serde_json::from_slice(&raw).map_err(|error| {
+    let value: Value = serde_json::from_slice(&raw).map_err(|error| {
         format!(
             "worker configuration {} is invalid: {error}",
             args.config.display()
         )
     })?;
-    if desired.schema_version != 1 {
+    let schema_version = value.get("schema_version").and_then(Value::as_u64);
+    if schema_version != Some(2) {
+        let observed =
+            schema_version.map_or_else(|| "missing".to_owned(), |value| value.to_string());
         return Err(format!(
-            "unsupported worker configuration schema version {}; expected 1",
-            desired.schema_version
+            "unsupported worker configuration schema version {observed}; expected 2 with explicit inbound acceptance"
         )
         .into());
     }
+    let desired: WorkerFileConfig = serde_json::from_value(value).map_err(|error| {
+        format!(
+            "worker configuration {} is invalid: {error}",
+            args.config.display()
+        )
+    })?;
+    debug_assert_eq!(desired.schema_version, 2);
     if let Some(parent) = args.db.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -558,10 +583,23 @@ async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
 impl WorkerFileConfig {
     fn turn_adapter(&self) -> MainResult<ConfiguredTurnAdapter> {
         match &self.adapter {
-            None | Some(WorkerAdapterConfig::Envelope) => Ok(ConfiguredTurnAdapter::Envelope(
-                EnvelopeTurnAdapter::new(self.result_kind.clone()),
-            )),
-            Some(WorkerAdapterConfig::CapabilityWorkV1 { providers }) => {
+            WorkerAdapterConfig::Envelope { inbound } => {
+                if inbound.schema_version != 1 {
+                    return Err(format!(
+                        "unsupported inbound acceptance schema version {}; expected 1",
+                        inbound.schema_version
+                    )
+                    .into());
+                }
+                Ok(ConfiguredTurnAdapter::Envelope(
+                    EnvelopeTurnAdapter::new(
+                        self.result_kind.clone(),
+                        inbound.message_kinds.clone(),
+                    )
+                    .map_err(|error| format!("worker adapter configuration is invalid: {error}"))?,
+                ))
+            }
+            WorkerAdapterConfig::CapabilityWorkV1 { providers } => {
                 Ok(ConfiguredTurnAdapter::CapabilityWorkV1(
                     CapabilityWorkTurnAdapter::new(providers.clone()).map_err(|error| {
                         format!("worker adapter configuration is invalid: {error}")
@@ -1197,6 +1235,7 @@ fn base_url(server: &str) -> &str {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
+    use fleetd::TurnAdapter;
     use serde_json::json;
 
     use super::{
@@ -1217,11 +1256,18 @@ mod tests {
     }
 
     #[test]
-    fn worker_config_defaults_are_bounded_and_unknown_fields_fail() {
+    fn worker_config_defaults_are_bounded_and_inbound_acceptance_is_exact() {
         let value = json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "agent_id": "agent-id",
             "working_directory": env!("CARGO_MANIFEST_DIR"),
+            "adapter": {
+                "kind": "envelope",
+                "inbound": {
+                    "schema_version": 1,
+                    "message_kinds": ["work.request/v1"]
+                }
+            },
             "plugin": {
                 "id": "mock.harness",
                 "executable": "/usr/bin/python3"
@@ -1229,6 +1275,11 @@ mod tests {
         });
         let desired: WorkerFileConfig =
             serde_json::from_value(value.clone()).expect("parse minimal desired state");
+        let adapter = desired.turn_adapter().expect("configure exact acceptance");
+        assert_eq!(
+            adapter.inbound_acceptance().message_kinds(),
+            &std::collections::BTreeSet::from(["work.request/v1".to_owned()])
+        );
         let runtime = desired.into_runtime_config();
         assert_eq!(runtime.lease_duration.as_millis(), 900_000);
         assert_eq!(runtime.turn_policy.wall_timeout_ms, 600_000);
@@ -1237,12 +1288,32 @@ mod tests {
         let mut invalid = value;
         invalid["surprise"] = json!(true);
         assert!(serde_json::from_value::<WorkerFileConfig>(invalid).is_err());
+
+        let duplicate = json!({
+            "schema_version": 2,
+            "agent_id": "agent-id",
+            "working_directory": env!("CARGO_MANIFEST_DIR"),
+            "adapter": {
+                "kind": "envelope",
+                "inbound": {
+                    "schema_version": 1,
+                    "message_kinds": ["work.request/v1", "work.request/v1"]
+                }
+            },
+            "plugin": {
+                "id": "mock.harness",
+                "executable": "/usr/bin/python3"
+            }
+        });
+        let duplicate: WorkerFileConfig =
+            serde_json::from_value(duplicate).expect("parse duplicate acceptance shape");
+        assert!(duplicate.turn_adapter().is_err());
     }
 
     #[test]
     fn worker_capability_adapter_configuration_is_exact_and_strict() {
         let value = json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "agent_id": "agent-id",
             "working_directory": env!("CARGO_MANIFEST_DIR"),
             "adapter": {

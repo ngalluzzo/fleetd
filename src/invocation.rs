@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -26,6 +28,47 @@ impl Store {
         agent_id: &str,
         input: ClaimDeliveries,
     ) -> Result<InvocationBatch, FleetError> {
+        self.reserve_invocations_filtered(agent_id, input, None)
+            .await
+    }
+
+    /// Atomically reserves only deliveries whose opaque envelope kind appears
+    /// in the adapter-owned exact acceptance set.
+    ///
+    /// This trusted worker path does not interpret a kind or acknowledge
+    /// skipped deliveries. Non-matching deliveries remain pending with their
+    /// attempt count unchanged.
+    pub(crate) async fn reserve_invocations_by_kind(
+        &self,
+        agent_id: &str,
+        input: ClaimDeliveries,
+        message_kinds: &BTreeSet<String>,
+    ) -> Result<InvocationBatch, FleetError> {
+        if message_kinds.is_empty() {
+            return Err(FleetError::Invalid(
+                "invocation message-kind selector must not be empty".to_owned(),
+            ));
+        }
+        self.reserve_invocations_filtered(agent_id, input, Some(message_kinds))
+            .await
+    }
+
+    /// Atomically leases eligible deliveries and creates their durable managed
+    /// invocation records.
+    ///
+    /// Expired reservations that were never armed are proven not started and
+    /// may be reclaimed. Expired armed invocations are parked instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid bounds, an unknown agent, or a persistence
+    /// failure.
+    async fn reserve_invocations_filtered(
+        &self,
+        agent_id: &str,
+        input: ClaimDeliveries,
+        message_kinds: Option<&BTreeSet<String>>,
+    ) -> Result<InvocationBatch, FleetError> {
         crate::delivery::validate_claim(&input)?;
         crate::delivery::ensure_agent(&self.pool, agent_id).await?;
         let now = now_ms();
@@ -35,6 +78,7 @@ impl Store {
             .checked_add(lease_duration)
             .ok_or_else(|| FleetError::Invalid("lease expiry overflowed".to_owned()))?;
         let lease_token = Uuid::new_v4().to_string();
+        let message_kinds_json = message_kinds.map(serde_json::to_string).transpose()?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         recover_expired_invocations(&mut transaction, agent_id, now).await?;
         sqlx::query(
@@ -43,15 +87,20 @@ impl Store {
             SET state = 'leased', attempt = attempt + 1,
                 lease_token = ?, lease_expires_at_ms = ?
             WHERE rowid IN (
-                SELECT rowid
-                FROM agent_deliveries
-                WHERE agent_id = ?
-                  AND available_at_ms <= ?
+                SELECT d.rowid
+                FROM agent_deliveries d
+                JOIN messages m ON m.seq = d.message_seq
+                WHERE d.agent_id = ?
+                  AND d.available_at_ms <= ?
                   AND (
-                    state = 'pending'
-                    OR (state = 'leased' AND lease_expires_at_ms <= ?)
+                    d.state = 'pending'
+                    OR (d.state = 'leased' AND d.lease_expires_at_ms <= ?)
                   )
-                ORDER BY message_seq
+                  AND (
+                    ? IS NULL
+                    OR m.kind IN (SELECT value FROM json_each(?))
+                  )
+                ORDER BY d.message_seq
                 LIMIT ?
             )
             ",
@@ -61,6 +110,8 @@ impl Store {
         .bind(agent_id)
         .bind(now)
         .bind(now)
+        .bind(&message_kinds_json)
+        .bind(&message_kinds_json)
         .bind(i64::from(input.limit))
         .execute(&mut *transaction)
         .await?;

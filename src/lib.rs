@@ -59,5 +59,6 @@ pub use work_contract::{
 };
 pub use worker::{
     CapabilityWorkTurnAdapter, ContinuousHarnessWorker, ContinuousWorkerConfig,
-    ContinuousWorkerError, EnvelopeTurnAdapter, PreparedTurn, TurnAdapter, WorkerReport,
+    ContinuousWorkerError, EnvelopeTurnAdapter, InboundAcceptance, PreparedTurn, TurnAdapter,
+    WorkerReport,
 };

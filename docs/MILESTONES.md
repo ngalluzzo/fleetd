@@ -29,7 +29,7 @@
   controller-owned MCP endpoint without receiving a fleet bearer credential.
 - [x] A bounded two-seat OpenCode loop composed three capability-authored hops
   and resumed A's same native session under a higher owner epoch.
-- [ ] Versioned inbound message acceptance at the worker/adapter boundary so
+- [x] Versioned inbound message acceptance at the worker/adapter boundary so
   continuous seats do not treat generic completion results as new work.
 
 ## M2 — Work contracts

@@ -33,6 +33,69 @@ const MAX_RETRY_DELAY_MS: u64 = 86_400_000;
 const MAX_CAPTURE_BYTES: usize = 512 * 1024;
 const LEASE_MARGIN_MS: u64 = 60_000;
 const MAX_CAPABILITY_REQUEST_BYTES: usize = 512 * 1024;
+const MAX_ACCEPTED_MESSAGE_KINDS: usize = 128;
+const MAX_MESSAGE_KIND_BYTES: usize = 256;
+
+/// Versioned, adapter-owned declaration of which immutable message envelopes
+/// one worker seat may reserve.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct InboundAcceptance {
+    schema_version: u32,
+    message_kinds: BTreeSet<String>,
+}
+
+impl InboundAcceptance {
+    /// Creates the v1 exact-kind acceptance contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty, duplicate, malformed, or unbounded kind
+    /// set. Matching a kind establishes reservation eligibility only; adapters
+    /// must still validate the complete payload after reservation.
+    pub fn exact_v1<I, S>(message_kinds: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let supplied = message_kinds
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<_>>();
+        if supplied.is_empty() {
+            return Err("inbound acceptance must contain at least one message kind".to_owned());
+        }
+        if supplied.len() > MAX_ACCEPTED_MESSAGE_KINDS {
+            return Err(format!(
+                "inbound acceptance exceeds {MAX_ACCEPTED_MESSAGE_KINDS} message kinds"
+            ));
+        }
+        let mut exact = BTreeSet::new();
+        for kind in supplied {
+            if kind.trim().is_empty() || kind.len() > MAX_MESSAGE_KIND_BYTES {
+                return Err(format!(
+                    "accepted message kind must contain between 1 and {MAX_MESSAGE_KIND_BYTES} bytes"
+                ));
+            }
+            if !exact.insert(kind.clone()) {
+                return Err(format!("duplicate accepted message kind {kind}"));
+            }
+        }
+        Ok(Self {
+            schema_version: 1,
+            message_kinds: exact,
+        })
+    }
+
+    #[must_use]
+    pub const fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    #[must_use]
+    pub fn message_kinds(&self) -> &BTreeSet<String> {
+        &self.message_kinds
+    }
+}
 
 /// One adapter-produced turn that remains outside the messaging kernel.
 #[derive(Clone, Debug)]
@@ -48,6 +111,10 @@ pub struct PreparedTurn {
 
 /// Converts an immutable inbox message into harness-controller input.
 pub trait TurnAdapter: Send + Sync {
+    /// Declares the exact message contracts this adapter is eligible to
+    /// reserve. The worker applies it before a lease or invocation exists.
+    fn inbound_acceptance(&self) -> &InboundAcceptance;
+
     /// Prepares one turn without performing external effects.
     ///
     /// # Errors
@@ -63,18 +130,38 @@ pub trait TurnAdapter: Send + Sync {
 #[derive(Clone, Debug)]
 pub struct EnvelopeTurnAdapter {
     result_kind: String,
+    inbound_acceptance: InboundAcceptance,
 }
 
 impl EnvelopeTurnAdapter {
-    #[must_use]
-    pub fn new(result_kind: impl Into<String>) -> Self {
-        Self {
-            result_kind: result_kind.into(),
+    /// Creates an envelope adapter with exact v1 inbound message kinds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the result kind or inbound contract is invalid.
+    pub fn new<I, S>(result_kind: impl Into<String>, message_kinds: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let result_kind = result_kind.into();
+        if result_kind.trim().is_empty() || result_kind.len() > MAX_MESSAGE_KIND_BYTES {
+            return Err(format!(
+                "result kind must contain between 1 and {MAX_MESSAGE_KIND_BYTES} bytes"
+            ));
         }
+        Ok(Self {
+            result_kind,
+            inbound_acceptance: InboundAcceptance::exact_v1(message_kinds)?,
+        })
     }
 }
 
 impl TurnAdapter for EnvelopeTurnAdapter {
+    fn inbound_acceptance(&self) -> &InboundAcceptance {
+        &self.inbound_acceptance
+    }
+
     fn prepare(&self, invocation: &Invocation) -> Result<PreparedTurn, String> {
         let envelope = serde_json::json!({
             "invocation": {
@@ -120,6 +207,7 @@ impl TurnAdapter for EnvelopeTurnAdapter {
 #[derive(Clone, Debug)]
 pub struct CapabilityWorkTurnAdapter {
     providers: BTreeMap<crate::ExactIdentity, CapabilityProviderDescriptor>,
+    inbound_acceptance: InboundAcceptance,
 }
 
 impl CapabilityWorkTurnAdapter {
@@ -148,13 +236,19 @@ impl CapabilityWorkTurnAdapter {
         if configured.is_empty() {
             return Err("provider set must not be empty".to_owned());
         }
+        let inbound_acceptance = InboundAcceptance::exact_v1([CAPABILITY_WORK_REQUEST_KIND])?;
         Ok(Self {
             providers: configured,
+            inbound_acceptance,
         })
     }
 }
 
 impl TurnAdapter for CapabilityWorkTurnAdapter {
+    fn inbound_acceptance(&self) -> &InboundAcceptance {
+        &self.inbound_acceptance
+    }
+
     fn prepare(&self, invocation: &Invocation) -> Result<PreparedTurn, String> {
         if invocation.message.kind != CAPABILITY_WORK_REQUEST_KIND {
             return Err(format!(
@@ -424,6 +518,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
                     .as_deref()
                     .unwrap_or(&description.profile_digest),
                 &self.config.mcp_grants,
+                self.adapter.inbound_acceptance(),
             ),
             profile_digest: description.profile_digest,
         };
@@ -461,13 +556,14 @@ impl<'store> ContinuousHarnessWorker<'store> {
             }
             let reservation = match self
                 .store
-                .reserve_invocations(
+                .reserve_invocations_by_kind(
                     &self.config.agent_id,
                     crate::ClaimDeliveries {
                         limit: 1,
                         lease_duration_ms: duration_ms(self.config.lease_duration)
                             .expect("validated lease duration"),
                     },
+                    self.adapter.inbound_acceptance().message_kinds(),
                 )
                 .await
             {
@@ -975,16 +1071,23 @@ fn duration_ms(duration: Duration) -> Option<u64> {
     u64::try_from(duration.as_millis()).ok()
 }
 
-fn worker_compatibility_digest(base: &str, mcp_grants: &[String]) -> String {
-    if mcp_grants.is_empty() {
-        return base.to_owned();
-    }
+fn worker_compatibility_digest(
+    base: &str,
+    mcp_grants: &[String],
+    inbound_acceptance: &InboundAcceptance,
+) -> String {
     let mut digest = Sha256::new();
-    digest.update(b"fleetd-worker-compatibility-v1\0");
+    digest.update(b"fleetd-worker-compatibility-v2\0");
     digest.update(base.as_bytes());
     for grant in mcp_grants {
         digest.update(b"\0");
         digest.update(grant.as_bytes());
+    }
+    digest.update(b"\0inbound-schema\0");
+    digest.update(inbound_acceptance.schema_version().to_be_bytes());
+    for kind in inbound_acceptance.message_kinds() {
+        digest.update(b"\0kind\0");
+        digest.update(kind.as_bytes());
     }
     format!("sha256:{:x}", digest.finalize())
 }

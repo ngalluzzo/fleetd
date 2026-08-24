@@ -616,11 +616,13 @@ The first vertical slice now implements:
    persistence claims, uncertainty, and retirement evidence survive restart.
    Compatible ready sessions adopt under a higher epoch; incompatible or
    abandoned sessions rotate; active and uncertain sessions fail closed.
-8. **Continuous scheduling.** One serialized worker seat reserves the oldest
-   eligible invocation, derives a semantic-neutral per-channel turn, reuses its
-   open session lane, and repeats until cancelled. Plugin or harness failure
-   starts a fresh process generation after bounded backoff. Compatible ready
-   lanes are natively resumed under a higher owner epoch.
+8. **Continuous scheduling.** One serialized worker seat declares a versioned
+   exact-kind inbound acceptance contract, reserves the oldest eligible match,
+   derives a semantic-neutral per-channel turn, reuses its open session lane,
+   and repeats until cancelled. Non-matches remain pending without an attempt.
+   Plugin or harness failure starts a fresh process generation after bounded
+   backoff. Compatible ready lanes are natively resumed under a higher owner
+   epoch; changing acceptance rotates compatibility.
 9. **Invocation-scoped peer messaging.** The optional
    `fleet.messaging.send` grant resolves to a controller-owned loopback MCP
    server built with the official Rust SDK. The controller activates it only

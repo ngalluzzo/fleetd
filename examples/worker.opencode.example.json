@@ -1,9 +1,16 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "agent_id": "REPLACE_WITH_FLEETD_AGENT_ID",
   "working_directory": "/absolute/path/to/worktree",
   "additional_directories": [],
   "mcp_grants": [],
+  "adapter": {
+    "kind": "envelope",
+    "inbound": {
+      "schema_version": 1,
+      "message_kinds": ["work.request/v1"]
+    }
+  },
   "plugin": {
     "id": "fleetd.harness.opencode",
     "executable": "/absolute/path/to/fleetd/target/debug/fleetd-harness-opencode",

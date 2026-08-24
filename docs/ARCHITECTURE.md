@@ -99,6 +99,13 @@ resume before it handles more work. Binding activation commits with invocation
 arming, and known quiescent completion returns the binding to ready in the same
 commit as result publication.
 
+Before reservation, each adapter declares a versioned exact-kind inbound
+acceptance set. SQLite applies it only as an opaque selector over immutable
+envelopes: earlier non-matches stay pending without leases or attempt changes,
+while payload semantics remain adapter-owned and are validated after
+reservation. The declaration participates in session compatibility. See
+[ADR 0017](adr/0017-adapters-declare-inbound-acceptance.md).
+
 The worker opens SQLite directly as a trusted local controller. It is neither
 part of the public HTTP API nor embedded in the messaging kernel. Persisted
 invocation-event fragments and explicit runtime-generation evidence remain the
@@ -125,9 +132,10 @@ messaging kernel. See the
 [ADR 0011](adr/0011-vendor-owned-harness-plugins.md),
 [ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md),
 [ADR 0016](adr/0016-invocation-scoped-message-capability.md),
+[ADR 0017](adr/0017-adapters-declare-inbound-acceptance.md),
 [OpenCode plugin qualification](qualification/opencode-plugin-2026-08-24.md),
 and the
-[message-capability qualification](qualification/message-capability-opencode-2026-08-24.md).
+[continuous two-seat qualification](qualification/continuous-two-seat-opencode-loop-2026-08-24.md).
 
 ## Capability work boundary
 

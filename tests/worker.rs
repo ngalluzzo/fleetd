@@ -7,8 +7,8 @@ use fleetd::{
     CapabilityAttemptProjection, CapabilityProviderDescriptor, CapabilityWorkRequest,
     CapabilityWorkTurnAdapter, ClaimDeliveries, ContinuousHarnessWorker, ContinuousWorkerConfig,
     ContinuousWorkerError, CreateAgent, CreateChannel, CreateMessage, EnvelopeTurnAdapter,
-    ExecutionCertainty, InvocationState, PluginSpec, PreparedTurn, SessionBindingState, Store,
-    ToolBudget, TurnAdapter, TurnPolicy, extract_capability_message,
+    ExecutionCertainty, InboundAcceptance, InvocationState, PluginSpec, PreparedTurn,
+    SessionBindingState, Store, ToolBudget, TurnAdapter, TurnPolicy, extract_capability_message,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -41,6 +41,26 @@ fn policy() -> TurnPolicy {
         },
         token_budget: None,
     }
+}
+
+fn envelope_adapter() -> EnvelopeTurnAdapter {
+    EnvelopeTurnAdapter::new("work.result/v1", ["work.request/v1"])
+        .expect("valid fixture envelope adapter")
+}
+
+#[test]
+fn inbound_acceptance_is_bounded_exact_and_canonical() {
+    assert!(InboundAcceptance::exact_v1(Vec::<String>::new()).is_err());
+    assert!(InboundAcceptance::exact_v1(["work/v1", "work/v1"]).is_err());
+    assert!(InboundAcceptance::exact_v1([" "]).is_err());
+    assert!(InboundAcceptance::exact_v1(["x".repeat(257)]).is_err());
+    assert!(InboundAcceptance::exact_v1((0..129).map(|index| format!("work/{index}"))).is_err());
+
+    let left = InboundAcceptance::exact_v1(["work.beta/v1", "work.alpha/v1"])
+        .expect("valid unordered set");
+    let right =
+        InboundAcceptance::exact_v1(["work.alpha/v1", "work.beta/v1"]).expect("valid ordered set");
+    assert_eq!(left, right);
 }
 
 fn worker_config(agent_id: &str, mode: &str, working_directory: PathBuf) -> ContinuousWorkerConfig {
@@ -155,6 +175,25 @@ async fn append_gooir_request(
         .expect("append capability request")
 }
 
+async fn append_direct_kind(fixture: &Fixture, kind: &str, sequence: usize) -> fleetd::Message {
+    fixture
+        .store
+        .append_message(
+            &fixture.channel_id,
+            CreateMessage {
+                sender_id: fixture.sender_id.clone(),
+                idempotency_key: None,
+                recipient_id: Some(fixture.receiver_id.clone()),
+                kind: kind.to_owned(),
+                payload: json!({"task": format!("selected worker test {sequence}")}),
+                correlation_id: Some("selected-worker-test".to_owned()),
+                causation_id: None,
+            },
+        )
+        .await
+        .expect("append selected request")
+}
+
 #[tokio::test]
 async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
     let fixture = fixture(2).await;
@@ -165,7 +204,7 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
             "healthy",
             PathBuf::from(env!("CARGO_MANIFEST_DIR")),
         ),
-        EnvelopeTurnAdapter::new("work.result/v1"),
+        envelope_adapter(),
     )
     .expect("valid worker");
 
@@ -203,13 +242,103 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
 }
 
 #[tokio::test]
+async fn worker_skips_earlier_unaccepted_delivery_without_leasing_it() {
+    let fixture = fixture(0).await;
+    let skipped = append_direct_kind(&fixture, "work.result/v1", 0).await;
+    let accepted = append_direct_kind(&fixture, "work.request/v1", 1).await;
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(
+            &fixture.receiver_id,
+            "healthy",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        ),
+        envelope_adapter(),
+    )
+    .expect("valid worker");
+
+    let report = worker
+        .run_until(CancellationToken::new(), Some(1))
+        .await
+        .expect("execute accepted message");
+
+    assert_eq!(report.reservations, 1);
+    assert_eq!(report.completed, 1);
+    let invocation = fixture
+        .store
+        .list_invocations(Some(&fixture.receiver_id))
+        .await
+        .expect("list invocations")
+        .pop()
+        .expect("one accepted invocation");
+    assert_eq!(invocation.message.id, accepted.id);
+
+    let skipped_claim = fixture
+        .store
+        .claim_deliveries(
+            &fixture.receiver_id,
+            ClaimDeliveries {
+                limit: 1,
+                lease_duration_ms: 10_000,
+            },
+        )
+        .await
+        .expect("claim skipped delivery through the unfiltered kernel API");
+    assert_eq!(skipped_claim.deliveries.len(), 1);
+    assert_eq!(skipped_claim.deliveries[0].message.id, skipped.id);
+    assert_eq!(skipped_claim.deliveries[0].attempt, 1);
+}
+
+#[tokio::test]
+async fn changed_inbound_contract_rotates_the_session_compatibility_generation() {
+    let fixture = fixture(0).await;
+    append_direct_kind(&fixture, "work.alpha/v1", 0).await;
+    append_direct_kind(&fixture, "work.beta/v1", 1).await;
+    let working_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let first = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(&fixture.receiver_id, "healthy", working_directory.clone()),
+        EnvelopeTurnAdapter::new("work.result/v1", ["work.alpha/v1"]).expect("valid alpha adapter"),
+    )
+    .expect("valid first worker");
+    first
+        .run_until(CancellationToken::new(), Some(1))
+        .await
+        .expect("complete alpha turn");
+
+    let second = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(&fixture.receiver_id, "healthy", working_directory),
+        EnvelopeTurnAdapter::new("work.result/v1", ["work.beta/v1"]).expect("valid beta adapter"),
+    )
+    .expect("valid second worker");
+    second
+        .run_until(CancellationToken::new(), Some(1))
+        .await
+        .expect("complete beta turn");
+
+    let sessions = fixture
+        .store
+        .list_session_bindings(Some(&fixture.receiver_id))
+        .await
+        .expect("list rotated bindings");
+    assert_eq!(sessions.len(), 2);
+    assert!(sessions.iter().any(|session| {
+        session.binding.binding_generation == 1 && session.state == SessionBindingState::Retired
+    }));
+    assert!(sessions.iter().any(|session| {
+        session.binding.binding_generation == 2 && session.state == SessionBindingState::Ready
+    }));
+}
+
+#[tokio::test]
 async fn fresh_worker_generation_adopts_and_resumes_ready_session() {
     let fixture = fixture(2).await;
     let working_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let first = ContinuousHarnessWorker::new(
         &fixture.store,
         worker_config(&fixture.receiver_id, "healthy", working_directory.clone()),
-        EnvelopeTurnAdapter::new("work.result/v1"),
+        envelope_adapter(),
     )
     .expect("valid first worker");
     first
@@ -220,7 +349,7 @@ async fn fresh_worker_generation_adopts_and_resumes_ready_session() {
     let second = ContinuousHarnessWorker::new(
         &fixture.store,
         worker_config(&fixture.receiver_id, "healthy", working_directory),
-        EnvelopeTurnAdapter::new("work.result/v1"),
+        envelope_adapter(),
     )
     .expect("valid second worker");
     second
@@ -380,12 +509,8 @@ async fn session_open_crash_releases_unarmed_work_and_restarts_generation() {
             version: 1,
         })
         .with_request_timeout(Duration::from_secs(2));
-    let worker = ContinuousHarnessWorker::new(
-        &fixture.store,
-        config,
-        EnvelopeTurnAdapter::new("work.result/v1"),
-    )
-    .expect("valid worker");
+    let worker = ContinuousHarnessWorker::new(&fixture.store, config, envelope_adapter())
+        .expect("valid worker");
 
     let report = worker
         .run_until(CancellationToken::new(), Some(1))
@@ -418,13 +543,13 @@ async fn cancellation_during_idle_poll_shuts_down_cleanly() {
             "healthy",
             PathBuf::from(env!("CARGO_MANIFEST_DIR")),
         ),
-        EnvelopeTurnAdapter::new("work.result/v1"),
+        envelope_adapter(),
     )
     .expect("valid worker");
     let cancellation = CancellationToken::new();
     let trigger = cancellation.clone();
     let canceller = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
         trigger.cancel();
     });
 
@@ -442,6 +567,10 @@ struct CancellingAdapter {
 }
 
 impl TurnAdapter for CancellingAdapter {
+    fn inbound_acceptance(&self) -> &InboundAcceptance {
+        self.delegate.inbound_acceptance()
+    }
+
     fn prepare(&self, invocation: &fleetd::Invocation) -> Result<PreparedTurn, String> {
         self.cancellation.cancel();
         self.delegate.prepare(invocation)
@@ -461,7 +590,7 @@ async fn cancellation_after_reservation_releases_work_before_dispatch() {
         ),
         CancellingAdapter {
             cancellation: cancellation.clone(),
-            delegate: EnvelopeTurnAdapter::new("work.result/v1"),
+            delegate: envelope_adapter(),
         },
     )
     .expect("valid worker");
@@ -503,7 +632,7 @@ async fn post_arm_protocol_ambiguity_is_blocked_without_reexecution() {
             "wrong-fence",
             PathBuf::from(env!("CARGO_MANIFEST_DIR")),
         ),
-        EnvelopeTurnAdapter::new("work.result/v1"),
+        envelope_adapter(),
     )
     .expect("valid worker");
 
@@ -531,9 +660,15 @@ async fn post_arm_protocol_ambiguity_is_blocked_without_reexecution() {
     assert_eq!(session.state, SessionBindingState::Uncertain);
 }
 
-struct RejectingAdapter;
+struct RejectingAdapter {
+    inbound_acceptance: InboundAcceptance,
+}
 
 impl TurnAdapter for RejectingAdapter {
+    fn inbound_acceptance(&self) -> &InboundAcceptance {
+        &self.inbound_acceptance
+    }
+
     fn prepare(&self, _invocation: &fleetd::Invocation) -> Result<PreparedTurn, String> {
         Err("unsupported work kind".to_owned())
     }
@@ -549,7 +684,10 @@ async fn adapter_failure_releases_only_the_unarmed_reservation() {
             "healthy",
             PathBuf::from(env!("CARGO_MANIFEST_DIR")),
         ),
-        RejectingAdapter,
+        RejectingAdapter {
+            inbound_acceptance: InboundAcceptance::exact_v1(["work.request/v1"])
+                .expect("valid fixture acceptance"),
+        },
     )
     .expect("valid worker");
 
@@ -589,13 +727,9 @@ async fn worker_rejects_unknown_or_duplicate_mcp_grants_before_startup() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")),
     );
     config.mcp_grants = vec!["fleet.messaging.unknown".to_owned()];
-    let error = ContinuousHarnessWorker::new(
-        &fixture.store,
-        config,
-        EnvelopeTurnAdapter::new("work.result/v1"),
-    )
-    .err()
-    .expect("unknown grant must fail");
+    let error = ContinuousHarnessWorker::new(&fixture.store, config, envelope_adapter())
+        .err()
+        .expect("unknown grant must fail");
     assert!(matches!(error, ContinuousWorkerError::InvalidConfig(_)));
 
     let mut config = worker_config(
@@ -607,12 +741,8 @@ async fn worker_rejects_unknown_or_duplicate_mcp_grants_before_startup() {
         fleetd::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
         fleetd::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
     ];
-    let error = ContinuousHarnessWorker::new(
-        &fixture.store,
-        config,
-        EnvelopeTurnAdapter::new("work.result/v1"),
-    )
-    .err()
-    .expect("duplicate grant must fail");
+    let error = ContinuousHarnessWorker::new(&fixture.store, config, envelope_adapter())
+        .err()
+        .expect("duplicate grant must fail");
     assert!(matches!(error, ContinuousWorkerError::InvalidConfig(_)));
 }

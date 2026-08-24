@@ -75,3 +75,8 @@ This checkpoint qualifies one harness implementation only. It does not make
 `fleet.messaging.send` stable under the repository's two-implementation rule,
 and it does not claim semantic validation of arbitrary payloads, group sends,
 inbox-read authority, or remote transport.
+
+The follow-up
+[continuous qualification](continuous-two-seat-opencode-loop-2026-08-24.md)
+implements the acceptance policy identified here and closes this accidental
+loop window with both seats running concurrently.

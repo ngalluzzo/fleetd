@@ -23,13 +23,14 @@ qualification run. Without it, the process polls until `Ctrl-C`. Run only one
 seat for a given agent during this first slice; durable session fencing remains
 safe with competing processes, but they will produce avoidable retries.
 
-The semantic-neutral envelope adapter accepts every addressed message. Because
-successful settlement also publishes a result to the input sender, do not yet
-run mutually addressed envelope seats as an unbounded loop: they can consume
-generic completion results as new work. Use bounded `--once` runs or the strict
-capability-work adapter until a versioned inbound acceptance policy is
-available. This eligibility rule belongs at the adapter boundary, not in the
-messaging kernel.
+Worker desired-state schema 2 requires an explicit adapter. The envelope
+adapter's `inbound` block declares schema 1 and a non-empty exact
+`message_kinds` set. The worker atomically reserves only matching kinds;
+non-matches remain pending without an attempt increment. Matching establishes
+eligibility, not semantic validity, so the adapter still validates the complete
+payload before dispatch. The acceptance contract participates in session
+compatibility and changing it rotates the binding generation. See the
+[v1 contract](contracts/worker-inbound-acceptance-v1.md).
 
 The worker configuration schema is versioned and rejects unknown fields. Each
 harness plugin then validates its own opaque configuration with a strict
@@ -66,10 +67,10 @@ correlation, causation, or the durable idempotency key. See the
 
 The built-in adapter passes the full immutable fleetd message envelope and its
 invocation attempt to the harness as JSON. It adds no task, Git, review, or UI
-semantics. One durable native session lane is maintained per channel, so
-conversation context stays scoped to the channel. A future versioned adapter
-or workflow plugin can choose a different lane policy without changing the
-kernel.
+semantics. Its configured exact kinds decide only reservation eligibility. One
+durable native session lane is maintained per channel, so conversation context
+stays scoped to the channel. A future versioned adapter or workflow plugin can
+choose a different lane policy without changing the kernel.
 
 Set `adapter.kind` to `capability_work_v1` to use the first such adapter; see
 [`worker.capability.opencode.example.json`](../examples/worker.capability.opencode.example.json).
