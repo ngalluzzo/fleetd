@@ -51,11 +51,12 @@ input channel, is addressed to the input sender, preserves correlation, and
 sets causation to the input message. Exact completion replay returns the
 original record even after restart or lease expiry; changed content conflicts.
 
-The initial ledger deliberately implements only
-`reserved | dispatch_armed | terminal`. Session bindings, owner epochs, plugin
-generations, detailed runtime states, and event evidence remain in the worker
-controller layer and will extend the ledger without changing this write-ahead
-ordering rule.
+The invocation ledger deliberately implements only
+`reserved | dispatch_armed | terminal`. Session bindings and owner epochs now
+extend it in the worker-controller layer through
+[ADR 0010](0010-durable-session-bindings-and-owner-epochs.md) without changing
+this write-ahead ordering rule. Plugin generations, detailed runtime states,
+and event evidence remain future controller records.
 
 ## Consequences
 

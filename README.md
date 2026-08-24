@@ -85,6 +85,13 @@ it crashes after arming, lease recovery records `outcome_unknown` and blocks
 the delivery instead of executing it again. Operators can audit the ledger
 with `cargo run -- invocation list`.
 
+That CLI is the low-level, session-agnostic invocation path. The typed managed
+controller acquires a controller-owned session lane, performs the requested
+native create/resume, records the opaque reference, and atomically arms the
+invocation with its exact binding generation and owner epoch. Generic
+completion or delivery settlement is rejected while such a bound turn is
+active, so the two paths cannot silently split their durable state.
+
 After a known successful turn, completion publishes the correlated result and
 acknowledges the input in one commit:
 
@@ -161,20 +168,24 @@ fleetd credentials.
 
 The workspace now includes an experimental typed `harness.acp` host client, a
 generic ACP v1 driver built on the official Rust SDK, and a one-turn controller
-that composes reservation, write-ahead arming, prompt drain, atomic completion,
-and conservative unknown-outcome parking. The underlying JSON-RPC call surface
-remains private; this is not a generic `execute` contract.
+that composes reservation, durable session acquisition, owner-epoch fencing,
+write-ahead arming, prompt drain, atomic completion, and conservative
+unknown-outcome parking. Compatible restarts resume under a higher owner epoch;
+incompatible profiles rotate the binding generation; active or uncertain
+sessions fail closed. The underlying JSON-RPC call surface remains private;
+this is not a generic `execute` contract.
 
 The driver has completed a real Codex turn. DSH initialization and identity
 verification pass, but local session qualification is currently blocked by an
-unconfigured DSH credential, so the capability remains experimental. Durable
-session bindings, persisted event evidence, and the continuous inbox worker are
+unconfigured DSH credential, so the capability remains experimental. Persisted
+event evidence, runtime-generation records, and the continuous inbox worker are
 the next boundary. See
 [the harness execution architecture](docs/HARNESS_EXECUTION.md),
 [ADR 0004](docs/adr/0004-out-of-process-capability-plugins.md),
 [ADR 0005](docs/adr/0005-acp-harness-boundary.md),
 [ADR 0008](docs/adr/0008-write-ahead-invocation-fence.md),
-[ADR 0009](docs/adr/0009-typed-acp-driver-and-process-ownership.md), and the
+[ADR 0009](docs/adr/0009-typed-acp-driver-and-process-ownership.md),
+[ADR 0010](docs/adr/0010-durable-session-bindings-and-owner-epochs.md), and the
 [qualification record](docs/qualification/acp-driver-2026-08-24.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),

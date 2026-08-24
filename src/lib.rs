@@ -8,6 +8,7 @@ pub mod error;
 mod invocation;
 pub mod model;
 pub mod plugin;
+pub mod session_binding;
 pub mod store;
 
 pub use api::{AppState, router};
@@ -30,5 +31,9 @@ pub use plugin::{
     PluginNotification, PluginProcess, PluginSpec, PromptBlock, RuntimeIdentity,
     SessionPersistence, ShutdownOutcome, StartTurn, StartTurnResult, ToolBudget, TurnEvent,
     TurnPolicy, TurnSource, TurnTerminal, harness_acp_capability,
+};
+pub use session_binding::{
+    AcquireSessionBinding, BoundInvocation, SessionAcquisition, SessionAcquisitionMode,
+    SessionBinding, SessionBindingState,
 };
 pub use store::{AppendMessageResult, Store};

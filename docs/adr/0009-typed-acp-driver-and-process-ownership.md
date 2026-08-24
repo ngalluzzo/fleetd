@@ -52,5 +52,7 @@ leave its inner adapter running as an unowned agent.
 
 This is process containment, not an OS security sandbox. The capability remains
 experimental until Codex and DSH pass the full common matrix. Durable session
-bindings, event persistence, generation adoption, approved MCP brokering, and a
+bindings are addressed by
+[ADR 0010](0010-durable-session-bindings-and-owner-epochs.md); event
+persistence, runtime-generation adoption, approved MCP brokering, and a
 continuous inbox loop remain separate work.

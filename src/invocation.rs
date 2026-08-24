@@ -111,41 +111,11 @@ impl Store {
         invocation_id: &str,
         input: ArmInvocation,
     ) -> Result<Invocation, FleetError> {
-        validate_arm(invocation_id, &input)?;
         let now = now_ms();
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let row = invocation_with_delivery(&mut transaction, agent_id, invocation_id).await?;
-        validate_invocation_fence(&row, &input, now)?;
-        let state: String = row.try_get("state")?;
-        match state.as_str() {
-            "reserved" => {
-                let result = sqlx::query(
-                    r"
-                    UPDATE invocations
-                    SET state = 'dispatch_armed', dispatch_armed_at_ms = ?
-                    WHERE id = ? AND agent_id = ? AND state = 'reserved'
-                    ",
-                )
-                .bind(now)
-                .bind(invocation_id)
-                .bind(agent_id)
-                .execute(&mut *transaction)
+        let invocation =
+            arm_invocation_transaction(&mut transaction, agent_id, invocation_id, &input, now)
                 .await?;
-                if result.rows_affected() != 1 {
-                    return Err(FleetError::Conflict(
-                        "invocation changed while dispatch was armed".to_owned(),
-                    ));
-                }
-            }
-            "dispatch_armed" => {}
-            "terminal" => {
-                return Err(FleetError::Conflict(
-                    "terminal invocation cannot be dispatched".to_owned(),
-                ));
-            }
-            _ => return Err(invalid_stored_state("invocation", &state)),
-        }
-        let invocation = invocation_by_id(&mut transaction, invocation_id).await?;
         transaction.commit().await?;
         Ok(invocation)
     }
@@ -168,59 +138,19 @@ impl Store {
         invocation_id: &str,
         input: CompleteInvocation,
     ) -> Result<(InvocationCompletion, bool), FleetError> {
-        validate_completion(invocation_id, &input)?;
         let now = now_ms();
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let row = invocation_with_delivery(&mut transaction, agent_id, invocation_id).await?;
-        validate_static_fence(&row, &input.lease_token, &input.fence_token)?;
-        let expected = result_input(agent_id, invocation_id, &row, &input)?;
-        let state: String = row.try_get("state")?;
-        if state == "terminal" {
-            let completion =
-                completed_replay(&mut transaction, invocation_id, &row, &expected).await?;
-            transaction.commit().await?;
-            return Ok((completion, false));
-        }
-        if state != "dispatch_armed" {
-            return Err(FleetError::Conflict(
-                "invocation must be armed before completion".to_owned(),
-            ));
-        }
-        validate_live_lease(&row, &input.lease_token, now)?;
-        ensure_result_key_unused(&mut transaction, agent_id, invocation_id).await?;
-        let channel_id: String = row.try_get("input_channel_id")?;
-        let result_message = insert_message(&mut transaction, &channel_id, expected).await?;
-        acknowledge_invocation_delivery(&mut transaction, &row, agent_id, &input.lease_token, now)
-            .await?;
-        let updated = sqlx::query(
-            r"
-            UPDATE invocations
-            SET state = 'terminal', terminal_at_ms = ?,
-                execution_certainty = 'outcome_known',
-                terminal_reason = 'completed', result_message_seq = ?
-            WHERE id = ? AND agent_id = ? AND state = 'dispatch_armed'
-            ",
+        let completion = complete_invocation_transaction(
+            &mut transaction,
+            agent_id,
+            invocation_id,
+            &input,
+            now,
+            false,
         )
-        .bind(now)
-        .bind(result_message.seq)
-        .bind(invocation_id)
-        .bind(agent_id)
-        .execute(&mut *transaction)
         .await?;
-        if updated.rows_affected() != 1 {
-            return Err(FleetError::Conflict(
-                "invocation changed during completion".to_owned(),
-            ));
-        }
-        let invocation = invocation_by_id(&mut transaction, invocation_id).await?;
         transaction.commit().await?;
-        Ok((
-            InvocationCompletion {
-                invocation,
-                result: result_message,
-            },
-            true,
-        ))
+        Ok(completion)
     }
 
     /// Lists the latest durable invocation records for operator inspection.
@@ -247,6 +177,109 @@ impl Store {
         };
         rows.iter().map(invocation_from_row).collect()
     }
+}
+
+pub(crate) async fn arm_invocation_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    agent_id: &str,
+    invocation_id: &str,
+    input: &ArmInvocation,
+    now: i64,
+) -> Result<Invocation, FleetError> {
+    validate_arm(invocation_id, input)?;
+    let row = invocation_with_delivery(transaction, agent_id, invocation_id).await?;
+    validate_invocation_fence(&row, input, now)?;
+    let state: String = row.try_get("state")?;
+    match state.as_str() {
+        "reserved" => {
+            let result = sqlx::query(
+                r"
+                UPDATE invocations
+                SET state = 'dispatch_armed', dispatch_armed_at_ms = ?
+                WHERE id = ? AND agent_id = ? AND state = 'reserved'
+                ",
+            )
+            .bind(now)
+            .bind(invocation_id)
+            .bind(agent_id)
+            .execute(&mut **transaction)
+            .await?;
+            if result.rows_affected() != 1 {
+                return Err(FleetError::Conflict(
+                    "invocation changed while dispatch was armed".to_owned(),
+                ));
+            }
+        }
+        "dispatch_armed" => {}
+        "terminal" => {
+            return Err(FleetError::Conflict(
+                "terminal invocation cannot be dispatched".to_owned(),
+            ));
+        }
+        _ => return Err(invalid_stored_state("invocation", &state)),
+    }
+    invocation_by_id(transaction, invocation_id).await
+}
+
+pub(crate) async fn complete_invocation_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    agent_id: &str,
+    invocation_id: &str,
+    input: &CompleteInvocation,
+    now: i64,
+    allow_active_session_binding: bool,
+) -> Result<(InvocationCompletion, bool), FleetError> {
+    validate_completion(invocation_id, input)?;
+    if !allow_active_session_binding {
+        crate::session_binding::ensure_invocation_not_active_on_session(transaction, invocation_id)
+            .await?;
+    }
+    let row = invocation_with_delivery(transaction, agent_id, invocation_id).await?;
+    validate_static_fence(&row, &input.lease_token, &input.fence_token)?;
+    let expected = result_input(agent_id, invocation_id, &row, input)?;
+    let state: String = row.try_get("state")?;
+    if state == "terminal" {
+        let completion = completed_replay(transaction, invocation_id, &row, &expected).await?;
+        return Ok((completion, false));
+    }
+    if state != "dispatch_armed" {
+        return Err(FleetError::Conflict(
+            "invocation must be armed before completion".to_owned(),
+        ));
+    }
+    validate_live_lease(&row, &input.lease_token, now)?;
+    ensure_result_key_unused(transaction, agent_id, invocation_id).await?;
+    let channel_id: String = row.try_get("input_channel_id")?;
+    let result_message = insert_message(transaction, &channel_id, expected).await?;
+    acknowledge_invocation_delivery(transaction, &row, agent_id, &input.lease_token, now).await?;
+    let updated = sqlx::query(
+        r"
+        UPDATE invocations
+        SET state = 'terminal', terminal_at_ms = ?,
+            execution_certainty = 'outcome_known',
+            terminal_reason = 'completed', result_message_seq = ?
+        WHERE id = ? AND agent_id = ? AND state = 'dispatch_armed'
+        ",
+    )
+    .bind(now)
+    .bind(result_message.seq)
+    .bind(invocation_id)
+    .bind(agent_id)
+    .execute(&mut **transaction)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(FleetError::Conflict(
+            "invocation changed during completion".to_owned(),
+        ));
+    }
+    let invocation = invocation_by_id(transaction, invocation_id).await?;
+    Ok((
+        InvocationCompletion {
+            invocation,
+            result: result_message,
+        },
+        true,
+    ))
 }
 
 async fn reserve_row(
@@ -427,6 +460,13 @@ async fn park_expired_armed_invocation(
             "expired invocation changed during recovery".to_owned(),
         ));
     }
+    crate::session_binding::mark_expired_session_turn_uncertain(
+        transaction,
+        &invocation_id,
+        &reason,
+        now,
+    )
+    .await?;
     Ok(())
 }
 
@@ -467,6 +507,14 @@ pub(crate) async fn terminalize_invocation(
     reason: &str,
     now: i64,
 ) -> Result<(), FleetError> {
+    crate::session_binding::ensure_bound_turn_allows_delivery_settlement(
+        transaction,
+        agent_id,
+        message_id,
+        lease_token,
+        certainty == ExecutionCertainty::OutcomeUnknown && reason == "blocked",
+    )
+    .await?;
     let certainty = certainty_name(&certainty);
     sqlx::query(
         r"

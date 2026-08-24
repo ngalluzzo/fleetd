@@ -11,8 +11,8 @@ use crate::{
     StartTurn, Store, TurnPolicy, TurnSource, plugin::Binding,
 };
 
-/// One reserved inbox attempt ready to be dispatched into an already-opened
-/// native harness session.
+/// One reserved inbox attempt ready to be dispatched into an already-opened,
+/// durably bound native harness session.
 pub struct ManagedTurn {
     pub invocation: Invocation,
     pub binding: Binding,
@@ -56,7 +56,8 @@ impl<'store> ManagedHarnessController<'store> {
     ///
     /// The native session must already be open and its opaque reference must
     /// have been durably recorded by the caller. This method never sends the
-    /// effectful prompt before `arm_invocation` commits.
+    /// effectful prompt before the invocation and exact session owner fence
+    /// are atomically armed.
     ///
     /// # Errors
     ///
@@ -74,11 +75,20 @@ impl<'store> ManagedHarnessController<'store> {
             .await
             .map_err(|error| ManagedTurnError::HarnessBeforeArm(Box::new(error)))?;
 
-        let invocation = &turn.invocation;
+        let ManagedTurn {
+            invocation,
+            binding,
+            session_ref,
+            prompt,
+            policy,
+            result_kind,
+        } = turn;
         self.store
-            .arm_invocation(
+            .arm_session_invocation(
                 &invocation.agent_id,
                 &invocation.id,
+                &binding,
+                &session_ref,
                 ArmInvocation {
                     lease_token: invocation.lease_token.clone(),
                     fence_token: invocation.fence_token.clone(),
@@ -87,15 +97,15 @@ impl<'store> ManagedHarnessController<'store> {
             .await?;
 
         let fence = crate::ExecutionFence {
-            binding_id: turn.binding.binding_id,
-            binding_generation: turn.binding.binding_generation,
-            owner_epoch: turn.binding.owner_epoch,
+            binding_id: binding.binding_id.clone(),
+            binding_generation: binding.binding_generation,
+            owner_epoch: binding.owner_epoch,
             invocation_id: invocation.id.clone(),
             fence_token: invocation.fence_token.clone(),
         };
         let request = StartTurn {
             fence: fence.clone(),
-            session_ref: turn.session_ref,
+            session_ref,
             source: TurnSource {
                 agent_id: invocation.agent_id.clone(),
                 message_id: invocation.message.id.clone(),
@@ -104,23 +114,23 @@ impl<'store> ManagedHarnessController<'store> {
                 correlation_id: invocation.message.correlation_id.clone(),
                 causation_id: invocation.message.causation_id.clone(),
             },
-            prompt: turn.prompt,
-            policy: turn.policy.clone(),
+            prompt,
+            policy: policy.clone(),
         };
         if let Err(error) = harness.start_turn(&request).await {
             return self
-                .block_after_arm(invocation, format!("turn start failed: {error}"))
+                .block_after_arm(&invocation, &binding, format!("turn start failed: {error}"))
                 .await;
         }
 
         let terminal = match self
-            .await_terminal(harness, invocation, &fence, &turn.policy)
+            .await_terminal(harness, &invocation, &binding, &fence, &policy)
             .await?
         {
             TerminalDrain::Terminal(terminal) => *terminal,
             TerminalDrain::Blocked(blocked) => return Ok(ManagedTurnOutcome::Blocked(blocked)),
         };
-        self.settle_terminal(invocation, turn.result_kind, terminal)
+        self.settle_terminal(&invocation, &binding, result_kind, terminal)
             .await
     }
 
@@ -128,6 +138,7 @@ impl<'store> ManagedHarnessController<'store> {
         &self,
         harness: &mut HarnessAcpClient,
         invocation: &Invocation,
+        binding: &Binding,
         fence: &crate::ExecutionFence,
         policy: &TurnPolicy,
     ) -> Result<TerminalDrain, ManagedTurnError> {
@@ -139,14 +150,19 @@ impl<'store> ManagedHarnessController<'store> {
         {
             Ok(Ok(terminal)) => Ok(TerminalDrain::Terminal(Box::new(terminal))),
             Ok(Err(error)) => {
-                self.blocked_drain(invocation, format!("turn evidence failed: {error}"))
-                    .await
+                self.blocked_drain(
+                    invocation,
+                    binding,
+                    format!("turn evidence failed: {error}"),
+                )
+                .await
             }
             Err(_) => {
                 if let Err(error) = harness.cancel_turn("wall_deadline").await {
                     return self
                         .blocked_drain(
                             invocation,
+                            binding,
                             format!("host wall deadline cancellation failed: {error}"),
                         )
                         .await;
@@ -159,12 +175,20 @@ impl<'store> ManagedHarnessController<'store> {
                 {
                     Ok(Ok(terminal)) => Ok(TerminalDrain::Terminal(Box::new(terminal))),
                     Ok(Err(error)) => {
-                        self.blocked_drain(invocation, format!("cancel drain failed: {error}"))
-                            .await
+                        self.blocked_drain(
+                            invocation,
+                            binding,
+                            format!("cancel drain failed: {error}"),
+                        )
+                        .await
                     }
                     Err(_) => {
-                        self.blocked_drain(invocation, "cancel drain deadline exceeded".to_owned())
-                            .await
+                        self.blocked_drain(
+                            invocation,
+                            binding,
+                            "cancel drain deadline exceeded".to_owned(),
+                        )
+                        .await
                     }
                 }
             }
@@ -174,6 +198,7 @@ impl<'store> ManagedHarnessController<'store> {
     async fn settle_terminal(
         &self,
         invocation: &Invocation,
+        binding: &Binding,
         result_kind: String,
         terminal: crate::TurnTerminal,
     ) -> Result<ManagedTurnOutcome, ManagedTurnError> {
@@ -184,7 +209,7 @@ impl<'store> ManagedHarnessController<'store> {
                 "terminal outcome is not safely settleable: certainty={:?}, quiescent={}",
                 terminal.execution_certainty, terminal.session_quiescent
             );
-            let blocked = self.block(invocation, reason).await?;
+            let blocked = self.block(invocation, binding, reason).await?;
             return Ok(ManagedTurnOutcome::Blocked(Box::new(blocked)));
         }
 
@@ -208,9 +233,11 @@ impl<'store> ManagedHarnessController<'store> {
         });
         let (completion, _created) = self
             .store
-            .complete_invocation(
+            .complete_session_invocation(
                 &invocation.agent_id,
                 &invocation.id,
+                binding,
+                terminal.session_persistence,
                 CompleteInvocation {
                     lease_token: invocation.lease_token.clone(),
                     fence_token: invocation.fence_token.clone(),
@@ -225,27 +252,39 @@ impl<'store> ManagedHarnessController<'store> {
     async fn block_after_arm(
         &self,
         invocation: &Invocation,
+        binding: &Binding,
         reason: String,
     ) -> Result<ManagedTurnOutcome, ManagedTurnError> {
-        let blocked = self.block(invocation, reason).await?;
+        let blocked = self.block(invocation, binding, reason).await?;
         Ok(ManagedTurnOutcome::Blocked(Box::new(blocked)))
     }
 
     async fn blocked_drain(
         &self,
         invocation: &Invocation,
+        binding: &Binding,
         reason: String,
     ) -> Result<TerminalDrain, ManagedTurnError> {
         Ok(TerminalDrain::Blocked(Box::new(
-            self.block(invocation, reason).await?,
+            self.block(invocation, binding, reason).await?,
         )))
     }
 
     async fn block(
         &self,
         invocation: &Invocation,
+        binding: &Binding,
         reason: String,
     ) -> Result<BlockedDelivery, FleetError> {
+        let reason = bounded_reason(reason);
+        self.store
+            .mark_session_invocation_uncertain(
+                &invocation.agent_id,
+                &invocation.id,
+                binding,
+                &reason,
+            )
+            .await?;
         let (blocked, _created) = self
             .store
             .block_delivery(
@@ -253,7 +292,7 @@ impl<'store> ManagedHarnessController<'store> {
                 &invocation.message.id,
                 BlockDelivery {
                     lease_token: invocation.lease_token.clone(),
-                    reason: bounded_reason(reason),
+                    reason,
                 },
             )
             .await?;

@@ -3,9 +3,10 @@
 use std::{path::PathBuf, time::Duration};
 
 use fleetd::{
-    Binding, Capability, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
+    AcquireSessionBinding, Capability, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
     ManagedHarnessController, ManagedTurn, ManagedTurnOutcome, OpenSession, OpenSessionMode,
-    PluginProcess, PluginSpec, PromptBlock, Store, ToolBudget, TurnPolicy,
+    PluginProcess, PluginSpec, PromptBlock, SessionAcquisitionMode, SessionBindingState,
+    SessionPersistence, Store, ToolBudget, TurnPolicy,
 };
 use serde_json::json;
 
@@ -97,34 +98,60 @@ fn policy() -> TurnPolicy {
     }
 }
 
-async fn open_harness(mode: &str) -> (fleetd::HarnessAcpClient, String, Binding) {
+async fn open_harness(
+    store: &Store,
+    agent_id: &str,
+    mode: &str,
+) -> (fleetd::HarnessAcpClient, String, fleetd::Binding) {
     let process = PluginProcess::start(harness_spec(mode))
         .await
         .expect("start harness");
     let harness = process.into_harness_acp().expect("typed harness");
-    let binding = Binding {
-        binding_id: "controller-binding".to_owned(),
-        binding_generation: 1,
-        owner_epoch: 1,
+    let description = harness.describe().await.expect("describe harness");
+    let acquired = store
+        .acquire_session_binding(
+            agent_id,
+            AcquireSessionBinding {
+                lane_policy: "per-agent".to_owned(),
+                lane_key: "primary".to_owned(),
+                owner_instance_id: "controller-test-process".to_owned(),
+                profile_digest: description.profile_digest.clone(),
+                compatibility_digest: "sha256:mock-harness-v1".to_owned(),
+                working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
+                additional_directories: Vec::new(),
+            },
+        )
+        .await
+        .expect("acquire durable session binding");
+    let open_mode = match acquired.mode {
+        SessionAcquisitionMode::Create => OpenSessionMode::Create,
+        SessionAcquisitionMode::Resume { session_ref } => OpenSessionMode::Resume { session_ref },
     };
+    let binding = acquired.session.binding;
     let session = harness
         .open_session(&OpenSession {
             binding: binding.clone(),
-            mode: OpenSessionMode::Create,
+            mode: open_mode,
             working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
             additional_directories: Vec::new(),
             mcp_grants: Vec::new(),
-            profile_digest: "sha256:profile".to_owned(),
+            profile_digest: description.profile_digest,
         })
         .await
         .expect("open session");
+    store
+        .record_session_opened(agent_id, &binding, &session.session_ref)
+        .await
+        .expect("persist native session reference");
     (harness, session.session_ref, binding)
 }
 
 #[tokio::test]
 async fn managed_controller_arms_before_turn_and_atomically_completes() {
     let (_directory, store, sender, invocation) = fixture().await;
-    let (mut harness, session_ref, binding) = open_harness("healthy").await;
+    let agent_id = invocation.agent_id.clone();
+    let invocation_id = invocation.id.clone();
+    let (mut harness, session_ref, binding) = open_harness(&store, &agent_id, "healthy").await;
     let outcome = ManagedHarnessController::new(&store)
         .run(
             &mut harness,
@@ -153,6 +180,21 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
         completion.result.payload["assistant_messages"][0]["content"][0]["text"],
         "done"
     );
+    let session = store
+        .list_session_bindings(Some(&agent_id))
+        .await
+        .expect("list durable session")
+        .pop()
+        .expect("one session");
+    assert_eq!(session.state, SessionBindingState::Ready);
+    assert_eq!(
+        session.last_quiescent_invocation_id.as_deref(),
+        Some(invocation_id.as_str())
+    );
+    assert_eq!(
+        session.session_persistence,
+        Some(SessionPersistence::RuntimeClaimed)
+    );
     harness.shutdown().await.expect("shutdown harness");
 }
 
@@ -160,7 +202,9 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
 async fn managed_controller_parks_post_arm_protocol_ambiguity() {
     let (_directory, store, _sender, invocation) = fixture().await;
     let input_message = invocation.message.id.clone();
-    let (mut harness, session_ref, binding) = open_harness("wrong-fence").await;
+    let agent_id = invocation.agent_id.clone();
+    let invocation_id = invocation.id.clone();
+    let (mut harness, session_ref, binding) = open_harness(&store, &agent_id, "wrong-fence").await;
     let outcome = ManagedHarnessController::new(&store)
         .run(
             &mut harness,
@@ -182,4 +226,16 @@ async fn managed_controller_parks_post_arm_protocol_ambiguity() {
     };
     assert_eq!(blocked.message.id, input_message);
     assert!(blocked.reason.contains("turn evidence failed"));
+    let session = store
+        .list_session_bindings(Some(&agent_id))
+        .await
+        .expect("list uncertain session")
+        .pop()
+        .expect("one session");
+    assert_eq!(session.state, SessionBindingState::Uncertain);
+    assert_eq!(
+        session.active_invocation_id.as_deref(),
+        Some(invocation_id.as_str())
+    );
+    assert_eq!(session.uncertain_reason, Some(blocked.reason));
 }

@@ -1,8 +1,9 @@
 # Harness execution architecture
 
-Status: implementation baseline for M1. The typed host, generic driver, and
-one-turn controller exist; the capability contract remains a draft until it
-passes the complete Codex and DSH qualification matrix.
+Status: implementation baseline for M1. The typed host, generic driver,
+durable session owner fencing, and one-turn controller exist; the capability
+contract remains a draft until it passes the complete Codex and DSH
+qualification matrix.
 
 This document defines the layer between fleetd's durable agent inbox and an
 agent harness. It deliberately does not add harness concepts to the messaging
@@ -154,9 +155,11 @@ default is rotation.
 
 These are controller records in the authoritative node SQLite database, kept
 outside the messaging kernel module. The write-ahead invocation reservation is
-implemented by [ADR 0008](adr/0008-write-ahead-invocation-fence.md); profiles,
-plugin generations, session bindings, and the richer execution ledger remain a
-logical target rather than a migration.
+implemented by [ADR 0008](adr/0008-write-ahead-invocation-fence.md), and durable
+session ownership by
+[ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md). Profiles,
+plugin generations, persisted runtime events, and the richer execution ledger
+remain logical targets rather than migrations.
 
 ### `harness_profiles`
 
@@ -186,7 +189,7 @@ One supervised launch attempt:
 - start, ready, drain, exit, and forced-kill evidence;
 - desired versus effective configuration drift.
 
-### `session_bindings`
+### `session_bindings` and `session_binding_turns`
 
 One current native session per versioned lane policy:
 
@@ -194,8 +197,14 @@ One current native session per versioned lane policy:
 - binding generation and current owner epoch;
 - opaque native session reference;
 - profile and compatibility digests;
-- `opening | ready | active | draining | uncertain | retired` state;
+- `opening | ready | active | uncertain | retired` durable state;
 - last successfully quiesced turn and evidence reference.
+
+These records are implemented. One partial unique index admits only one
+non-retired generation per logical lane. Each bound turn records its exact
+generation and owner epoch as `active | quiescent | uncertain`. Draining remains
+a transient driver/controller phase until ordered invocation events are
+persisted; it never makes the durable binding reusable by itself.
 
 The initial `channel-workspace-v1` lane policy uses one lane per
 `(agent, channel, working-directory identity)`, retaining the useful part of
@@ -298,8 +307,8 @@ sequenceDiagram
     P->>A: initialize, then session/new or session/load
     A-->>P: native session reference + effective capabilities
     P-->>C: session ready
-    C->>K: arm invocation dispatch fence
-    K-->>C: durable dispatch authorization
+    C->>K: atomically arm invocation + activate exact binding epoch
+    K-->>C: durable dispatch authorization and exclusive session ownership
     C->>P: turn.start (invocation fence + prompt + policy)
     P->>A: session/prompt
     A-->>P: session/update events
@@ -308,8 +317,8 @@ sequenceDiagram
     B-->>A: authorized result
     A-->>P: prompt stop reason after all terminal updates
     P-->>C: fenced terminal evidence
-    C->>K: atomically append idempotent result and settle delivery
-    K-->>C: committed result message + acknowledgement
+    C->>K: append result + settle delivery + quiesce binding atomically
+    K-->>C: committed result + acknowledgement + ready binding
 ```
 
 The input delivery is acknowledged only after the correlated output message is
@@ -329,16 +338,12 @@ messages.
 stateDiagram-v2
     [*] --> Opening
     Opening --> Ready: session ref durably recorded
-    Opening --> Uncertain: child exits after session/new was sent
+    Opening --> Retired: another owner rotates abandoned opening
     Ready --> Active: current fence accepted
-    Active --> Draining: cancel or deadline
     Active --> Ready: terminal response and quiescent updates
     Active --> Uncertain: process or transport lost
-    Draining --> Ready: cancelled stop + terminal tool updates
-    Draining --> Uncertain: drain deadline expires
     Ready --> Ready: compatible adoption / owner epoch + 1
     Ready --> Retired: rotate / binding generation + 1
-    Uncertain --> Ready: harness-specific reconciliation proves quiescence
     Uncertain --> Retired: conservative rotation
     Retired --> [*]
 ```
@@ -421,8 +426,11 @@ agent lease can park bounded ambiguity evidence, but only an operator can
 requeue or abandon the exact block record. The write-ahead invocation ledger
 also distinguishes an expired unarmed reservation from an armed dispatch: the
 former is safely reclaimable as `not_started`, while the latter is atomically
-parked as `outcome_unknown`. The future managed controller still applies the
-versioned policy and richer evidence around that primitive.
+parked as `outcome_unknown`. For a bound invocation, lease recovery marks the
+exact binding turn uncertain in the same transaction that parks the delivery.
+Generic completion or delivery settlement cannot bypass an active binding
+turn. The managed controller applies versioned policy and richer evidence
+around those primitives.
 
 ## Budgets are claims with enforcement strength
 
@@ -597,24 +605,32 @@ The first vertical slice now implements:
    independently enforces the wall deadline, denies permission requests by
    default, atomically completes known quiescent output, and parks every
    post-arm protocol ambiguity.
+7. **Durable session ownership.** Session references, lane configuration,
+   generations, controller-instance owners, owner epochs, active turns,
+   persistence claims, uncertainty, and retirement evidence survive restart.
+   Compatible ready sessions adopt under a higher epoch; incompatible or
+   abandoned sessions rotate; active and uncertain sessions fail closed.
 
 The controller deliberately requires an already-reserved invocation and an
-already-opened session whose opaque reference the caller has durably recorded.
-Durable session-binding and owner-epoch migrations, invocation-event storage,
-runtime generation adoption, a capability broker, and a continuous inbox loop
-are not implemented yet.
+session acquired through the durable binding API. The caller still performs
+the requested native create/resume operation and records its opaque reference
+before invoking the one-turn controller. Invocation-event storage, runtime
+generation adoption, a capability broker, and a continuous inbox loop are not
+implemented yet.
 
 These are reliability requirements for the first vertical loop, not a request
 to expand the messaging kernel with harness semantics.
 
-Three required foundations are already implemented: agent-scoped idempotent
+Four required foundations are already implemented: agent-scoped idempotent
 append in [ADR 0006](adr/0006-idempotent-message-append.md), durable
 unknown-outcome parking in
 [ADR 0007](adr/0007-durable-blocked-deliveries.md), and atomic reservation plus
-dispatch arming in [ADR 0008](adr/0008-write-ahead-invocation-fence.md). The
-controller can use a deterministic invocation-result key at the final commit
+dispatch arming in [ADR 0008](adr/0008-write-ahead-invocation-fence.md), plus
+exclusive durable session ownership in
+[ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md). The
+controller uses a deterministic invocation-result key at the final commit
 boundary, publishes that result and acknowledges the input atomically, and
-cannot automatically reclaim an armed ambiguous attempt.
+cannot automatically reclaim an armed ambiguous attempt or session.
 
 ## First implementation acceptance matrix
 

@@ -11,7 +11,7 @@
 
 - [x] Local bearer credentials bound to agent identities.
 - [x] Out-of-process plugin lifecycle and exact capability negotiation.
-- A durable invocation ledger with session generations, owner fencing, and
+- [x] A durable invocation ledger with session generations, owner fencing, and
   idempotent result append.
 - [x] Atomic delivery reservation and write-ahead invocation dispatch fence.
 - [x] Atomic idempotent result publication and input acknowledgement.
@@ -20,8 +20,8 @@
   blocked on an approved credential path.
 - [ ] A managed worker controller that consumes addressed messages and replies
   with correlation and causation intact. The one-turn reserve-to-complete
-  control flow passes; continuous inbox scheduling and durable session binding
-  are pending.
+  control flow and durable session ownership pass; continuous inbox scheduling
+  is pending.
 - [x] Delivery leases, acknowledgement, retry, and restart resumption.
 - [x] Durable unknown-outcome parking with operator-only resolution.
 

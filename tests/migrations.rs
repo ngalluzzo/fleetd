@@ -1,5 +1,6 @@
 use fleetd::{
-    ArmInvocation, BlockDelivery, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
+    AcquireSessionBinding, ArmInvocation, BlockDelivery, ClaimDeliveries, CreateAgent,
+    CreateChannel, CreateMessage, SessionBindingState,
 };
 use serde_json::json;
 use sqlx::{Connection, sqlite::SqliteConnectOptions};
@@ -99,6 +100,31 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
     assert_eq!(created.message, replayed.message);
 
     assert_managed_blocking_works_after_migration(&store, &recipient.id, &created.message.id).await;
+    assert_session_bindings_work_after_migration(&store, &recipient.id).await;
+}
+
+async fn assert_session_bindings_work_after_migration(store: &fleetd::Store, agent_id: &str) {
+    let acquired = store
+        .acquire_session_binding(
+            agent_id,
+            AcquireSessionBinding {
+                lane_policy: "per-agent".to_owned(),
+                lane_key: "primary".to_owned(),
+                owner_instance_id: "migration-controller".to_owned(),
+                profile_digest: "sha256:migration-profile".to_owned(),
+                compatibility_digest: "sha256:migration-driver".to_owned(),
+                working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
+                additional_directories: Vec::new(),
+            },
+        )
+        .await
+        .expect("acquire session after migration");
+    assert_eq!(acquired.session.state, SessionBindingState::Opening);
+    let ready = store
+        .record_session_opened(agent_id, &acquired.session.binding, "migrated-session")
+        .await
+        .expect("persist session after migration");
+    assert_eq!(ready.state, SessionBindingState::Ready);
 }
 
 async fn assert_managed_blocking_works_after_migration(
