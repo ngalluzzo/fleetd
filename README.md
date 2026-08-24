@@ -91,10 +91,13 @@ down within a deadline. It launches absolute executables directly with an empty
 environment and does not give plugins fleetd credentials.
 
 This is the isolation and negotiation foundation, not a generic `execute`
-contract or an automatic restart manager. The first Codex and DSH adapters will
-be built side by side so their shared behavior can earn a narrow harness
-capability contract. See [ADR 0004](docs/adr/0004-out-of-process-capability-plugins.md)
-and the [lifecycle v1 contract](docs/contracts/plugin-lifecycle-v1.md).
+contract or an automatic restart manager. One generic ACP driver will be
+qualified against Codex and DSH; fleetd adds only durable invocation, fencing,
+deadline, and evidence semantics around the standard harness protocol. See
+[the harness execution architecture](docs/HARNESS_EXECUTION.md),
+[ADR 0004](docs/adr/0004-out-of-process-capability-plugins.md),
+[ADR 0005](docs/adr/0005-acp-harness-boundary.md), and the
+[lifecycle v1 contract](docs/contracts/plugin-lifecycle-v1.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [protocol](docs/PROTOCOL.md), and [milestones](docs/MILESTONES.md) for the

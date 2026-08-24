@@ -56,12 +56,15 @@ storage or authority. See
 
 ## Next boundary
 
-The next layer implements Codex and DSH plugins together, then extracts only
-their demonstrated common invocation and session-resumption semantics into a
-versioned harness capability. An authenticated adapter leases addressed
-messages, invokes that capability, posts correlated responses, and settles the
-lease. Invocation, resumption, retry policy, and restart policy remain outside
-the messaging kernel.
+The next layer implements one generic ACP driver plugin and qualifies it
+against Codex and DSH. ACP remains the inner harness protocol; a narrow fleetd
+capability adds durable invocation identity, session fencing, deadlines, and
+evidence without exposing a generic protocol tunnel. An authenticated worker
+controller leases addressed messages, invokes that capability, posts
+idempotent correlated responses, and settles the lease. Invocation, resumption,
+retry policy, and restart policy remain outside the messaging kernel. See the
+[harness execution architecture](HARNESS_EXECUTION.md) and
+[ADR 0005](adr/0005-acp-harness-boundary.md).
 
 ## Identity boundary
 

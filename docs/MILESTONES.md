@@ -11,9 +11,11 @@
 
 - [x] Local bearer credentials bound to agent identities.
 - [x] Out-of-process plugin lifecycle and exact capability negotiation.
-- A generic adapter SDK.
-- Codex and DSH adapters that consume addressed messages and reply with
-  correlation and causation intact.
+- A durable invocation ledger with session generations, owner fencing, and
+  idempotent result append.
+- One generic ACP driver qualified against Codex and DSH.
+- A managed worker controller that consumes addressed messages and replies
+  with correlation and causation intact.
 - [x] Delivery leases, acknowledgement, retry, and restart resumption.
 
 ## M2 — Work contracts
