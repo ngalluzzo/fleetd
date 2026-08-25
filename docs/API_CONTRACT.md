@@ -82,12 +82,14 @@ frames as the generated `Message` type. Browser credential transport needs an
 explicit server design before browser UIs connect directly; tokens must not be
 placed in query strings by convention.
 
-## Internal boundaries
+## Operational read models
 
-Durable harness session bindings, owner epochs, and plugin lifecycle calls are
-currently internal Rust APIs. Their types are deliberately absent from the
-HTTP contract. A UI must not infer endpoints for them; exposing that state will
-be a separate API issue with an explicit operator read model.
+Durable plugin generations, session bindings and owner epochs, and bounded
+invocation observations have explicit operator-only read models. Invocation
+observations include source and optional result message IDs so external tools
+can join control evidence to immutable message causation without receiving
+lease or fence credentials. Plugin lifecycle calls and session mutation remain
+internal controller APIs.
 
 ## Changing the API
 

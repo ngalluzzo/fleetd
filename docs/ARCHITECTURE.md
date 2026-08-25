@@ -103,6 +103,20 @@ typed counters, byte totals, and a cryptographic chain digest; their raw
 contents remain in the harness-owned transcript and the bounded Fleetd result.
 See [ADR 0020](adr/0020-bounded-operational-observations.md).
 
+Invocation observations include their exact source message and optional result
+message identities. External qualification tools can therefore correlate
+bounded control evidence through immutable causation rather than timing
+windows.
+
+## Qualification boundary
+
+Exact workload injection and backend telemetry collection are standalone
+operator concerns. `fleetd-soak` consumes only public Fleetd APIs, preserves
+message payloads and loopback observer documents opaquely, and writes a
+portable evidence artifact. It does not run inside the daemon, assign common
+meaning to provider metrics, or validate application payload contracts. See
+[ADR 0021](adr/0021-external-soak-evidence.md).
+
 The envelope adapter provides the complete immutable Fleetd message to the
 harness. It neither recognizes product contracts nor parses domain results.
 Its exact inbound-kind allowlist is routing policy only.

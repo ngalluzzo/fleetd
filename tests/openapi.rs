@@ -28,7 +28,7 @@ fn committed_contract_matches_registered_handlers() {
 fn contract_has_stable_unique_operations_and_explicit_security() {
     let contract = generated_contract();
     assert_eq!(contract["openapi"], "3.1.0");
-    assert_eq!(contract["info"]["version"], "1.0.0");
+    assert_eq!(contract["info"]["version"], "1.1.0");
     assert_eq!(
         contract["components"]["securitySchemes"]["bearerAuth"]["scheme"],
         "bearer"

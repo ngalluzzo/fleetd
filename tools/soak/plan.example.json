@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "run_id": "night-2026-08-25",
+  "fleetd": {
+    "server": "http://127.0.0.1:7429",
+    "operator_token_file": ".fleetd/operator.token",
+    "sender_token_file": ".fleetd/upstream.token"
+  },
+  "poll_interval_ms": 500,
+  "observers": [
+    {
+      "id": "local-model-server",
+      "url": "http://127.0.0.1:18082/metrics",
+      "required": true,
+      "timeout_ms": 5000,
+      "max_bytes": 1048576
+    }
+  ],
+  "workloads": [
+    {
+      "id": "loop-0001",
+      "seed": {
+        "channel_id": "replace-with-channel-id",
+        "recipient_id": "replace-with-seat-a-agent-id",
+        "kind": "loop.start",
+        "payload": {
+          "operation_id": "night-2026-08-25-loop-0001"
+        },
+        "idempotency_key": "soak/night-2026-08-25/loop-0001"
+      },
+      "completion": {
+        "kind": "loop.final",
+        "timeout_ms": 600000,
+        "invocation_agents": [
+          "replace-with-seat-a-agent-id",
+          "replace-with-seat-b-agent-id",
+          "replace-with-seat-a-agent-id"
+        ]
+      }
+    }
+  ]
+}

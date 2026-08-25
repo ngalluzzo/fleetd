@@ -126,7 +126,8 @@ pub struct InvocationEventCounts {
     pub unknown: u64,
 }
 
-/// Bounded operational evidence for one managed invocation.
+/// Bounded operational evidence for one managed invocation and its exact
+/// source/result message relationship.
 ///
 /// Raw update streams are represented by exact byte counts and a chain digest;
 /// the bounded result message remains the transcript authority.
@@ -134,6 +135,8 @@ pub struct InvocationEventCounts {
 pub struct InvocationObservation {
     pub invocation_id: String,
     pub agent_id: String,
+    pub source_message_id: String,
+    pub result_message_id: Option<String>,
     pub generation_id: String,
     pub binding_id: String,
     pub binding_generation: u64,
@@ -786,7 +789,8 @@ fn generation_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<PluginGeneration
 
 fn observation_select() -> &'static str {
     r"
-    SELECT o.invocation_id, i.agent_id, o.generation_id, o.binding_id,
+    SELECT o.invocation_id, i.agent_id, source.id AS source_message_id,
+           result.id AS result_message_id, o.generation_id, o.binding_id,
            o.binding_generation, o.owner_epoch, o.started_at_ms, o.updated_at_ms,
            o.first_event_at_ms, o.last_event_at_ms, o.event_count,
            o.observed_payload_bytes, o.last_event_seq, o.event_chain_digest,
@@ -797,6 +801,8 @@ fn observation_select() -> &'static str {
            o.session_quiescent, o.session_persistence, o.usage_json
     FROM invocation_observations o
     JOIN invocations i ON i.id = o.invocation_id
+    JOIN messages source ON source.seq = i.message_seq
+    LEFT JOIN messages result ON result.seq = i.result_message_seq
     "
 }
 
@@ -806,6 +812,8 @@ fn observation_from_row(
     Ok(InvocationObservation {
         invocation_id: row.try_get("invocation_id")?,
         agent_id: row.try_get("agent_id")?,
+        source_message_id: row.try_get("source_message_id")?,
+        result_message_id: row.try_get("result_message_id")?,
         generation_id: row.try_get("generation_id")?,
         binding_id: row.try_get("binding_id")?,
         binding_generation: to_u64(row.try_get("binding_generation")?, "binding generation")?,

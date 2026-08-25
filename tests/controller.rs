@@ -205,6 +205,7 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
     let (_directory, store, sender, invocation) = fixture().await;
     let agent_id = invocation.agent_id.clone();
     let invocation_id = invocation.id.clone();
+    let source_message_id = invocation.message.id.clone();
     let (mut harness, session_ref, binding, generation_id) =
         open_harness(&store, &agent_id, "healthy").await;
     let activated_after_arm = Arc::new(AtomicBool::new(false));
@@ -259,6 +260,11 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
         .pop()
         .expect("one invocation observation");
     assert_eq!(observation.invocation_id, invocation_id.as_str());
+    assert_eq!(observation.source_message_id, source_message_id);
+    assert_eq!(
+        observation.result_message_id.as_deref(),
+        Some(completion.result.id.as_str())
+    );
     assert_eq!(observation.event_count, 1);
     assert_eq!(observation.counts.assistant, 1);
     assert!(observation.event_chain_digest.is_some());

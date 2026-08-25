@@ -153,6 +153,13 @@ proves generation replacement and native-session adoption while preserving a
 typed-payload mismatch as application evidence rather than normalizing it in
 Fleetd.
 
+For reproducible unattended runs, the standalone
+[`fleetd-soak`](tools/soak/README.md) tool appends exact opaque workloads through
+the public API, correlates bounded observations through message causation, and
+captures credential-free loopback observer JSON without interpreting provider
+fields. The daemon remains unaware of workload or model-server semantics. See
+the [first real Qwen runner qualification](docs/qualification/qwen-unattended-soak-runner-2026-08-25.md).
+
 ## Semantic boundary
 
 Fleetd message kinds and JSON payloads are opaque transport data. Fleetd does

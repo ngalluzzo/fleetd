@@ -200,7 +200,8 @@ export type InvocationEventCounts = {
 };
 
 /**
- * Bounded operational evidence for one managed invocation.
+ * Bounded operational evidence for one managed invocation and its exact
+ * source/result message relationship.
  *
  * Raw update streams are represented by exact byte counts and a chain digest;
  * the bounded result message remains the transcript authority.
@@ -220,9 +221,11 @@ export type InvocationObservation = {
     last_event_seq: number;
     observed_payload_bytes: number;
     owner_epoch: number;
+    result_message_id?: string | null;
     runtime_stop_reason?: string | null;
     session_persistence?: null | SessionPersistence;
     session_quiescent?: boolean | null;
+    source_message_id: string;
     started_at_ms: number;
     stop_reason?: string | null;
     terminal_at_ms?: number | null;

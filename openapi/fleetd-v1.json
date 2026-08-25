@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "paths": {
     "/health": {
@@ -2588,10 +2588,11 @@
       },
       "InvocationObservation": {
         "type": "object",
-        "description": "Bounded operational evidence for one managed invocation.\n\nRaw update streams are represented by exact byte counts and a chain digest;\nthe bounded result message remains the transcript authority.",
+        "description": "Bounded operational evidence for one managed invocation and its exact\nsource/result message relationship.\n\nRaw update streams are represented by exact byte counts and a chain digest;\nthe bounded result message remains the transcript authority.",
         "required": [
           "invocation_id",
           "agent_id",
+          "source_message_id",
           "generation_id",
           "binding_id",
           "binding_generation",
@@ -2674,6 +2675,12 @@
             "format": "int64",
             "minimum": 0
           },
+          "result_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "runtime_stop_reason": {
             "type": [
               "string",
@@ -2695,6 +2702,9 @@
               "boolean",
               "null"
             ]
+          },
+          "source_message_id": {
+            "type": "string"
           },
           "started_at_ms": {
             "type": "integer",
