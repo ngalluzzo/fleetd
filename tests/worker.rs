@@ -107,6 +107,7 @@ async fn fixture(message_count: usize) -> Fixture {
             name: "worker-test".to_owned(),
             metadata: json!({}),
             member_ids: vec![sender.id.clone(), receiver.id.clone()],
+            members: Vec::new(),
         })
         .await
         .expect("create channel");

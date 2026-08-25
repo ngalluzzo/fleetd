@@ -10,9 +10,9 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleetd::{
     AckDelivery, AddMember, AppState, ArmInvocation, AuthService, BlockDelivery, BlockResolution,
     ClaimDeliveries, CompleteInvocation, ContinuousHarnessWorker, ContinuousWorkerConfig,
-    CreateAgent, CreateChannel, EnvelopeTurnAdapter, IssuedCredential, MessagePage, PluginSpec,
-    RegisteredAgent, ResolveDeliveryBlock, RetryDelivery, SendMessage, Store, ToolBudget,
-    TurnPolicy, harness_acp_interface, router,
+    CreateAgent, CreateChannel, EnvelopeTurnAdapter, IssuedCredential, MembershipDeliveryMode,
+    MessagePage, PluginSpec, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery, SendMessage,
+    Store, ToolBudget, TurnPolicy, harness_acp_interface, router,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -682,6 +682,7 @@ async fn channel_command(api: &ApiClient, command: ChannelCommand) -> MainResult
                     name,
                     metadata: parse_json(&metadata)?,
                     member_ids,
+                    members: Vec::new(),
                 })
                 .send()
                 .await?
@@ -689,7 +690,10 @@ async fn channel_command(api: &ApiClient, command: ChannelCommand) -> MainResult
         ChannelCommand::List => api.get("/v1/channels").send().await?,
         ChannelCommand::AddMember { channel, agent } => {
             api.post(&format!("/v1/channels/{channel}/members"))
-                .json(&AddMember { agent_id: agent })
+                .json(&AddMember {
+                    agent_id: agent,
+                    delivery_mode: MembershipDeliveryMode::Inbox,
+                })
                 .send()
                 .await?
         }

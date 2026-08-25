@@ -127,6 +127,7 @@ async fn concurrent_member_add_and_append_use_one_committed_snapshot() {
             name: "concurrent-membership-snapshot".to_owned(),
             metadata: json!({}),
             member_ids: vec![sender.id.clone()],
+            members: Vec::new(),
         })
         .await
         .expect("create initial channel");
@@ -187,6 +188,7 @@ async fn messages_are_durable_ordered_and_cursor_addressable() {
             name: "project-001".to_owned(),
             metadata: json!({}),
             member_ids: vec![piler.id.clone(), weaver.id.clone()],
+            members: Vec::new(),
         })
         .await
         .expect("create channel");
@@ -252,6 +254,7 @@ async fn direct_messages_are_scoped_to_their_sender_and_recipient() {
             name: "scoped".to_owned(),
             metadata: json!({}),
             member_ids: vec![piler.id.clone(), weaver.id.clone(), eavesdropper.id.clone()],
+            members: Vec::new(),
         })
         .await
         .expect("create channel");
@@ -331,6 +334,7 @@ async fn message_idempotency_is_concurrent_durable_and_conflict_detecting() {
             name: "idempotent-results".to_owned(),
             metadata: json!({}),
             member_ids: vec![piler.id.clone(), weaver.id.clone()],
+            members: Vec::new(),
         })
         .await
         .expect("create channel");
@@ -414,6 +418,7 @@ async fn idempotency_keys_are_bounded() {
             name: "bounded-keys".to_owned(),
             metadata: json!({}),
             member_ids: vec![sender.id.clone(), receiver.id.clone()],
+            members: Vec::new(),
         })
         .await
         .expect("create channel");
@@ -514,6 +519,7 @@ async fn non_members_cannot_send_or_receive_in_a_channel() {
             name: "bounded".to_owned(),
             metadata: json!({}),
             member_ids: vec![member.id.clone()],
+            members: Vec::new(),
         })
         .await
         .expect("create channel");

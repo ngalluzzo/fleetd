@@ -1216,6 +1216,85 @@
       }
     },
     "/v1/channels/{channel_id}/members": {
+      "get": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "List exact channel memberships",
+        "description": "Available to the operator or a member of this exact channel. The bounded projection omits opaque agent metadata.",
+        "operationId": "listChannelMembers",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "Channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact channel memberships",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChannelMember"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Channel membership required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Channel not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
       "post": {
         "tags": [
           "channels"
@@ -1270,6 +1349,16 @@
           },
           "404": {
             "description": "Channel or agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Existing membership uses another delivery mode",
             "content": {
               "application/json": {
                 "schema": {
@@ -2109,8 +2198,12 @@
         "properties": {
           "agent_id": {
             "type": "string"
+          },
+          "delivery_mode": {
+            "$ref": "#/components/schemas/MembershipDeliveryMode"
           }
-        }
+        },
+        "additionalProperties": false
       },
       "Agent": {
         "type": "object",
@@ -2258,6 +2351,35 @@
           }
         }
       },
+      "ChannelMember": {
+        "type": "object",
+        "description": "Bounded public membership projection without opaque agent metadata.",
+        "required": [
+          "channel_id",
+          "agent_id",
+          "agent_name",
+          "joined_at_ms",
+          "delivery_mode"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "agent_name": {
+            "type": "string"
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "delivery_mode": {
+            "$ref": "#/components/schemas/MembershipDeliveryMode"
+          },
+          "joined_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "ClaimBatch": {
         "type": "object",
         "description": "A set of deliveries owned by one expiring lease token.",
@@ -2350,11 +2472,35 @@
               "type": "string"
             }
           },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateChannelMember"
+            }
+          },
           "metadata": {},
           "name": {
             "type": "string"
           }
-        }
+        },
+        "additionalProperties": false
+      },
+      "CreateChannelMember": {
+        "type": "object",
+        "description": "Exact initial membership used by the durable store.",
+        "required": [
+          "agent_id",
+          "delivery_mode"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "delivery_mode": {
+            "$ref": "#/components/schemas/MembershipDeliveryMode"
+          }
+        },
+        "additionalProperties": false
       },
       "Delivery": {
         "type": "object",
@@ -2759,6 +2905,14 @@
             "type": "string"
           }
         }
+      },
+      "MembershipDeliveryMode": {
+        "type": "string",
+        "description": "Whether one channel membership receives leased inbox work.",
+        "enum": [
+          "inbox",
+          "stream_only"
+        ]
       },
       "Message": {
         "type": "object",

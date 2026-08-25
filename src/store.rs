@@ -103,16 +103,28 @@ impl Store {
     ///
     /// Returns an error for invalid input, unknown members, or a persistence failure.
     pub async fn create_channel(&self, input: CreateChannel) -> Result<Channel, FleetError> {
-        let members = input
-            .member_ids
-            .into_iter()
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .map(|agent_id| CreateChannelMember {
+        let mut seen = HashSet::new();
+        let mut members = Vec::with_capacity(input.member_ids.len() + input.members.len());
+        for agent_id in input.member_ids {
+            if !seen.insert(agent_id.clone()) {
+                return Err(FleetError::Invalid(format!(
+                    "duplicate initial channel member: {agent_id}"
+                )));
+            }
+            members.push(CreateChannelMember {
                 agent_id,
                 delivery_mode: MembershipDeliveryMode::Inbox,
-            })
-            .collect();
+            });
+        }
+        for member in input.members {
+            if !seen.insert(member.agent_id.clone()) {
+                return Err(FleetError::Invalid(format!(
+                    "duplicate initial channel member: {}",
+                    member.agent_id
+                )));
+            }
+            members.push(member);
+        }
         self.create_channel_with_members(input.name, input.metadata, members)
             .await
     }

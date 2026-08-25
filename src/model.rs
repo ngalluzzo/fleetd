@@ -59,12 +59,15 @@ pub struct Channel {
 
 /// Input for creating a channel and its initial membership.
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CreateChannel {
     pub name: String,
     #[serde(default = "empty_object")]
     pub metadata: Value,
     #[serde(default)]
     pub member_ids: Vec<String>,
+    #[serde(default)]
+    pub members: Vec<CreateChannelMember>,
 }
 
 /// Whether one channel membership receives leased inbox work.
@@ -90,6 +93,7 @@ impl MembershipDeliveryMode {
 
 /// Exact initial membership used by the durable store.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CreateChannelMember {
     pub agent_id: String,
     pub delivery_mode: MembershipDeliveryMode,
@@ -107,8 +111,11 @@ pub struct ChannelMember {
 
 /// Input for adding one agent to a channel.
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AddMember {
     pub agent_id: String,
+    #[serde(default)]
+    pub delivery_mode: MembershipDeliveryMode,
 }
 
 /// An immutable message envelope in the global event sequence.

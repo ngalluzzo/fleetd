@@ -16,6 +16,7 @@ export type AckDelivery = {
  */
 export type AddMember = {
     agent_id: string;
+    delivery_mode?: MembershipDeliveryMode;
 };
 
 /**
@@ -81,6 +82,17 @@ export type Channel = {
 };
 
 /**
+ * Bounded public membership projection without opaque agent metadata.
+ */
+export type ChannelMember = {
+    agent_id: string;
+    agent_name: string;
+    channel_id: string;
+    delivery_mode: MembershipDeliveryMode;
+    joined_at_ms: number;
+};
+
+/**
  * A set of deliveries owned by one expiring lease token.
  */
 export type ClaimBatch = {
@@ -120,8 +132,17 @@ export type CreateAgent = {
  */
 export type CreateChannel = {
     member_ids?: Array<string>;
+    members?: Array<CreateChannelMember>;
     metadata?: unknown;
     name: string;
+};
+
+/**
+ * Exact initial membership used by the durable store.
+ */
+export type CreateChannelMember = {
+    agent_id: string;
+    delivery_mode: MembershipDeliveryMode;
 };
 
 /**
@@ -247,6 +268,11 @@ export type IssuedCredential = {
     id: string;
     token: string;
 };
+
+/**
+ * Whether one channel membership receives leased inbox work.
+ */
+export type MembershipDeliveryMode = 'inbox' | 'stream_only';
 
 /**
  * An immutable message envelope in the global event sequence.
@@ -1001,6 +1027,48 @@ export type CreateChannelResponses = {
 
 export type CreateChannelResponse = CreateChannelResponses[keyof CreateChannelResponses];
 
+export type ListChannelMembersData = {
+    body?: never;
+    path: {
+        /**
+         * Channel ID
+         */
+        channel_id: string;
+    };
+    query?: never;
+    url: '/v1/channels/{channel_id}/members';
+};
+
+export type ListChannelMembersErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Channel membership required
+     */
+    403: ErrorResponse;
+    /**
+     * Channel not found
+     */
+    404: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ListChannelMembersError = ListChannelMembersErrors[keyof ListChannelMembersErrors];
+
+export type ListChannelMembersResponses = {
+    /**
+     * Exact channel memberships
+     */
+    200: Array<ChannelMember>;
+};
+
+export type ListChannelMembersResponse = ListChannelMembersResponses[keyof ListChannelMembersResponses];
+
 export type AddChannelMemberData = {
     body: AddMember;
     path: {
@@ -1026,6 +1094,10 @@ export type AddChannelMemberErrors = {
      * Channel or agent not found
      */
     404: ErrorResponse;
+    /**
+     * Existing membership uses another delivery mode
+     */
+    409: ErrorResponse;
     /**
      * Internal failure
      */

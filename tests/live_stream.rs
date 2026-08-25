@@ -41,6 +41,7 @@ async fn websocket_replays_history_then_delivers_live_messages() {
             name: "network-test".to_owned(),
             metadata: json!({}),
             member_ids: vec![sender.id.clone(), receiver.id.clone()],
+            members: Vec::new(),
         })
         .await
         .expect("create channel");
@@ -127,6 +128,7 @@ async fn streams_do_not_leak_direct_messages_between_other_members() {
             name: "discreet".to_owned(),
             metadata: json!({}),
             member_ids: vec![author.clone(), recipient.clone(), watcher.clone()],
+            members: Vec::new(),
         })
         .await
         .expect("create channel");

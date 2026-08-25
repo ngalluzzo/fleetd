@@ -161,6 +161,7 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
             name: "migrated-channel".to_owned(),
             metadata: json!({}),
             member_ids: vec!["legacy-agent".to_owned(), recipient.id.clone()],
+            members: Vec::new(),
         })
         .await
         .expect("create channel after migration");

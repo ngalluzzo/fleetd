@@ -116,7 +116,7 @@ fn protected_contract() -> OpenApiRouter<AppState> {
         .routes(routes!(create_agent, list_agents))
         .routes(routes!(rotate_agent_credential))
         .routes(routes!(create_channel, list_channels))
-        .routes(routes!(add_member))
+        .routes(routes!(add_member, list_channel_members))
         .routes(routes!(append_message, list_messages))
         .routes(routes!(stream))
         .routes(routes!(claim_deliveries))
@@ -335,6 +335,7 @@ async fn list_channels(
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
         (status = 404, description = "Channel or agent not found", body = ErrorResponse),
+        (status = 409, description = "Existing membership uses another delivery mode", body = ErrorResponse),
         (status = 500, description = "Internal failure", body = ErrorResponse)
     )
 )]
@@ -345,8 +346,37 @@ async fn add_member(
     Json(input): Json<AddMember>,
 ) -> Result<StatusCode, FleetError> {
     require_operator(&principal)?;
-    state.store.add_member(&channel_id, &input.agent_id).await?;
+    state
+        .store
+        .add_member_with_mode(&channel_id, &input.agent_id, input.delivery_mode)
+        .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/channels/{channel_id}/members",
+    operation_id = "listChannelMembers",
+    tag = "channels",
+    summary = "List exact channel memberships",
+    description = "Available to the operator or a member of this exact channel. The bounded projection omits opaque agent metadata.",
+    security(("bearerAuth" = [])),
+    params(("channel_id" = String, Path, description = "Channel ID")),
+    responses(
+        (status = 200, description = "Exact channel memberships", body = [crate::model::ChannelMember]),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Channel membership required", body = ErrorResponse),
+        (status = 404, description = "Channel not found", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn list_channel_members(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path(channel_id): Path<String>,
+) -> Result<Json<Vec<crate::model::ChannelMember>>, FleetError> {
+    require_channel_access(&state, &principal, &channel_id).await?;
+    Ok(Json(state.store.list_channel_members(&channel_id).await?))
 }
 
 #[utoipa::path(

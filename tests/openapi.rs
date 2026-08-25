@@ -66,7 +66,7 @@ fn contract_has_stable_unique_operations_and_explicit_security() {
         }
     }
 
-    assert_eq!(operation_count, 24);
+    assert_eq!(operation_count, 25);
     assert_eq!(operation_ids.len(), operation_count);
 }
 

@@ -81,6 +81,7 @@ impl TestServer {
                 name: "auth-test".to_owned(),
                 metadata: json!({}),
                 member_ids: members.iter().map(|member| (*member).to_owned()).collect(),
+                members: Vec::new(),
             })
             .send()
             .await
@@ -161,6 +162,211 @@ async fn operational_read_models_require_the_operator() {
             .await
             .expect("agent read model response");
         assert_eq!(forbidden.status(), reqwest::StatusCode::FORBIDDEN);
+    }
+}
+
+#[tokio::test]
+async fn channel_membership_listing_is_exact_bounded_and_authorized() {
+    let server = TestServer::start().await;
+    let worker = server.register("membership-worker").await;
+    let human = server.register("membership-human").await;
+    let outsider = server.register("membership-outsider").await;
+
+    let created = server
+        .post("/v1/channels", Some(&server.operator_token))
+        .json(&json!({
+            "name": "mixed-membership-api",
+            "metadata": { "opaque": "channel metadata" },
+            "member_ids": [worker.agent.id],
+            "members": [{
+                "agent_id": human.agent.id,
+                "delivery_mode": "stream_only"
+            }]
+        }))
+        .send()
+        .await
+        .expect("create mixed membership channel");
+    assert_eq!(created.status(), reqwest::StatusCode::CREATED);
+    let channel: fleetd::Channel = created.json().await.expect("channel body");
+
+    let operator_members = server
+        .get(
+            &format!("/v1/channels/{}/members", channel.id),
+            Some(&server.operator_token),
+        )
+        .send()
+        .await
+        .expect("operator member list");
+    assert_eq!(operator_members.status(), reqwest::StatusCode::OK);
+    let memberships: Vec<serde_json::Value> =
+        operator_members.json().await.expect("membership list body");
+    assert_eq!(memberships.len(), 2);
+    for membership in &memberships {
+        let fields = membership.as_object().expect("membership object");
+        assert_eq!(
+            fields.len(),
+            5,
+            "bounded read model must expose five fields"
+        );
+        for field in [
+            "channel_id",
+            "agent_id",
+            "agent_name",
+            "joined_at_ms",
+            "delivery_mode",
+        ] {
+            assert!(fields.contains_key(field), "missing bounded field {field}");
+        }
+        assert!(!fields.contains_key("metadata"));
+    }
+    assert_eq!(
+        memberships
+            .iter()
+            .find(|membership| membership["agent_id"] == human.agent.id)
+            .expect("human membership")["delivery_mode"],
+        "stream_only"
+    );
+    assert_eq!(
+        memberships
+            .iter()
+            .find(|membership| membership["agent_id"] == worker.agent.id)
+            .expect("worker membership")["delivery_mode"],
+        "inbox"
+    );
+
+    let member_view = server
+        .get(
+            &format!("/v1/channels/{}/members", channel.id),
+            Some(&human.credential.token),
+        )
+        .send()
+        .await
+        .expect("exact member list");
+    assert_eq!(member_view.status(), reqwest::StatusCode::OK);
+    server.channel(&[&outsider.agent.id]).await;
+    let outsider_view = server
+        .get(
+            &format!("/v1/channels/{}/members", channel.id),
+            Some(&outsider.credential.token),
+        )
+        .send()
+        .await
+        .expect("outsider member list");
+    assert_eq!(outsider_view.status(), reqwest::StatusCode::FORBIDDEN);
+    let unknown = server
+        .get(
+            "/v1/channels/unknown-channel/members",
+            Some(&server.operator_token),
+        )
+        .send()
+        .await
+        .expect("unknown channel list");
+    assert_eq!(unknown.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn channel_membership_writes_are_atomic_immutable_and_strict() {
+    let server = TestServer::start().await;
+    let worker = server.register("membership-write-worker").await;
+    let legacy = server.register("membership-write-legacy").await;
+    let passive = server.register("membership-write-passive").await;
+    let channel = server.channel(&[&worker.agent.id]).await;
+
+    let legacy_added = server
+        .post(
+            &format!("/v1/channels/{}/members", channel.id),
+            Some(&server.operator_token),
+        )
+        .json(&json!({ "agent_id": legacy.agent.id }))
+        .send()
+        .await
+        .expect("add member with omitted mode");
+    assert_eq!(legacy_added.status(), reqwest::StatusCode::NO_CONTENT);
+    let legacy_replay = server
+        .post(
+            &format!("/v1/channels/{}/members", channel.id),
+            Some(&server.operator_token),
+        )
+        .json(&json!({
+            "agent_id": legacy.agent.id,
+            "delivery_mode": "inbox"
+        }))
+        .send()
+        .await
+        .expect("replay exact membership");
+    assert_eq!(legacy_replay.status(), reqwest::StatusCode::NO_CONTENT);
+
+    let stream_added = server
+        .post(
+            &format!("/v1/channels/{}/members", channel.id),
+            Some(&server.operator_token),
+        )
+        .json(&json!({
+            "agent_id": passive.agent.id,
+            "delivery_mode": "stream_only"
+        }))
+        .send()
+        .await
+        .expect("add explicit stream-only member");
+    assert_eq!(stream_added.status(), reqwest::StatusCode::NO_CONTENT);
+    let mismatch = server
+        .post(
+            &format!("/v1/channels/{}/members", channel.id),
+            Some(&server.operator_token),
+        )
+        .json(&json!({
+            "agent_id": legacy.agent.id,
+            "delivery_mode": "stream_only"
+        }))
+        .send()
+        .await
+        .expect("attempt membership mode mutation");
+    assert_eq!(mismatch.status(), reqwest::StatusCode::CONFLICT);
+
+    let duplicate = server
+        .post("/v1/channels", Some(&server.operator_token))
+        .json(&json!({
+            "name": "duplicate-membership-must-rollback",
+            "member_ids": [worker.agent.id],
+            "members": [{
+                "agent_id": worker.agent.id,
+                "delivery_mode": "stream_only"
+            }]
+        }))
+        .send()
+        .await
+        .expect("duplicate initial membership response");
+    assert_eq!(duplicate.status(), reqwest::StatusCode::BAD_REQUEST);
+    let channels: Vec<fleetd::Channel> = server
+        .get("/v1/channels", Some(&server.operator_token))
+        .send()
+        .await
+        .expect("list channels")
+        .error_for_status()
+        .expect("channel list status")
+        .json()
+        .await
+        .expect("channel list body");
+    assert!(
+        channels
+            .iter()
+            .all(|candidate| candidate.name != "duplicate-membership-must-rollback")
+    );
+
+    for invalid in [
+        json!({ "agent_id": worker.agent.id, "delivery_mode": "unknown" }),
+        json!({ "agent_id": worker.agent.id, "unknown": true }),
+    ] {
+        let response = server
+            .post(
+                &format!("/v1/channels/{}/members", channel.id),
+                Some(&server.operator_token),
+            )
+            .json(&invalid)
+            .send()
+            .await
+            .expect("invalid member input");
+        assert_eq!(response.status(), reqwest::StatusCode::UNPROCESSABLE_ENTITY);
     }
 }
 

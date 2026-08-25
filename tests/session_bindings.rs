@@ -33,6 +33,7 @@ async fn fixture_with_lease(lease_duration_ms: u64) -> Fixture {
             name: "binding-work".to_owned(),
             metadata: json!({}),
             member_ids: vec![sender.id.clone(), receiver.id.clone()],
+            members: Vec::new(),
         })
         .await
         .expect("create channel");
