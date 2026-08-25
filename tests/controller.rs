@@ -10,11 +10,11 @@ use std::{
 };
 
 use fleetd::{
-    AcquireSessionBinding, Capability, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
-    Invocation, InvocationState, ManagedHarnessController, ManagedTurn, ManagedTurnCapability,
+    AcquireSessionBinding, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, Invocation,
+    InvocationState, ManagedHarnessController, ManagedTurn, ManagedTurnCapability,
     ManagedTurnOutcome, OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock,
     SessionAcquisitionMode, SessionBindingState, SessionPersistence, Store, ToolBudget, TurnPolicy,
-    TurnResultCapture,
+    TurnResultCapture, harness_acp_capabilities,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -60,10 +60,7 @@ fn harness_spec(mode: &str) -> PluginSpec {
     PluginSpec::new("mock.harness", "/usr/bin/python3")
         .with_arg(fixture_path())
         .with_arg(mode)
-        .require(Capability {
-            name: "harness.acp".to_owned(),
-            version: 1,
-        })
+        .require_all(harness_acp_capabilities())
         .with_request_timeout(Duration::from_secs(2))
 }
 

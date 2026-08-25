@@ -3,19 +3,16 @@
 use std::{path::PathBuf, time::Duration};
 
 use fleetd::{
-    Binding, Capability, CloseSession, ExecutionFence, HarnessAcpNotification, OpenSession,
-    OpenSessionMode, PluginError, PluginProcess, PluginSpec, PromptBlock, StartTurn, ToolBudget,
-    TurnPolicy, TurnSource,
+    Binding, CloseSession, ExecutionFence, HarnessAcpNotification, OpenSession, OpenSessionMode,
+    PluginError, PluginProcess, PluginSpec, PromptBlock, StartTurn, ToolBudget, TurnPolicy,
+    TurnSource, harness_acp_capabilities,
 };
 
 fn fixture_spec(mode: &str) -> PluginSpec {
     PluginSpec::new("mock.harness", "/usr/bin/python3")
         .with_arg(fixture_path())
         .with_arg(mode)
-        .require(Capability {
-            name: "harness.acp".to_owned(),
-            version: 1,
-        })
+        .require_all(harness_acp_capabilities())
         .with_request_timeout(Duration::from_secs(1))
 }
 

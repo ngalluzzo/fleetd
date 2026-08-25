@@ -32,38 +32,33 @@
 - [x] Versioned inbound message acceptance at the worker/adapter boundary so
   continuous seats do not treat generic completion results as new work.
 
-## M2 — Work contracts
+## M2 — GOOIR capability ecosystem
 
-- [x] Bind a GOOIR capability need to exact facts and carry it through one
-  durable, owner-fenced provider attempt.
-- [x] Persist exact semantic-provider context and strictly lift a raw attempt
-  into a content-addressed candidate or explicit unable result.
-- [x] Implement the first real independently identified conformance provider
-  and a GOOIR-derived blocked-delivery web artifact.
-- [x] Return the exact durable candidate through conformance and re-plan the
-  GOOIR graph with its admitted fact.
-- [x] Preserve ACP assistant-message boundaries and lift a model's final
-  structured result without discarding its progress transcript.
-- [x] Delegate one exact-revision repository inspection through a specialized
-  capability adapter and validate its complete report and Git citations.
-- [x] Define exact-revision repository patch proposals and deterministically
-  conform fixture candidates through an isolated Git index without mutating the
-  source checkout.
-- [ ] Qualify a real repository-patch provider. The first cloud and local Qwen
-  attempts failed closed before producing a candidate.
-- Versioned task, progress, result, review, and approval contracts.
-- Dependency scheduling expressed outside the messaging kernel.
-- A complete author-reviewer loop exercised on fleetd itself.
+- [x] Negotiate one package-level GOOIR offer set containing several exact
+  capability implementations.
+- [x] Keep ACP as a transport for independently versioned agent-session
+  capabilities.
+- [x] Consume exact GOOIR invocations and results without teaching the worker
+  their domain meaning.
+- [x] Produce content-addressed GOOIR candidates with immutable Fleetd message
+  evidence while leaving conformance and admission to GOOIR.
+- [ ] Publish a separately versioned GOOIR protocol artifact and consume it as
+  Fleetd's single wire source of truth.
+- [ ] Advertise Fleetd's durable-message implementation as an exact GOOIR
+  capability while keeping invocation grants in the runtime layer.
+- [ ] Qualify two independent plugins that implement the same capability and
+  one plugin package that implements capabilities from two families.
 
-## M3 — Git adapter
+## M3 — Distributed work
 
-- [x] Worktree isolation and exact-revision evidence for inspection and patch
-  proposals.
-- [ ] Patch publication and independent review. Patch artifact conformance is
-  implemented; no provider or reviewer is qualified and no publication
-  authority exists.
-- Atomic merge authorization bound to reviewed base and head revisions.
-- No Git hosting and no direct-push policy emulation.
+- Define Git, GitHub, and GitLab capability packages as independent,
+  composable implementations rather than one repository provider interface.
+- Version task, progress, result, review, and approval capability contracts
+  outside Fleetd core.
+- Express dependency scheduling in GOOIR or a workflow package, not the
+  messaging kernel.
+- Exercise a complete author-reviewer loop on Fleetd itself.
+- Keep Git hosting, direct-push policy, and merge semantics outside Fleetd.
 
 ## M4 — Operator surface
 

@@ -75,49 +75,18 @@ correlation, causation, or the durable idempotency key. See the
 
 ## Turn and lane behavior
 
-The built-in adapter passes the full immutable fleetd message envelope and its
-invocation attempt to the harness as JSON. It adds no task, Git, review, or UI
-semantics. Its configured exact kinds decide only reservation eligibility. One
-durable native session lane is maintained per channel, so conversation context
-stays scoped to the channel. A future versioned adapter or workflow plugin can
-choose a different lane policy without changing the kernel.
+The built-in envelope adapter passes the full immutable Fleetd message envelope
+and its invocation attempt to the harness as JSON. It adds no task, Git, review,
+UI, workflow, or GOOIR capability semantics. Configured exact kinds decide only
+reservation eligibility. One durable native session lane is maintained per
+channel, so conversation context stays scoped to the channel.
 
-Set `adapter.kind` to `capability_work_v1` to use the first such adapter; see
-[`worker.capability.opencode.example.json`](../examples/worker.capability.opencode.example.json).
-Its `providers` list gives each semantic provider an exact identity,
-capability, and implementation digest; no name-only or version-range match is
-permitted. This identity is distinct from the selected harness plugin. The
-adapter validates `work.capability.request/v1`, requires message correlation to
-equal the request identity, rejects partial facts where the capability requires
-completeness, and uses one lane per work contract. It persists the provider
-descriptor beside raw terminal evidence so a later strict lift does not trust
-an agent to report its own identity. The extracted candidate still does not
-establish that the named conformance suite passed.
-
-Set `adapter.kind` to `repository_inspection_v1` for the first concrete
-specialization; see
-[`worker.inspection.opencode.example.json`](../examples/worker.inspection.opencode.example.json).
-The adapter requires one exact inspection provider and one absolute Git
-executable. `working_directory` must be the canonical top level of a clean,
-isolated checkout whose `HEAD` equals the request revision. The preflight runs
-before dispatch arming, and the same clean-revision check runs during report
-conformance. Evidence paths must be normalized, fall inside the brief's path
-scope, and name valid line ranges in exact Git objects. This constrains admitted
-evidence, not harness filesystem reads, so do not place secrets in the worktree
-or treat the adapter as an operating-system sandbox. See the
-[repository-inspection contract](contracts/repository-inspection-v1.md).
-
-Set `adapter.kind` to `repository_patch_v1` to request one patch artifact; see
-[`worker.patch.opencode.example.json`](../examples/worker.patch.opencode.example.json).
-The adapter requires one exact patch provider, a clean isolated checkout at the
-brief's exact base `HEAD`, and one absolute Git executable. The provider is
-instructed not to modify the checkout. Strict extraction applies the proposed
-diff only to a temporary Git index, requires Git's exact sorted path set to
-match the claim and remain in scope, rejects binary and non-regular modes, and
-emits a canonical full-index patch digest. This does not run tests or grant
-commit, push, review, approval, or merge authority. No real patch provider has
-qualified yet; see the [repository-patch contract](contracts/repository-patch-v1.md)
-and [first failed-closed qualification](qualification/repository-patch-provider-2026-08-24.md).
+A seat can carry GOOIR by including `gooir.capability.invocation/v1` or
+`gooir.capability.result/v1` in its accepted kinds. The adapter still treats
+the payload as opaque. Capability packages—not the Fleetd worker—own semantic
+implementation selection, prompt construction, result parsing, and
+conformance. See the
+[GOOIR host contract](contracts/gooir-capability-host-v1.md).
 
 The lease must cover the configured wall timeout, cancellation drain timeout,
 and a 60-second settlement margin. Permission requests are denied by the
@@ -136,7 +105,7 @@ bounds are validated before a process starts.
 - After a completed or blocked turn, result settlement is already committed in
   SQLite before the next reservation.
 - A known, quiescent terminal is safe to settle but is not automatically a
-  successful provider attempt. Final-JSON adapters report failure unless one
+  successful semantic result. Final-JSON adapters report failure unless one
   complete protocol-bounded JSON value was captured. Host cancellation
   overrides a runtime `end_turn` and preserves that runtime claim separately as
   evidence.

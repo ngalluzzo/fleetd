@@ -73,15 +73,15 @@ Each harness plugin and its native runtime are separate processes. The plugin
 uses the shared ACP host to speak fleetd's strict lifecycle on outer stdio and
 an authoritative ACP SDK on the inner connection. Vendor identity, model
 selection, arguments, and environment grants belong to the plugin, never the
-shared host or worker. This is not a JSON-RPC tunnel: only methods in the draft
-`harness.acp` capability cross the fleet boundary.
+shared host or worker. This is not a JSON-RPC tunnel: only typed methods in the
+draft ACP agent-session adapter cross the Fleetd boundary.
 
 ## Four protocol layers
 
 | Layer | Contract | Purpose | Authority |
 | --- | --- | --- | --- |
 | L0 | `fleetd` plugin lifecycle v1 | Start, identify, negotiate, health-check, and stop one plugin process | Process authority only |
-| L1 | `harness.acp` v1 draft | Open a session, start/cancel one fenced turn, and report evidence | One invocation fence, never an inbox credential |
+| L1 | ACP agent-session adapter v1 draft | Open a session, start/cancel one fenced turn, and report evidence | One invocation fence, never an inbox credential |
 | L2 | ACP v1 | Initialize an agent, create/load sessions, prompt, stream updates, request permission, and cancel | Harness/session authority |
 | L3 | Harness internals | Transcript, model loop, tools, sandbox, skills, compaction, provider calls | Harness-specific |
 
@@ -657,8 +657,8 @@ cannot automatically reclaim an armed ambiguous attempt or session.
 
 ## First implementation acceptance matrix
 
-The `harness.acp` capability is not stable until the same tests pass through
-both `codex-acp` and `dsh-acp`:
+The ACP adapter and its agent-session capability implementations are not stable
+until the same tests pass through both `codex-acp` and `dsh-acp`:
 
 1. initialize and capture exact effective capabilities;
 2. create a session, finish a turn, restart the plugin, and resume a second

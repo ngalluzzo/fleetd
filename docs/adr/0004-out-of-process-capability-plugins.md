@@ -13,14 +13,16 @@ letting a plugin crash or corrupt the daemon.
 ## Decision
 
 Domain-specific behavior runs in supervised child processes. Plugins speak
-JSON-RPC 2.0 over newline-framed stdin and stdout and advertise narrow,
-independently versioned capabilities during initialization. The lifecycle
-protocol is versioned separately from capability contracts.
+JSON-RPC 2.0 over newline-framed stdin and stdout and advertise a package-level
+set of narrow, independently versioned GOOIR capability implementations during
+initialization. The lifecycle protocol is versioned separately from capability
+contracts. A plugin is packaging and process lifecycle; it is not itself a
+capability or provider abstraction.
 
 fleetd launches an absolute executable directly, never through a shell. The
 child starts with an empty environment and receives only explicitly granted
 configuration. fleetd credentials are not passed to plugins; future host
-capabilities mediate inbox, storage, and network operations.
+runtime grants mediate inbox, storage, and network operations.
 
 Standard output is exclusively protocol traffic. Standard error is discarded
 by default because arbitrary plugin output may contain secrets; structured
@@ -29,8 +31,8 @@ crash isolation, not a security sandbox. OS-level sandboxing remains a future
 deployment boundary.
 
 The stable lifecycle methods are initialization, health, and shutdown. No
-generic `execute` method exists. Codex and DSH will be implemented together
-before a harness capability contract is stabilized.
+generic `execute` method exists. Typed clients invoke exact capability families
+over an independently selected transport.
 
 ## Consequences
 

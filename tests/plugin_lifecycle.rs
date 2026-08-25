@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use fleetd::{Capability, PluginError, PluginProcess, PluginSpec, ShutdownOutcome};
+use fleetd::{ExactIdentity, PluginError, PluginProcess, PluginSpec, ShutdownOutcome};
 use serde_json::json;
 
 fn fixture_spec(mode: &str) -> PluginSpec {
@@ -13,10 +13,7 @@ fn fixture_spec(mode: &str) -> PluginSpec {
         .with_arg(fixture_path())
         .with_arg(mode)
         .with_config(json!({ "secret": "must-not-appear-in-debug" }))
-        .require(Capability {
-            name: "test.echo".to_owned(),
-            version: 1,
-        })
+        .require(ExactIdentity::new("dev.fleetd.test", "echo", "1.0.0"))
         .with_initialize_timeout(Duration::from_millis(250))
         .with_request_timeout(Duration::from_millis(250))
         .with_shutdown_timeout(Duration::from_millis(100))

@@ -21,7 +21,7 @@ The host's first request is `fleetd.initialize`:
 }
 ```
 
-The plugin returns its identity and exact capabilities:
+The plugin returns its identity and one exact GOOIR capability offer set:
 
 ```json
 {
@@ -34,21 +34,38 @@ The plugin returns its identity and exact capabilities:
       "name": "Example harness",
       "version": "1.2.0"
     },
-    "capabilities": [
-      { "name": "harness.invoke", "version": 1 }
-    ]
+    "capability_offers": {
+      "protocol": "org.gooi.capability.offers/v1",
+      "package": {
+        "package": "example.harness",
+        "name": "package",
+        "version": "1.2.0"
+      },
+      "offers": [
+        {
+          "implementation": {
+            "package": "example.harness",
+            "name": "turn_execute",
+            "version": "1.2.0"
+          },
+          "capability": {
+            "package": "org.gooi.capability.agent_session",
+            "name": "turn_execute",
+            "version": "1.0.0"
+          },
+          "implementation_digest": "sha256:..."
+        }
+      ]
+    }
   }
 }
 ```
 
-The supervisor rejects identity mismatches, duplicate or malformed
-capabilities, unsupported lifecycle versions, and missing required
-capabilities.
-
-Plugin and capability identifiers contain 1–128 bytes of lowercase ASCII
-letters and digits in non-empty segments separated by `.` or `-`. Capability
-versions are positive integers and are matched exactly; lifecycle compatibility
-does not imply capability compatibility.
+The supervisor rejects identity mismatches, duplicate or malformed offers,
+unsupported lifecycle versions, and missing exact required capabilities.
+Lifecycle compatibility does not imply capability compatibility. One package
+may offer several implementations, and lifecycle transport names do not imply
+semantic capabilities.
 
 ## Health
 
@@ -64,7 +81,7 @@ processes that overrun the deadline and records that the shutdown was forced.
 ## Notifications and errors
 
 Plugins may emit JSON-RPC notifications. Unknown notifications remain opaque
-to the lifecycle transport and can be consumed by a capability adapter.
+to the lifecycle transport and can be consumed by a typed plugin client.
 Plugin-initiated requests are not part of lifecycle v1.
 
 Lifecycle v1 intentionally exposes no generic domain invocation method. Each

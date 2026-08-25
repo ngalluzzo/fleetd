@@ -4,21 +4,46 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::{Capability, PluginError, PluginManifest, PluginProcess};
+use super::{PluginError, PluginManifest, PluginProcess};
+use crate::gooir::{
+    CAPABILITY_OFFERS_PROTOCOL, CapabilityOffer, CapabilityOfferSet, ExactIdentity,
+};
 
-const CAPABILITY_NAME: &str = "harness.acp";
-const CAPABILITY_VERSION: u32 = 1;
+const AGENT_SESSION_PACKAGE: &str = "org.gooi.capability.agent_session";
+const CAPABILITY_VERSION: &str = "1.0.0";
 const MAX_FLEET_ID_BYTES: usize = 256;
 const MAX_SESSION_REF_BYTES: usize = 4_096;
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
 const MAX_CAPTURE_BYTES: usize = 512 * 1024;
 
-/// The exact experimental ACP harness capability implemented by this client.
+/// The exact semantic capabilities composed by the ACP harness client.
 #[must_use]
-pub fn capability() -> Capability {
-    Capability {
-        name: CAPABILITY_NAME.to_owned(),
-        version: CAPABILITY_VERSION,
+pub fn capabilities() -> Vec<ExactIdentity> {
+    ["open", "turn_execute", "permission_resolve", "close"]
+        .into_iter()
+        .map(|name| ExactIdentity::new(AGENT_SESSION_PACKAGE, name, CAPABILITY_VERSION))
+        .collect()
+}
+
+/// Builds the GOOIR offer set for one exact harness plugin implementation.
+#[must_use]
+pub fn offer_set(
+    plugin_id: &str,
+    version: &str,
+    implementation_digest: &str,
+) -> CapabilityOfferSet {
+    CapabilityOfferSet {
+        protocol: CAPABILITY_OFFERS_PROTOCOL.to_owned(),
+        package: ExactIdentity::new(plugin_id, "package", version),
+        offers: capabilities()
+            .into_iter()
+            .map(|capability| CapabilityOffer {
+                implementation: ExactIdentity::new(plugin_id, capability.name.clone(), version),
+                capability,
+                implementation_digest: implementation_digest.to_owned(),
+            })
+            .collect(),
+        extensions: BTreeMap::new(),
     }
 }
 
@@ -315,9 +340,9 @@ struct ActiveTurn {
     seen: BTreeMap<u64, [u8; 32]>,
 }
 
-/// Typed host-side client for `harness.acp` v1.
+/// Typed host-side client for the ACP agent-session adapter v1.
 ///
-/// This is deliberately the only capability call surface exported by fleetd;
+/// This is deliberately the only ACP protocol surface exported by fleetd;
 /// callers cannot issue arbitrary JSON-RPC methods through a `PluginProcess`.
 pub struct HarnessAcpClient {
     process: PluginProcess,
@@ -326,12 +351,12 @@ pub struct HarnessAcpClient {
 
 impl HarnessAcpClient {
     pub(crate) fn new(process: PluginProcess) -> Result<Self, PluginError> {
-        let required = capability();
-        if !process.manifest().capabilities.contains(&required) {
-            return Err(PluginError::MissingCapability {
-                name: required.name,
-                version: required.version,
-            });
+        for required in capabilities() {
+            if !process.manifest().capability_offers.offers(&required) {
+                return Err(PluginError::MissingCapability {
+                    capability: required.to_string(),
+                });
+            }
         }
         Ok(Self {
             process,
@@ -358,7 +383,7 @@ impl HarnessAcpClient {
     pub async fn describe(&self) -> Result<DescribeResult, PluginError> {
         let result: DescribeResult = self
             .process
-            .capability_call("harness.acp.describe", &serde_json::json!({}))
+            .protocol_call("harness.acp.describe", &serde_json::json!({}))
             .await?;
         validate_id("driver version", &result.driver.version)?;
         validate_id("ACP SDK version", &result.driver.acp_sdk_version)?;
@@ -400,7 +425,7 @@ impl HarnessAcpClient {
         }
         let result: OpenSessionResult = self
             .process
-            .capability_call("harness.acp.session.open", request)
+            .protocol_call("harness.acp.session.open", request)
             .await?;
         validate_session_ref(&result.session_ref)?;
         if result.profile_digest != request.profile_digest {
@@ -458,7 +483,7 @@ impl HarnessAcpClient {
         }
         let result: StartTurnResult = self
             .process
-            .capability_call("harness.acp.turn.start", request)
+            .protocol_call("harness.acp.turn.start", request)
             .await?;
         if !result.accepted {
             return Err(protocol("driver returned an unaccepted turn as success"));
@@ -486,7 +511,7 @@ impl HarnessAcpClient {
         validate_id("permission_id", &request.permission_id)?;
         let result: AcceptedResult = self
             .process
-            .capability_call("harness.acp.permission.resolve", request)
+            .protocol_call("harness.acp.permission.resolve", request)
             .await?;
         if !result.accepted {
             return Err(protocol("driver rejected permission resolution"));
@@ -513,7 +538,7 @@ impl HarnessAcpClient {
         };
         let result: AcceptedResult = self
             .process
-            .capability_call("harness.acp.turn.cancel", &request)
+            .protocol_call("harness.acp.turn.cancel", &request)
             .await?;
         if !result.accepted {
             return Err(protocol("driver rejected turn cancellation"));
@@ -575,7 +600,7 @@ impl HarnessAcpClient {
         validate_session_ref(&request.session_ref)?;
         validate_id("close reason", &request.reason)?;
         self.process
-            .capability_call("harness.acp.session.close", request)
+            .protocol_call("harness.acp.session.close", request)
             .await
     }
 

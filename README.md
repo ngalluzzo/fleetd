@@ -159,16 +159,17 @@ TLS and enrollment are designed.
 
 ## Plugin boundary
 
-Harnesses and other domain behavior run outside the daemon as child-process
-plugins. fleetd provides a small, versioned lifecycle over newline-framed
-JSON-RPC: initialize, negotiate exact capabilities, check readiness, and shut
-down within a deadline. It launches absolute executables directly with an empty
-environment, owns their complete process group, and does not give plugins
-fleetd credentials.
+Harnesses and other executable integrations run outside the daemon as
+child-process plugins. A plugin is an installable package containing one or
+more exact GOOIR capability implementations. fleetd provides only the runtime
+lifecycle over newline-framed JSON-RPC: initialize, receive the package's
+`CapabilityOfferSet`, check readiness, and shut down within a deadline. It
+launches absolute executables directly with an empty environment, owns their
+complete process group, and does not give plugins fleetd credentials.
 
-The workspace now includes an experimental typed `harness.acp` host client, a
-policy-free ACP v1 host library built on the official Rust SDK, an independently
-identified OpenCode harness plugin, and a continuous worker that composes inbox
+The workspace now includes a typed agent-session client transported over ACP, a
+policy-free ACP host library built on the official Rust SDK, an independently
+identified OpenCode plugin, and a continuous worker that composes inbox
 reservation, durable session acquisition, owner-epoch
 fencing, write-ahead arming, prompt drain, atomic completion, conservative
 unknown-outcome parking, and process restart. Compatible restarts resume under
@@ -207,8 +208,7 @@ remain the next reliability boundaries. See
 [ADR 0011](docs/adr/0011-vendor-owned-harness-plugins.md),
 [ADR 0016](docs/adr/0016-invocation-scoped-message-capability.md),
 [ADR 0017](docs/adr/0017-adapters-declare-inbound-acceptance.md),
-[ADR 0018](docs/adr/0018-repository-inspection-specializes-capability-work.md),
-[ADR 0019](docs/adr/0019-patches-are-conformed-artifacts-not-workspace-mutation.md),
+[ADR 0020](docs/adr/0020-gooir-capabilities-execution-host-boundary.md),
 and the
 [historical reference qualification](docs/qualification/acp-driver-2026-08-24.md)
 and [OpenCode plugin qualification](docs/qualification/opencode-plugin-2026-08-24.md).
@@ -226,122 +226,42 @@ cross-addressed generic results remain pending without creating a loop. See the
 [single-hop qualification](docs/qualification/message-capability-opencode-2026-08-24.md)
 and the [continuous two-seat qualification](docs/qualification/continuous-two-seat-opencode-loop-2026-08-24.md).
 
-## Capability work dogfood
+## GOOIR boundary
 
-GOOIR's Fleetd checker now emits a provider-neutral `runnable_web_request`
-whose identity binds the missing capability, exact web-target fact, expected
-artifact type, and conformance suite. Submit it without converting it to prose:
+fleetd consumes and produces GOOIR; it does not define capability meaning.
+GOOIR owns exact capability, fact, offer, invocation, result, candidate, and
+conformance semantics. fleetd owns durable addressing, delivery, process
+lifecycle, sessions, leases, owner epochs, write-ahead fences, and the evidence
+those runtime facts produce.
 
-```sh
-jq '.runnable_web_request' /path/to/gooir-report.json > /tmp/fleetd-web-request.json
-cargo run -- --token-file .fleetd/requester.token work submit \
-  --channel CHANNEL_ID --to PROVIDER_AGENT_ID \
-  --request /tmp/fleetd-web-request.json
-```
-
-Run the selected seat with
-[`examples/worker.capability.opencode.example.json`](examples/worker.capability.opencode.example.json).
-The adapter accepts only configured exact capabilities and the existing
-invocation/session machinery binds the immutable request to one owner epoch.
-Each configured semantic provider has its own exact identity and implementation
-digest; neither is confused with OpenCode or ACP. Its correlated
-`work.capability.attempt/v2` response preserves all captured assistant messages
-and exposes JSON only from the final protocol-bounded message. Strictly lift a
-saved immutable attempt message without searching prose or manually supplying
-its authority:
+The `gooir submit` command validates an exact GOOIR `CapabilityInvocation` and
+carries it unchanged as a durable `gooir.capability.invocation/v1` message:
 
 ```sh
-cargo run -- work extract \
-  --request /tmp/fleetd-web-request.json \
-  --attempt-message /tmp/fleetd-web-attempt-message.json
+cargo run -- --token-file .fleetd/requester.token gooir submit \
+  --channel CHANNEL_ID --to IMPLEMENTATION_AGENT_ID \
+  --invocation /tmp/invocation.json
 ```
 
-The command emits an exact `CapabilityCandidate` or an explicit unable result.
-The candidate is still unverified; GOOIR runs the separately identified named
-suite before admitting any facts. Fleetd's checked-in attempt fixture and
-GOOIR's matching candidate fixture have the same RFC 8785/SHA-256 identity.
-
-The first generated product surface is served at `/operator/`. It loads
-`/operator/contract.json`, which is byte-for-byte the web target IR carried by
-the GOOIR request, and derives its columns, actions, selector, and API bindings
-from that contract. The operator token is held only in JavaScript memory. The
-HTML, CSS, script, and contract are separate same-origin assets under a
-restrictive Content Security Policy; the routes stay outside the versioned
-OpenAPI document because they are an adapter over that API, not new kernel
-operations.
-
-See the [capability request contract](docs/contracts/capability-work-v1.md),
-[structured attempt contract](docs/contracts/capability-work-v2.md), and
-[ADR 0012](docs/adr/0012-capability-needs-become-durable-work.md) plus
-[ADR 0013](docs/adr/0013-raw-attempts-lift-to-unverified-candidates.md) and
-[ADR 0014](docs/adr/0014-gooir-derived-operator-surface.md), plus
-[ADR 0015](docs/adr/0015-protocol-bounded-structured-results.md).
-The complete first qualification, including rejected attempts, exact evidence
-identities, admission, re-planning, and browser validation, is recorded in
-[the runnable-web qualification](docs/qualification/gooir-runnable-web-2026-08-24.md).
-
-### Repository-inspection dogfood
-
-The first useful software-work specialization delegates bounded questions
-about one exact clean Git revision without inventing a generic task or command
-runner. Start from a typed brief:
-
-```json
-{
-  "schema_version": 1,
-  "repository_id": "dev.fleetd/fleetd",
-  "revision": "EXACT_COMMIT_ID",
-  "path_scope": ["src", "docs"],
-  "questions": [{"id": "one-question", "prompt": "What does this revision establish?"}]
-}
-```
-
-Bind and submit it through the existing capability-work path, then run an
-isolated seat using
-[`examples/worker.inspection.opencode.example.json`](examples/worker.inspection.opencode.example.json):
+A configured envelope worker may reserve that kind, but it treats the payload
+as opaque. It does not select an implementation, invent a capability-specific
+prompt, parse a domain result, or run conformance. When an implementation emits
+a `gooir.capability.result/v1` message, `gooir candidate` validates the GOOIR
+documents and attaches Fleetd's immutable message evidence:
 
 ```sh
-cargo run -- work inspect-bind --brief /tmp/inspection-brief.json \
-  > /tmp/inspection-request.json
-cargo run -- --token-file .fleetd/requester.token work submit \
-  --channel CHANNEL_ID --to INSPECTOR_AGENT_ID \
-  --request /tmp/inspection-request.json
+cargo run -- gooir candidate \
+  --invocation /tmp/invocation.json \
+  --offer /tmp/offer.json \
+  --result-message /tmp/result-message.json
 ```
 
-`work inspect-extract` first performs the generic strict lift, then checks the
-exact report shape, clean revision, path scope, and every cited Git line range.
-It emits `conformant_candidate`, not accepted natural-language truth. See the
-[contract](docs/contracts/repository-inspection-v1.md),
-[ADR 0018](docs/adr/0018-repository-inspection-specializes-capability-work.md),
-and [OpenCode qualification](docs/qualification/repository-inspection-opencode-2026-08-24.md).
-
-### Repository-patch dogfood
-
-Patch production is a separate capability rather than writable-workspace
-permission. Bind an exact change brief, submit it through the same capability
-work path, and run an isolated seat using
-[`examples/worker.patch.opencode.example.json`](examples/worker.patch.opencode.example.json):
-
-```sh
-cargo run -- work patch-bind --brief /tmp/change-brief.json \
-  > /tmp/patch-request.json
-cargo run -- --token-file .fleetd/requester.token work submit \
-  --channel CHANNEL_ID --to PATCHER_AGENT_ID \
-  --request /tmp/patch-request.json
-```
-
-`work patch-extract` strictly lifts the immutable attempt, applies its diff only
-to a temporary Git index, checks exact scope and paths through Git, rejects
-binary and non-regular changes, and emits a canonical patch digest without
-touching the worktree or repository history. That is artifact conformance, not
-test success, review, commit, push, or merge authorization.
-
-The first cloud and local-Qwen attempts failed before producing a candidate, so
-no real patch provider is qualified yet. The failed run exposed and closed a
-host-cancellation/result-status bug and an invisible nested-subagent path. See
-the [contract](docs/contracts/repository-patch-v1.md),
-[ADR 0019](docs/adr/0019-patches-are-conformed-artifacts-not-workspace-mutation.md),
-and [qualification record](docs/qualification/repository-patch-provider-2026-08-24.md).
+The output is still an unverified GOOIR candidate. A GOOIR consumer decides
+which conformance implementation to invoke and whether its facts are admitted.
+Repository, GitHub, GitLab, UI, workflow, or model-specific meanings belong in
+separately versioned capability packages and plugins, never Fleetd core. See the
+[GOOIR host boundary](docs/contracts/gooir-capability-host-v1.md) and
+[ADR 0020](docs/adr/0020-gooir-capabilities-execution-host-boundary.md).
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
 [API contract](docs/API_CONTRACT.md), [protocol](docs/PROTOCOL.md), and

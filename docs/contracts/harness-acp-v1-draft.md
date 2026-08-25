@@ -1,12 +1,14 @@
-# `harness.acp` capability v1 draft
+# ACP transport for agent-session capabilities v1 draft
 
-Status: experimental. Exact negotiation may use capability version `1`, but
-the contract is not stable until the Codex and DSH acceptance matrix passes.
+Status: experimental. The adapter is not stable until the Codex and DSH
+acceptance matrix passes.
 
-This capability is carried over the fleetd plugin lifecycle JSON-RPC
-transport. It wraps one ACP client connection with fleet ownership, fencing,
-deadlines, and evidence. It is deliberately smaller than ACP and is not an
-arbitrary protocol tunnel.
+This typed protocol adapter is carried over Fleetd's plugin lifecycle JSON-RPC
+transport. It wraps one ACP client connection with Fleetd ownership, fencing,
+deadlines, and evidence. Plugins advertise the independent GOOIR agent-session
+capabilities they implement; the `harness.acp.*` names below are transport
+methods, not capability identities. The adapter is deliberately smaller than
+ACP and is not an arbitrary protocol tunnel.
 
 ## Common rules
 
@@ -439,8 +441,8 @@ ACP `messageId` is preserved. Adjacent chunks with the same ID belong to one
 message, and a changed ID begins another. An ID that reappears after a different
 message is a protocol violation. When the runtime omits the optional ID, the
 host may assemble one un-ID'd contiguous message but must not invent a boundary
-that the protocol did not provide. See the
-[capability attempt v2 contract](capability-work-v2.md).
+that the protocol did not provide. See
+[ADR 0015](../adr/0015-protocol-bounded-structured-results.md).
 
 The controller validates result content and policy separately. A terminal
 notification never acknowledges an inbox delivery and never grants itself a

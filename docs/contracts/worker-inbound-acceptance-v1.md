@@ -37,10 +37,6 @@ bytes. Prefixes, globs, version ranges, negative matches, and duplicate values
 are invalid. Unknown fields and unsupported schema versions fail closed before
 a plugin starts.
 
-The `capability_work_v1` adapter declares
-`work.capability.request/v1` internally because that exact contract is part of
-the adapter definition. It does not accept an operator-supplied override.
-
 ## Reservation semantics
 
 The trusted worker passes the exact set to an atomic SQLite reservation:
@@ -53,8 +49,9 @@ The trusted worker passes the exact set to an atomic SQLite reservation:
 A non-matching delivery is skipped. It remains pending, receives no lease or
 invocation, and its attempt count does not change. A later matching delivery
 may therefore be selected without mutating an earlier non-match. Matching the
-kind establishes eligibility only: the adapter must still validate the entire
-payload and correlation after reservation, before dispatch arming.
+kind establishes eligibility only. The envelope adapter preserves the payload
+without inferring semantics; a capability package that interprets it remains
+responsible for validating its exact contract.
 
 The public unfiltered inbox claim and invocation-reservation APIs retain their
 existing behavior. Exact-kind reservation is an internal trusted-worker path,

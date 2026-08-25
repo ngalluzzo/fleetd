@@ -7,11 +7,12 @@ use uuid::Uuid;
 
 use super::{
     protocol::{
-        Capability, HealthResult, InitializeParams, LIFECYCLE_PROTOCOL_VERSION, PluginManifest,
+        HealthResult, InitializeParams, LIFECYCLE_PROTOCOL_VERSION, PluginManifest,
         PluginNotification, ShutdownResult, validate_identifier,
     },
     rpc::RpcPeer,
 };
+use crate::gooir::ExactIdentity;
 
 const DEFAULT_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -28,8 +29,8 @@ pub enum PluginError {
     IdentityMismatch { expected: String, actual: String },
     #[error("plugin lifecycle version mismatch: expected {expected}, received {actual}")]
     ProtocolVersion { expected: u32, actual: u32 },
-    #[error("plugin is missing required capability {name} v{version}")]
-    MissingCapability { name: String, version: u32 },
+    #[error("plugin is missing required capability {capability}")]
+    MissingCapability { capability: String },
     #[error("plugin protocol error: {0}")]
     Protocol(String),
     #[error("plugin transport error: {0}")]
@@ -62,7 +63,7 @@ pub struct PluginSpec {
     executable: PathBuf,
     args: Vec<OsString>,
     config: Value,
-    required_capabilities: Vec<Capability>,
+    required_capabilities: Vec<ExactIdentity>,
     initialize_timeout: Duration,
     request_timeout: Duration,
     shutdown_timeout: Duration,
@@ -100,8 +101,15 @@ impl PluginSpec {
 
     /// Requires an exact capability before startup can succeed.
     #[must_use]
-    pub fn require(mut self, capability: Capability) -> Self {
+    pub fn require(mut self, capability: ExactIdentity) -> Self {
         self.required_capabilities.push(capability);
+        self
+    }
+
+    /// Requires every exact semantic capability in an offer family.
+    #[must_use]
+    pub fn require_all(mut self, capabilities: impl IntoIterator<Item = ExactIdentity>) -> Self {
+        self.required_capabilities.extend(capabilities);
         self
     }
 
@@ -148,14 +156,9 @@ impl PluginSpec {
             ));
         }
         for capability in &self.required_capabilities {
-            validate_identifier("capability", &capability.name)
-                .map_err(PluginError::InvalidSpec)?;
-            if capability.version == 0 {
-                return Err(PluginError::InvalidSpec(format!(
-                    "required capability {} has invalid version 0",
-                    capability.name
-                )));
-            }
+            capability
+                .validate()
+                .map_err(|error| PluginError::InvalidSpec(error.to_string()))?;
         }
         Ok(())
     }
@@ -297,7 +300,7 @@ impl PluginProcess {
         super::HarnessAcpClient::new(self)
     }
 
-    pub(crate) async fn capability_call<P, R>(
+    pub(crate) async fn protocol_call<P, R>(
         &self,
         method: &str,
         params: &P,

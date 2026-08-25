@@ -9,15 +9,11 @@ use std::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleetd::{
     AckDelivery, AddMember, AppState, ArmInvocation, AuthService, BlockDelivery, BlockResolution,
-    CAPABILITY_WORK_REQUEST_KIND, Capability, CapabilityAttemptProjection,
-    CapabilityProviderDescriptor, CapabilityWorkRequest, CapabilityWorkTurnAdapter,
-    ClaimDeliveries, CompleteInvocation, ContinuousHarnessWorker, ContinuousWorkerConfig,
-    CreateAgent, CreateChannel, EnvelopeTurnAdapter, InboundAcceptance, Invocation,
-    IssuedCredential, Message, MessagePage, PluginSpec, PreparedTurn, RegisteredAgent,
-    RepositoryChangeBrief, RepositoryInspectionBrief, RepositoryInspectionTurnAdapter,
-    RepositoryPatchTurnAdapter, ResolveDeliveryBlock, RetryDelivery, SendMessage, Store,
-    ToolBudget, TurnAdapter, TurnPolicy, bind_repository_inspection, bind_repository_patch,
-    conform_repository_inspection, conform_repository_patch, extract_capability_message, router,
+    CAPABILITY_INVOCATION_KIND, CapabilityInvocation, CapabilityOffer, ClaimDeliveries,
+    CompleteInvocation, ContinuousHarnessWorker, ContinuousWorkerConfig, CreateAgent,
+    CreateChannel, EnvelopeTurnAdapter, IssuedCredential, Message, MessagePage, PluginSpec,
+    RegisteredAgent, ResolveDeliveryBlock, RetryDelivery, SendMessage, Store, ToolBudget,
+    TurnPolicy, candidate_from_result_message, harness_acp_capabilities, router,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -60,11 +56,10 @@ enum Command {
         #[command(subcommand)]
         command: InvocationCommand,
     },
-    /// Submit exact, versioned work contracts without teaching the kernel
-    /// their semantics.
-    Work {
+    /// Exchange neutral GOOIR documents over fleetd's durable message log.
+    Gooir {
         #[command(subcommand)]
-        command: WorkCommand,
+        command: GooirCommand,
     },
     /// Run a local harness worker against fleetd's authoritative database.
     Worker {
@@ -262,58 +257,28 @@ enum WorkerCommand {
 }
 
 #[derive(Subcommand)]
-enum WorkCommand {
-    /// Validate and submit one bound capability request.
+enum GooirCommand {
+    /// Validate and submit one exact capability invocation.
     Submit {
         #[arg(long)]
         channel: String,
         #[arg(long = "to")]
         recipient: String,
         #[arg(long)]
-        request: PathBuf,
+        invocation: PathBuf,
         #[arg(long)]
         idempotency_key: Option<String>,
         #[arg(long)]
         causation: Option<String>,
     },
-    /// Strictly lift one immutable attempt message into a candidate or unable result.
-    Extract {
+    /// Bind a GOOIR result message to its invocation, offer, and durable evidence.
+    Candidate {
         #[arg(long)]
-        request: PathBuf,
+        invocation: PathBuf,
+        #[arg(long)]
+        offer: PathBuf,
         #[arg(long = "attempt-message")]
-        attempt_message: PathBuf,
-    },
-    /// Bind a typed repository-inspection brief to a capability request.
-    InspectBind {
-        #[arg(long)]
-        brief: PathBuf,
-    },
-    /// Strictly lift and conform one repository-inspection attempt.
-    InspectExtract {
-        #[arg(long)]
-        request: PathBuf,
-        #[arg(long = "attempt-message")]
-        attempt_message: PathBuf,
-        #[arg(long = "repository-root")]
-        repository_root: PathBuf,
-        #[arg(long = "git-executable")]
-        git_executable: PathBuf,
-    },
-    /// Bind a typed repository-change brief to a patch capability request.
-    PatchBind {
-        #[arg(long)]
-        brief: PathBuf,
-    },
-    /// Strictly lift and conform one repository-patch attempt.
-    PatchExtract {
-        #[arg(long)]
-        request: PathBuf,
-        #[arg(long = "attempt-message")]
-        attempt_message: PathBuf,
-        #[arg(long = "repository-root")]
-        repository_root: PathBuf,
-        #[arg(long = "git-executable")]
-        git_executable: PathBuf,
+        result_message: PathBuf,
     },
 }
 
@@ -360,20 +325,7 @@ struct WorkerFileConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WorkerAdapterConfig {
-    Envelope {
-        inbound: InboundAcceptanceConfig,
-    },
-    CapabilityWorkV1 {
-        providers: Vec<CapabilityProviderDescriptor>,
-    },
-    RepositoryInspectionV1 {
-        provider: CapabilityProviderDescriptor,
-        git_executable: PathBuf,
-    },
-    RepositoryPatchV1 {
-        provider: CapabilityProviderDescriptor,
-        git_executable: PathBuf,
-    },
+    Envelope { inbound: InboundAcceptanceConfig },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -381,33 +333,6 @@ enum WorkerAdapterConfig {
 struct InboundAcceptanceConfig {
     schema_version: u32,
     message_kinds: Vec<String>,
-}
-
-enum ConfiguredTurnAdapter {
-    Envelope(EnvelopeTurnAdapter),
-    CapabilityWorkV1(CapabilityWorkTurnAdapter),
-    RepositoryInspectionV1(RepositoryInspectionTurnAdapter),
-    RepositoryPatchV1(RepositoryPatchTurnAdapter),
-}
-
-impl TurnAdapter for ConfiguredTurnAdapter {
-    fn inbound_acceptance(&self) -> &InboundAcceptance {
-        match self {
-            Self::Envelope(adapter) => adapter.inbound_acceptance(),
-            Self::CapabilityWorkV1(adapter) => adapter.inbound_acceptance(),
-            Self::RepositoryInspectionV1(adapter) => adapter.inbound_acceptance(),
-            Self::RepositoryPatchV1(adapter) => adapter.inbound_acceptance(),
-        }
-    }
-
-    fn prepare(&self, invocation: &Invocation) -> Result<PreparedTurn, String> {
-        match self {
-            Self::Envelope(adapter) => adapter.prepare(invocation),
-            Self::CapabilityWorkV1(adapter) => adapter.prepare(invocation),
-            Self::RepositoryInspectionV1(adapter) => adapter.prepare(invocation),
-            Self::RepositoryPatchV1(adapter) => adapter.prepare(invocation),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -508,142 +433,67 @@ pub async fn run() -> MainResult<()> {
             )
             .await
         }
-        Command::Work { command } => {
-            work_command(&cli.server, cli.token_file.as_deref(), command).await
+        Command::Gooir { command } => {
+            gooir_command(&cli.server, cli.token_file.as_deref(), command).await
         }
         Command::Worker { command } => worker_command(command).await,
     }
 }
 
-async fn work_command(
+async fn gooir_command(
     server: &str,
     token_file: Option<&Path>,
-    command: WorkCommand,
+    command: GooirCommand,
 ) -> MainResult<()> {
     match command {
-        WorkCommand::Submit {
+        GooirCommand::Submit {
             channel,
             recipient,
-            request,
+            invocation,
             idempotency_key,
             causation,
         } => {
             let api = ApiClient::load(server, token_file)?;
-            let raw = fs::read(&request)?;
-            let request: CapabilityWorkRequest = serde_json::from_slice(&raw).map_err(|error| {
-                format!(
-                    "capability work request {} is malformed: {error}",
-                    request.display()
-                )
-            })?;
-            request.validate().map_err(|error| {
-                format!(
-                    "capability work request {} is invalid: {error}",
-                    request.request_id
-                )
-            })?;
-            let request_id = request.request_id.clone();
+            let raw = fs::read(&invocation)?;
+            let invocation: CapabilityInvocation =
+                serde_json::from_slice(&raw).map_err(|error| {
+                    format!(
+                        "GOOIR capability invocation {} is malformed: {error}",
+                        invocation.display()
+                    )
+                })?;
+            invocation.validate()?;
+            let invocation_id = invocation.invocation_id.clone();
             let idempotency_key =
-                idempotency_key.unwrap_or_else(|| format!("capability-request/{request_id}"));
+                idempotency_key.unwrap_or_else(|| format!("gooir-invocation/{invocation_id}"));
             let response = api
                 .post(&format!("/v1/channels/{channel}/messages"))
                 .json(&SendMessage {
                     idempotency_key: Some(idempotency_key),
                     recipient_id: Some(recipient),
-                    kind: CAPABILITY_WORK_REQUEST_KIND.to_owned(),
-                    payload: serde_json::to_value(request)?,
-                    correlation_id: Some(request_id),
+                    kind: CAPABILITY_INVOCATION_KIND.to_owned(),
+                    payload: serde_json::to_value(invocation)?,
+                    correlation_id: Some(invocation_id),
                     causation_id: causation,
                 })
                 .send()
                 .await?;
             print_response(response).await
         }
-        WorkCommand::Extract {
-            request,
-            attempt_message,
+        GooirCommand::Candidate {
+            invocation,
+            offer,
+            result_message,
         } => {
-            let request: CapabilityWorkRequest = serde_json::from_slice(&fs::read(&request)?)?;
-            let attempt: Message = serde_json::from_slice(&fs::read(&attempt_message)?)?;
-            match extract_capability_message(&request, &attempt)? {
-                CapabilityAttemptProjection::Candidate(candidate) => print_json(&candidate),
-                CapabilityAttemptProjection::Unable(unable) => print_json(&unable),
-            }
+            let invocation: CapabilityInvocation = serde_json::from_slice(&fs::read(invocation)?)?;
+            let offer: CapabilityOffer = serde_json::from_slice(&fs::read(offer)?)?;
+            let result_message: Message = serde_json::from_slice(&fs::read(result_message)?)?;
+            print_json(&candidate_from_result_message(
+                &invocation,
+                offer,
+                &result_message,
+            )?)
         }
-        WorkCommand::InspectBind { brief } => {
-            let brief: RepositoryInspectionBrief = serde_json::from_slice(&fs::read(&brief)?)?;
-            print_json(&bind_repository_inspection(brief)?)
-        }
-        WorkCommand::InspectExtract {
-            request,
-            attempt_message,
-            repository_root,
-            git_executable,
-        } => {
-            let request: CapabilityWorkRequest = serde_json::from_slice(&fs::read(&request)?)?;
-            let attempt: Message = serde_json::from_slice(&fs::read(&attempt_message)?)?;
-            match extract_capability_message(&request, &attempt)? {
-                CapabilityAttemptProjection::Candidate(candidate) => {
-                    let report = conform_repository_inspection(
-                        &request,
-                        &candidate,
-                        &repository_root,
-                        &git_executable,
-                    )?;
-                    print_json(&json!({
-                        "status": "conformant_candidate",
-                        "candidate": candidate,
-                        "report": report,
-                    }))
-                }
-                CapabilityAttemptProjection::Unable(unable) => print_json(&json!({
-                    "status": "unable",
-                    "unable": unable,
-                })),
-            }
-        }
-        WorkCommand::PatchBind { brief } => patch_bind_command(&brief),
-        WorkCommand::PatchExtract {
-            request,
-            attempt_message,
-            repository_root,
-            git_executable,
-        } => patch_extract_command(
-            &request,
-            &attempt_message,
-            &repository_root,
-            &git_executable,
-        ),
-    }
-}
-
-fn patch_bind_command(brief: &Path) -> MainResult<()> {
-    let brief: RepositoryChangeBrief = serde_json::from_slice(&fs::read(brief)?)?;
-    print_json(&bind_repository_patch(brief)?)
-}
-
-fn patch_extract_command(
-    request: &Path,
-    attempt_message: &Path,
-    repository_root: &Path,
-    git_executable: &Path,
-) -> MainResult<()> {
-    let request: CapabilityWorkRequest = serde_json::from_slice(&fs::read(request)?)?;
-    let attempt: Message = serde_json::from_slice(&fs::read(attempt_message)?)?;
-    match extract_capability_message(&request, &attempt)? {
-        CapabilityAttemptProjection::Candidate(candidate) => {
-            let artifact =
-                conform_repository_patch(&request, &candidate, repository_root, git_executable)?;
-            print_json(&json!({
-                "status": "conformant_candidate",
-                "candidate": candidate,
-                "artifact": artifact,
-            }))
-        }
-        CapabilityAttemptProjection::Unable(unable) => print_json(&json!({
-            "status": "unable",
-            "unable": unable,
-        })),
     }
 }
 
@@ -703,7 +553,7 @@ async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
 }
 
 impl WorkerFileConfig {
-    fn turn_adapter(&self) -> MainResult<ConfiguredTurnAdapter> {
+    fn turn_adapter(&self) -> MainResult<EnvelopeTurnAdapter> {
         match &self.adapter {
             WorkerAdapterConfig::Envelope { inbound } => {
                 if inbound.schema_version != 1 {
@@ -713,43 +563,11 @@ impl WorkerFileConfig {
                     )
                     .into());
                 }
-                Ok(ConfiguredTurnAdapter::Envelope(
-                    EnvelopeTurnAdapter::new(
-                        self.result_kind.clone(),
-                        inbound.message_kinds.clone(),
-                    )
-                    .map_err(|error| format!("worker adapter configuration is invalid: {error}"))?,
-                ))
+                EnvelopeTurnAdapter::new(self.result_kind.clone(), inbound.message_kinds.clone())
+                    .map_err(|error| {
+                        format!("worker adapter configuration is invalid: {error}").into()
+                    })
             }
-            WorkerAdapterConfig::CapabilityWorkV1 { providers } => {
-                Ok(ConfiguredTurnAdapter::CapabilityWorkV1(
-                    CapabilityWorkTurnAdapter::new(providers.clone()).map_err(|error| {
-                        format!("worker adapter configuration is invalid: {error}")
-                    })?,
-                ))
-            }
-            WorkerAdapterConfig::RepositoryInspectionV1 {
-                provider,
-                git_executable,
-            } => Ok(ConfiguredTurnAdapter::RepositoryInspectionV1(
-                RepositoryInspectionTurnAdapter::new(
-                    provider.clone(),
-                    self.working_directory.clone(),
-                    git_executable.clone(),
-                )
-                .map_err(|error| format!("worker adapter configuration is invalid: {error}"))?,
-            )),
-            WorkerAdapterConfig::RepositoryPatchV1 {
-                provider,
-                git_executable,
-            } => Ok(ConfiguredTurnAdapter::RepositoryPatchV1(
-                RepositoryPatchTurnAdapter::new(
-                    provider.clone(),
-                    self.working_directory.clone(),
-                    git_executable.clone(),
-                )
-                .map_err(|error| format!("worker adapter configuration is invalid: {error}"))?,
-            )),
         }
     }
 
@@ -785,10 +603,7 @@ impl WorkerPluginConfig {
     fn into_spec(self) -> PluginSpec {
         let mut spec = PluginSpec::new(self.id, self.executable)
             .with_config(self.config)
-            .require(Capability {
-                name: "harness.acp".to_owned(),
-                version: 1,
-            })
+            .require_all(harness_acp_capabilities())
             .with_initialize_timeout(std::time::Duration::from_millis(self.initialize_timeout_ms))
             .with_request_timeout(std::time::Duration::from_millis(self.request_timeout_ms))
             .with_shutdown_timeout(std::time::Duration::from_millis(self.shutdown_timeout_ms));
@@ -1383,8 +1198,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        ConfiguredTurnAdapter, WorkerFileConfig, persist_secret_file, replace_secret_file,
-        validate_listen_address,
+        WorkerFileConfig, persist_secret_file, replace_secret_file, validate_listen_address,
     };
 
     #[test]
@@ -1452,131 +1266,6 @@ mod tests {
         let duplicate: WorkerFileConfig =
             serde_json::from_value(duplicate).expect("parse duplicate acceptance shape");
         assert!(duplicate.turn_adapter().is_err());
-    }
-
-    #[test]
-    fn worker_capability_adapter_configuration_is_exact_and_strict() {
-        let value = json!({
-            "schema_version": 2,
-            "agent_id": "agent-id",
-            "working_directory": env!("CARGO_MANIFEST_DIR"),
-            "adapter": {
-                "kind": "capability_work_v1",
-                "providers": [{
-                    "id": {
-                        "package": "dev.fleetd.provider",
-                        "name": "opencode_runnable_web",
-                        "version": "0.1.0"
-                    },
-                    "capability": {
-                        "package": "dev.fleetd.capability",
-                        "name": "generate_runnable_web_surface",
-                        "version": "0.1.0"
-                    },
-                    "implementation_digest": format!("sha256:{}", "a".repeat(64))
-                }]
-            },
-            "plugin": {
-                "id": "mock.harness",
-                "executable": "/usr/bin/python3"
-            }
-        });
-        let desired: WorkerFileConfig =
-            serde_json::from_value(value.clone()).expect("parse capability adapter");
-        assert!(matches!(
-            desired.turn_adapter().expect("configure adapter"),
-            ConfiguredTurnAdapter::CapabilityWorkV1(_)
-        ));
-
-        let mut invalid = value;
-        invalid["adapter"]["surprise"] = json!(true);
-        assert!(serde_json::from_value::<WorkerFileConfig>(invalid).is_err());
-    }
-
-    #[test]
-    fn repository_inspection_adapter_binds_exact_provider_git_and_workspace() {
-        let value = json!({
-            "schema_version": 2,
-            "agent_id": "agent-id",
-            "working_directory": env!("CARGO_MANIFEST_DIR"),
-            "adapter": {
-                "kind": "repository_inspection_v1",
-                "provider": {
-                    "id": {
-                        "package": "dev.fleetd.provider",
-                        "name": "fixture_inspector",
-                        "version": "0.1.0"
-                    },
-                    "capability": {
-                        "package": "dev.fleetd.capability",
-                        "name": "inspect_repository",
-                        "version": "0.1.0"
-                    },
-                    "implementation_digest": format!("sha256:{}", "a".repeat(64))
-                },
-                "git_executable": std::env::current_exe().expect("current test executable")
-            },
-            "plugin": {
-                "id": "mock.harness",
-                "executable": "/usr/bin/python3"
-            }
-        });
-        let desired: WorkerFileConfig =
-            serde_json::from_value(value.clone()).expect("parse inspection adapter");
-        assert!(matches!(
-            desired
-                .turn_adapter()
-                .expect("configure inspection adapter"),
-            ConfiguredTurnAdapter::RepositoryInspectionV1(_)
-        ));
-
-        let mut mismatch = value;
-        mismatch["adapter"]["provider"]["capability"]["name"] = json!("other");
-        let mismatch: WorkerFileConfig =
-            serde_json::from_value(mismatch).expect("parse mismatched provider");
-        assert!(mismatch.turn_adapter().is_err());
-    }
-
-    #[test]
-    fn repository_patch_adapter_binds_exact_provider_git_and_workspace() {
-        let value = json!({
-            "schema_version": 2,
-            "agent_id": "agent-id",
-            "working_directory": env!("CARGO_MANIFEST_DIR"),
-            "adapter": {
-                "kind": "repository_patch_v1",
-                "provider": {
-                    "id": {
-                        "package": "dev.fleetd.provider",
-                        "name": "fixture_patcher",
-                        "version": "0.1.0"
-                    },
-                    "capability": {
-                        "package": "dev.fleetd.capability",
-                        "name": "propose_repository_patch",
-                        "version": "0.1.0"
-                    },
-                    "implementation_digest": format!("sha256:{}", "a".repeat(64))
-                },
-                "git_executable": std::env::current_exe().expect("current test executable")
-            },
-            "plugin": {
-                "id": "mock.harness",
-                "executable": "/usr/bin/python3"
-            }
-        });
-        let desired: WorkerFileConfig =
-            serde_json::from_value(value.clone()).expect("parse patch adapter");
-        assert!(matches!(
-            desired.turn_adapter().expect("configure patch adapter"),
-            ConfiguredTurnAdapter::RepositoryPatchV1(_)
-        ));
-
-        let mut mismatch = value;
-        mismatch["adapter"]["provider"]["capability"]["name"] = json!("other");
-        let mismatch: WorkerFileConfig =
-            serde_json::from_value(mismatch).expect("parse mismatched provider");
-        assert!(mismatch.turn_adapter().is_err());
     }
 
     #[test]

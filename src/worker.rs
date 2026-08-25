@@ -1,7 +1,7 @@
 //! Continuous harness worker orchestration above the durable controller.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap},
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -19,12 +19,7 @@ use crate::{
     ManagedTurn, ManagedTurnCapability, ManagedTurnError, ManagedTurnOutcome,
     MessageCapabilityBroker, OpenSession, OpenSessionMode, PUBLISH_DURABLE_MESSAGE_GRANT,
     PluginError, PluginProcess, PluginSpec, PromptBlock, RetryDelivery, SessionAcquisitionMode,
-    Store, TurnPolicy, TurnResultCapture,
-    plugin::Binding,
-    work_contract::{
-        CAPABILITY_WORK_ATTEMPT_V2_KIND, CAPABILITY_WORK_REQUEST_KIND,
-        CapabilityProviderDescriptor, CapabilityWorkRequest, capability_attempt_context,
-    },
+    Store, TurnPolicy, TurnResultCapture, plugin::Binding,
 };
 
 const MAX_LEASE_DURATION_MS: u64 = 3_600_000;
@@ -32,7 +27,6 @@ const MAX_POLL_INTERVAL_MS: u64 = 60_000;
 const MAX_RETRY_DELAY_MS: u64 = 86_400_000;
 const MAX_CAPTURE_BYTES: usize = 512 * 1024;
 const LEASE_MARGIN_MS: u64 = 60_000;
-const MAX_CAPABILITY_REQUEST_BYTES: usize = 512 * 1024;
 const MAX_ACCEPTED_MESSAGE_KINDS: usize = 128;
 const MAX_MESSAGE_KIND_BYTES: usize = 256;
 
@@ -197,123 +191,6 @@ impl TurnAdapter for EnvelopeTurnAdapter {
             result_kind: self.result_kind.clone(),
             result_capture: TurnResultCapture::Transcript,
             result_context: Value::Null,
-        })
-    }
-}
-
-/// Strict adapter for one exact set of semantic capabilities. It validates a
-/// versioned capability-work request, binds one native session lane to the
-/// request identity, and leaves provider execution to the selected harness.
-#[derive(Clone, Debug)]
-pub struct CapabilityWorkTurnAdapter {
-    providers: BTreeMap<crate::ExactIdentity, CapabilityProviderDescriptor>,
-    inbound_acceptance: InboundAcceptance,
-}
-
-impl CapabilityWorkTurnAdapter {
-    /// Creates an exact semantic provider set.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an empty set, malformed descriptor, or duplicate
-    /// provider for one capability.
-    pub fn new(
-        providers: impl IntoIterator<Item = CapabilityProviderDescriptor>,
-    ) -> Result<Self, String> {
-        let mut configured = BTreeMap::new();
-        for provider in providers {
-            provider.validate().map_err(|error| error.to_string())?;
-            if configured
-                .insert(provider.capability.clone(), provider.clone())
-                .is_some()
-            {
-                return Err(format!(
-                    "duplicate provider for exact capability {}",
-                    provider.capability
-                ));
-            }
-        }
-        if configured.is_empty() {
-            return Err("provider set must not be empty".to_owned());
-        }
-        let inbound_acceptance = InboundAcceptance::exact_v1([CAPABILITY_WORK_REQUEST_KIND])?;
-        Ok(Self {
-            providers: configured,
-            inbound_acceptance,
-        })
-    }
-}
-
-impl TurnAdapter for CapabilityWorkTurnAdapter {
-    fn inbound_acceptance(&self) -> &InboundAcceptance {
-        &self.inbound_acceptance
-    }
-
-    fn prepare(&self, invocation: &Invocation) -> Result<PreparedTurn, String> {
-        if invocation.message.kind != CAPABILITY_WORK_REQUEST_KIND {
-            return Err(format!(
-                "expected message kind {CAPABILITY_WORK_REQUEST_KIND}, received {}",
-                invocation.message.kind
-            ));
-        }
-        let request: CapabilityWorkRequest =
-            serde_json::from_value(invocation.message.payload.clone())
-                .map_err(|error| format!("capability work request is malformed: {error}"))?;
-        request
-            .validate()
-            .map_err(|error| format!("capability work request is invalid: {error}"))?;
-        if invocation.message.correlation_id.as_deref() != Some(&request.request_id) {
-            return Err(
-                "message correlation must equal the capability request identity".to_owned(),
-            );
-        }
-        let provider = self
-            .providers
-            .get(&request.body.capability)
-            .ok_or_else(|| {
-                format!(
-                    "worker does not admit exact capability {}",
-                    request.body.capability
-                )
-            })?;
-        let encoded = serde_json::to_string_pretty(&request)
-            .map_err(|error| format!("capability work request could not be encoded: {error}"))?;
-        if encoded.len() > MAX_CAPABILITY_REQUEST_BYTES {
-            return Err(format!(
-                "capability work request exceeds {MAX_CAPABILITY_REQUEST_BYTES} bytes"
-            ));
-        }
-        let expected_outputs = serde_json::to_string(&request.body.produces)
-            .map_err(|error| format!("expected outputs could not be encoded: {error}"))?;
-        let encoded_provider = serde_json::to_string(provider)
-            .map_err(|error| format!("provider identity could not be encoded: {error}"))?;
-        Ok(PreparedTurn {
-            lane_policy: "per-work-contract".to_owned(),
-            lane_key: request.request_id.clone(),
-            prompt: vec![PromptBlock::Text {
-                text: format!(
-                    "You are the selected provider for an exact, durable capability work request. \
-                     Satisfy only the named capability using only the authority and workspace \
-                     access granted by your harness. The input facts are immutable. Do not claim \
-                     that the conformance suite passed: fleetd has not run it yet.\n\n\
-                     You are executing as exact semantic provider {encoded_provider}. This is \
-                     distinct from the harness and transport protocol.\n\n\
-                     In your final response, emit only one raw JSON object with request_id \
-                     `{request_id}`, status `candidate` or `unable`, outputs matching exactly \
-                     {expected_outputs}, conformance_suite `{conformance_suite}`, \
-                     conformance_status `unverified`, and diagnostics as an array of strings. \
-                     A candidate must have no diagnostics. Unable must have no outputs and at \
-                     least one diagnostic. Each output has exactly fact_type, coverage, and \
-                     payload. Do not wrap the object in Markdown.\n\n\
-                     Exact request:\n{encoded}",
-                    request_id = request.request_id,
-                    conformance_suite = request.body.conformance_suite,
-                ),
-            }],
-            result_kind: CAPABILITY_WORK_ATTEMPT_V2_KIND.to_owned(),
-            result_capture: TurnResultCapture::FinalAssistantJson,
-            result_context: capability_attempt_context(&request, provider)
-                .map_err(|error| format!("attempt context could not be encoded: {error}"))?,
         })
     }
 }

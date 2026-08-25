@@ -4,7 +4,7 @@
 > [ADR 0011](0011-vendor-owned-harness-plugins.md). The typed ACP boundary
 > remains in force; launch policy now belongs to vendor-owned plugins.
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-24
 
 ## Context
@@ -27,14 +27,14 @@ in-memory ACP bridge even though the bridge itself is not persistent.
 
 ## Decision
 
-ACP v1 is the inner harness interoperability protocol. fleetd builds one
-generic ACP driver plugin and qualifies that same implementation against both
-`codex-acp` and `dsh-acp`. Harness-specific shims are added only for observed
-incompatibilities or optional capabilities.
+ACP v1 is an inner harness interoperability protocol. It is not a capability
+identity. Vendor-owned plugins reuse the typed ACP host library while retaining
+independent package, implementation, launch-policy, and runtime identities.
 
-The outer boundary remains fleetd's plugin lifecycle plus a narrow,
-independently versioned `harness.acp` capability. That capability adds only the
-semantics ACP cannot own for fleetd:
+Current ACP-backed plugins offer four exact GOOIR agent-session capabilities:
+open, execute a turn, resolve permission, and close. Another transport can
+implement those same capabilities, and ACP can transport other capability
+families. Fleetd records the runtime facts ACP cannot own separately:
 
 - durable invocation identity;
 - session binding generations and owner fencing;
@@ -43,9 +43,10 @@ semantics ACP cannot own for fleetd:
 - bounded evidence attribution;
 - conservative terminal certainty.
 
-It does not expose arbitrary ACP or JSON-RPC methods. ACP content and extension
-data pass through typed fields, and the driver uses an authoritative ACP SDK
-rather than reimplementing the wire schema.
+Those facts do not become fields in GOOIR capability invocations. Fleetd does
+not expose arbitrary ACP or JSON-RPC methods. ACP content and extension data
+pass through typed fields, and the host uses an authoritative ACP SDK rather
+than reimplementing the wire schema.
 
 fleetd owns delivery, leases, invocation state, session ownership, retry
 policy, result admission, and correlated output messages. The harness owns its
@@ -53,9 +54,9 @@ native transcript, compaction, model loop, tools, sandbox, and resume
 mechanics. fleetd stores only an opaque native session reference plus bounded
 control evidence.
 
-ACP v2 is not selected by this decision. It remains unstable and uses a
-different asynchronous prompt lifecycle. Supporting it requires an explicit
-qualification and may require a new driver capability revision.
+ACP v2 is not selected by this decision. Supporting it requires an explicit
+qualification and may require a new protocol adapter, but does not inherently
+create new semantic capability identities.
 
 ## Consequences
 

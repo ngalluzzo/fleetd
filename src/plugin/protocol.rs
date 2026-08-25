@@ -1,19 +1,11 @@
-use std::collections::BTreeSet;
-
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::supervisor::PluginError;
+use crate::gooir::{CapabilityOfferSet, ExactIdentity};
 
 pub const LIFECYCLE_PROTOCOL_VERSION: u32 = 1;
-
-/// One exact behavior contract advertised by a plugin.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Capability {
-    pub name: String,
-    pub version: u32,
-}
 
 /// Human and machine identity reported by a plugin.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -23,19 +15,19 @@ pub struct PluginIdentity {
     pub version: Version,
 }
 
-/// Negotiated lifecycle version, identity, and capabilities.
+/// Negotiated lifecycle version, identity, and GOOIR capability offers.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PluginManifest {
     pub protocol_version: u32,
     pub plugin: PluginIdentity,
-    pub capabilities: Vec<Capability>,
+    pub capability_offers: CapabilityOfferSet,
 }
 
 impl PluginManifest {
     pub(crate) fn validate(
         &self,
         expected_id: &str,
-        required: &[Capability],
+        required: &[ExactIdentity],
     ) -> Result<(), PluginError> {
         if self.protocol_version != LIFECYCLE_PROTOCOL_VERSION {
             return Err(PluginError::ProtocolVersion {
@@ -55,28 +47,13 @@ impl PluginManifest {
                 "plugin name must contain between 1 and 128 bytes".to_owned(),
             ));
         }
-        let mut capabilities = BTreeSet::new();
-        for capability in &self.capabilities {
-            validate_identifier("capability", &capability.name)
-                .map_err(PluginError::InvalidManifest)?;
-            if capability.version == 0 {
-                return Err(PluginError::InvalidManifest(format!(
-                    "capability {} has invalid version 0",
-                    capability.name
-                )));
-            }
-            if !capabilities.insert(capability) {
-                return Err(PluginError::InvalidManifest(format!(
-                    "duplicate capability {} v{}",
-                    capability.name, capability.version
-                )));
-            }
-        }
+        self.capability_offers
+            .validate()
+            .map_err(|error| PluginError::InvalidManifest(error.to_string()))?;
         for required_capability in required {
-            if !capabilities.contains(required_capability) {
+            if !self.capability_offers.offers(required_capability) {
                 return Err(PluginError::MissingCapability {
-                    name: required_capability.name.clone(),
-                    version: required_capability.version,
+                    capability: required_capability.to_string(),
                 });
             }
         }

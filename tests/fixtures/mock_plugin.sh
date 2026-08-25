@@ -19,19 +19,19 @@ case "$mode" in
     ;;
   wrong-id)
     plugin_id='wrong.plugin'
-    capabilities='[{"name":"test.echo","version":1}]'
+    offers='[{"implementation":{"package":"mock.plugin","name":"echo","version":"0.1.0"},"capability":{"package":"dev.fleetd.test","name":"echo","version":"1.0.0"},"implementation_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'
     ;;
   missing-capability)
     plugin_id='mock.plugin'
-    capabilities='[]'
+    offers='[{"implementation":{"package":"mock.plugin","name":"other","version":"0.1.0"},"capability":{"package":"dev.fleetd.test","name":"other","version":"1.0.0"},"implementation_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'
     ;;
   duplicate-capability)
     plugin_id='mock.plugin'
-    capabilities='[{"name":"test.echo","version":1},{"name":"test.echo","version":1}]'
+    offers='[{"implementation":{"package":"mock.plugin","name":"echo","version":"0.1.0"},"capability":{"package":"dev.fleetd.test","name":"echo","version":"1.0.0"},"implementation_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"implementation":{"package":"mock.plugin","name":"echo","version":"0.1.0"},"capability":{"package":"dev.fleetd.test","name":"echo","version":"1.0.0"},"implementation_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'
     ;;
   *)
     plugin_id='mock.plugin'
-    capabilities='[{"name":"test.echo","version":1}]'
+    offers='[{"implementation":{"package":"mock.plugin","name":"echo","version":"0.1.0"},"capability":{"package":"dev.fleetd.test","name":"echo","version":"1.0.0"},"implementation_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'
     ;;
 esac
 
@@ -40,7 +40,7 @@ if [ "$mode" = 'unsupported-protocol' ]; then
   protocol_version=2
 fi
 
-printf '{"jsonrpc":"2.0","id":1,"result":{"protocol_version":%s,"plugin":{"id":"%s","name":"Mock plugin","version":"0.1.0"},"capabilities":%s}}\n' "$protocol_version" "$plugin_id" "$capabilities"
+printf '{"jsonrpc":"2.0","id":1,"result":{"protocol_version":%s,"plugin":{"id":"%s","name":"Mock plugin","version":"0.1.0"},"capability_offers":{"protocol":"org.gooi.capability.offers/v1","package":{"package":"mock.plugin","name":"package","version":"0.1.0"},"offers":%s}}}\n' "$protocol_version" "$plugin_id" "$offers"
 if [ "$mode" = 'plugin-request' ]; then
   printf '%s\n' '{"jsonrpc":"2.0","id":99,"method":"plugin.request","params":{}}'
 else

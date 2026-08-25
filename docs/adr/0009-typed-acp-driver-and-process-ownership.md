@@ -21,8 +21,9 @@ over which operations cross the trusted boundary.
 
 ## Decision
 
-The host exports `HarnessAcpClient` as the only domain-call surface for
-`harness.acp` v1. Generic capability calls remain crate-private. The client
+The host exports `HarnessAcpClient` as the only typed protocol surface for the
+agent-session capability family over ACP v1. Generic protocol calls remain
+crate-private. The client
 validates local bounds before dispatch and admits notifications only when their
 complete fence and contiguous event sequence match its active turn.
 
@@ -54,7 +55,7 @@ host method. Fast-moving ACP parsing stays outside the daemon, while runtime
 identity and unknown extension data remain observable. A dead driver cannot
 leave its inner adapter running as an unowned agent.
 
-This is process containment, not an OS security sandbox. The capability remains
+This is process containment, not an OS security sandbox. The ACP adapter remains
 experimental until Codex and DSH pass the full common matrix. Durable session
 bindings are addressed by
 [ADR 0010](0010-durable-session-bindings-and-owner-epochs.md); event

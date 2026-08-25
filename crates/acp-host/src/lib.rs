@@ -8,12 +8,13 @@ mod runtime;
 
 use std::time::Duration;
 
-use fleetd::{Capability, PluginIdentity, PluginManifest};
+use fleetd::{PluginIdentity, PluginManifest, harness_acp_offer_set};
 use futures_util::StreamExt;
 use runtime::DriverRuntime;
 pub use runtime::{DriverConfig, DriverError, RuntimeConfig};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio_util::codec::{FramedRead, LinesCodec};
 
@@ -95,6 +96,7 @@ pub async fn serve(definition: PluginDefinition) -> Result<(), DriverError> {
     let config = (definition.prepare_config)(initialize.config)?;
     let (mut runtime, mut notifications) =
         DriverRuntime::start(config, definition.allowed_environment).await?;
+    let implementation_digest = current_executable_digest()?;
     let manifest = PluginManifest {
         protocol_version: 1,
         plugin: PluginIdentity {
@@ -104,10 +106,11 @@ pub async fn serve(definition: PluginDefinition) -> Result<(), DriverError> {
                 DriverError::InvalidConfig(format!("plugin version is not semantic: {error}"))
             })?,
         },
-        capabilities: vec![Capability {
-            name: "harness.acp".to_owned(),
-            version: 1,
-        }],
+        capability_offers: harness_acp_offer_set(
+            definition.id,
+            definition.version,
+            &implementation_digest,
+        ),
     };
     write_result(&mut writer, request.id, serde_json::to_value(manifest)?).await?;
 
@@ -151,6 +154,14 @@ pub async fn serve(definition: PluginDefinition) -> Result<(), DriverError> {
             }
         }
     }
+}
+
+fn current_executable_digest() -> Result<String, DriverError> {
+    let executable =
+        std::env::current_exe().map_err(|error| DriverError::Runtime(error.to_string()))?;
+    let bytes =
+        std::fs::read(executable).map_err(|error| DriverError::Runtime(error.to_string()))?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 #[derive(Deserialize)]

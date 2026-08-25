@@ -8,6 +8,35 @@ marker_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
 active_fence = None
 
 
+def harness_offers():
+    digest = "sha256:" + ("a" * 64)
+    capability_package = "org.gooi.capability.agent_session"
+    return {
+        "protocol": "org.gooi.capability.offers/v1",
+        "package": {
+            "package": "mock.harness",
+            "name": "package",
+            "version": "0.1.0",
+        },
+        "offers": [
+            {
+                "implementation": {
+                    "package": "mock.harness",
+                    "name": name,
+                    "version": "0.1.0",
+                },
+                "capability": {
+                    "package": capability_package,
+                    "name": name,
+                    "version": "1.0.0",
+                },
+                "implementation_digest": digest,
+            }
+            for name in ("open", "turn_execute", "permission_resolve", "close")
+        ],
+    }
+
+
 def send(payload):
     sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
     sys.stdout.flush()
@@ -27,7 +56,7 @@ result(
             "name": "Mock ACP harness",
             "version": "0.1.0",
         },
-        "capabilities": [{"name": "harness.acp", "version": 1}],
+        "capability_offers": harness_offers(),
     },
 )
 
@@ -93,26 +122,6 @@ for line in sys.stdin:
     elif method == "harness.acp.turn.start":
         wall_enforcement = "soft" if mode == "weak-enforcement" else "hard"
         assistant_text = "done"
-        if mode == "capability-candidate":
-            prompt_text = params["prompt"][0]["text"]
-            exact_request = json.loads(prompt_text.split("Exact request:\n", 1)[1])
-            assistant_text = json.dumps(
-                {
-                    "request_id": exact_request["request_id"],
-                    "status": "candidate",
-                    "outputs": [
-                        {
-                            "fact_type": exact_request["produces"][0],
-                            "coverage": "complete",
-                            "payload": {"artifact": "mock-runnable-web"},
-                        }
-                    ],
-                    "conformance_suite": exact_request["conformance_suite"],
-                    "conformance_status": "unverified",
-                    "diagnostics": [],
-                },
-                separators=(",", ":"),
-            )
         result(
             request,
             {
@@ -135,36 +144,7 @@ for line in sys.stdin:
             fence["owner_epoch"] += 1
         assistant_messages = []
         event_seq = 1
-        if mode == "capability-candidate":
-            progress_text = "Preparing the exact candidate."
-            send(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "harness.acp.turn.event",
-                    "params": {
-                        "fence": fence,
-                        "event_seq": event_seq,
-                        "observed_at_ms": 1,
-                        "classification": "agent_message_content",
-                        "raw_update": {
-                            "sessionUpdate": "agent_message_chunk",
-                            "messageId": "progress-1",
-                            "content": {"type": "text", "text": progress_text},
-                        },
-                    },
-                }
-            )
-            assistant_messages.append(
-                {
-                    "message_id": "progress-1",
-                    "content": [{"type": "text", "text": progress_text}],
-                    "complete": True,
-                    "first_event_seq": event_seq,
-                    "last_event_seq": event_seq,
-                }
-            )
-            event_seq += 1
-        message_id = "result-1" if mode == "capability-candidate" else None
+        message_id = None
         send(
             {
                 "jsonrpc": "2.0",

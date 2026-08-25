@@ -1,15 +1,14 @@
 # ADR 0015: Structured results use protocol message boundaries
 
-- Status: accepted for experimental dogfood
+- Status: accepted
 - Date: 2026-08-24
 
 ## Context
 
-The first model-backed runnable-web attempt demonstrated a real mismatch. The
-agent productively narrated progress, used tools, and ended with a valid JSON
-response, but Fleetd's ACP host concatenated every assistant chunk into one
-message. Strict extraction correctly rejected the mixed prose. Searching that
-text for a JSON-looking suffix would be ambiguous and attacker-controlled.
+An agent may narrate progress, use tools, and end with a machine-readable final
+message. Concatenating every assistant chunk into one string destroys the
+protocol boundary. Searching that text for a JSON-looking suffix would be
+ambiguous and attacker-controlled.
 
 ACP already supplies the missing primitive: chunks may carry `messageId`, and
 a changed ID denotes a new assistant message. Fleetd was discarding it.
@@ -21,25 +20,23 @@ ordered assistant messages. It does not invent boundaries. Reappearing IDs are
 protocol violations, and several un-ID'd messages cannot establish a final
 result boundary.
 
-Turn adapters now choose a result-capture mode. Ordinary envelope turns retain
-the existing transcript-only payload. Capability work requests
-`FinalAssistantJson` and publishes `work.capability.attempt/v2`, containing the
-captured assistant transcript plus a structured result sourced from either the
-only assistant message or the last of several distinctly identified messages.
+Turn adapters may choose transcript capture or final-assistant-JSON capture.
+The controller performs only boundary selection and whole-message JSON parsing.
+It retains the complete assistant transcript and records which protocol message
+supplied the structured value. It does not search prose, interpret capability
+meaning, or establish conformance.
 
-The controller performs only boundary selection and whole-message JSON
-parsing. The capability-work lift independently recomputes that selection and
-parsing before applying semantic output checks. Neither layer searches prose,
-interprets capability meaning in the messaging kernel, or establishes
-conformance.
+The generic Fleetd envelope worker uses transcript capture. A capability plugin
+that needs structured output owns its semantic parsing and produces the exact
+GOOIR result contract outside Fleetd core.
 
 ## Consequences
 
 - Productive progress narration can coexist with a strict machine result.
-- Raw assistant evidence remains inspectable and bound into candidate identity.
+- Raw assistant evidence remains inspectable and can be bound into host
+  evidence.
 - Runtimes that omit optional IDs still work for one JSON-only response but
   cannot claim a boundary across multiple messages.
-- Attempt v1 remains immutable and extractable; new workers emit v2.
 - ACP is one implementation of the boundary, not the capability itself. Other
   harnesses may satisfy the same result capture with their own trustworthy
   final-message primitive.

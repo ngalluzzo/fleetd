@@ -11,18 +11,15 @@ page directly from that API would create another independently maintained copy
 of its columns, actions, selectors, and endpoint bindings—the duplication GOOIR
 is intended to remove.
 
-The provider dogfood also demonstrated why an agent response is not the
-artifact. Multiple complete harness turns returned prose, Markdown, or an
-invented inline-page contract. Fleetd retained every raw attempt, and the
-strict candidate lift rejected them. One later attempt produced useful source
-changes but still did not satisfy the exact output protocol. Those changes
-were treated as brownfield implementation material, not admitted facts.
+The first dogfood also demonstrated why an agent response is not the artifact.
+Useful brownfield source and exact semantic facts can coexist, but neither
+automatically validates the other.
 
 ## Decision
 
 The first operator surface is a same-origin static adapter at `/operator/`.
-`/operator/contract.json` contains exactly the web target fact bound into the
-GOOIR capability request. The JavaScript reads that document and derives:
+`/operator/contract.json` contains one exact GOOIR web target fact. The
+JavaScript reads that document and derives:
 
 - table columns;
 - action labels and outcomes;
@@ -48,5 +45,5 @@ after connection.
   contract.
 - A future generated adapter can replace these static source files while
   preserving the same artifact and conformance contracts.
-- Provider attempts that fail strict extraction remain valuable evidence and
-  may yield brownfield source, but neither is automatically trusted.
+- Brownfield source remains valuable evidence, but is not automatically a
+  trusted GOOIR fact.

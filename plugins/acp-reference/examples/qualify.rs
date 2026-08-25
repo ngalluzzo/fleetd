@@ -1,9 +1,9 @@
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use fleetd::{
-    Binding, Capability, ExecutionFence, HarnessAcpClient, HarnessAcpNotification, OpenSession,
+    Binding, ExecutionFence, HarnessAcpClient, HarnessAcpNotification, OpenSession,
     OpenSessionMode, PermissionOutcome, PermissionResolution, PluginProcess, PluginSpec,
-    PromptBlock, StartTurn, ToolBudget, TurnPolicy, TurnSource,
+    PromptBlock, StartTurn, ToolBudget, TurnPolicy, TurnSource, harness_acp_capabilities,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -98,10 +98,7 @@ fn plugin_spec(arguments: &QualificationArgs, profile_digest: &str) -> PluginSpe
             "environment": allowed_environment(),
         }
     }))
-    .require(Capability {
-        name: "harness.acp".to_owned(),
-        version: 1,
-    })
+    .require_all(harness_acp_capabilities())
     .with_initialize_timeout(Duration::from_secs(30))
     .with_request_timeout(Duration::from_secs(30))
     .with_shutdown_timeout(Duration::from_secs(5))

@@ -68,13 +68,13 @@ external harness effects are exactly once. See
 Domain-specific code runs in separately versioned child processes rather than
 inside the kernel or as Rust dynamic libraries. A strict lifecycle transport
 launches an absolute executable without a shell, clears its environment, bounds
-JSON-RPC frames and request deadlines, validates its identity and exact
-capabilities, and terminates it on failed startup or shutdown overrun.
+JSON-RPC frames and request deadlines, validates its identity and exact GOOIR
+capability offers, and terminates it on failed startup or shutdown overrun.
 
 The boundary isolates crashes and language/toolchain choices; it is not an
 operating-system security sandbox. Plugins receive only explicit opaque
-configuration and no fleetd bearer credentials. Capability adapters will
-mediate durable inbox work without granting plugins ambient access to kernel
+configuration and no fleetd bearer credentials. Execution adapters mediate
+durable inbox work without granting plugins ambient access to kernel
 storage or authority. See
 [ADR 0004](adr/0004-out-of-process-capability-plugins.md) and the
 [lifecycle v1 contract](contracts/plugin-lifecycle-v1.md).
@@ -82,12 +82,14 @@ storage or authority. See
 ## Harness boundary
 
 The experimental harness layer has a policy-free typed ACP host library and
-separately identified harness plugins. ACP remains the inner harness protocol;
-a narrow fleetd capability adds invocation identity, session fencing,
-deadlines, and evidence without exposing a generic protocol tunnel. OpenCode,
-Codex, DSH, and future integrations own their launch configuration and
-environment grants in their own plugin packages. The supervisor owns each
-plugin and its ACP runtime as one process group.
+separately identified harness plugins. ACP is an inner transport protocol, not
+a capability identity. Current plugins advertise four exact agent-session
+capabilities—open, execute a turn, resolve permission, and close—through a
+GOOIR offer set. Another protocol could implement the same capabilities.
+Fleetd keeps invocation identity, session fencing, deadlines, and runtime
+evidence outside those semantic documents. OpenCode, Codex, DSH, and future
+integrations own launch configuration and environment grants in their plugin
+packages. The supervisor owns each plugin and its runtime as one process group.
 
 A continuous local worker composes atomic reservation with durable session
 binding, exclusive owner epochs, write-ahead dispatch arming, typed prompt
@@ -137,64 +139,37 @@ messaging kernel. See the
 and the
 [continuous two-seat qualification](qualification/continuous-two-seat-opencode-loop-2026-08-24.md).
 
-## Capability work boundary
+## GOOIR boundary
 
-A GOOIR capability need becomes executable only after it is bound to exact
-input fact instances. fleetd carries that provider-neutral request as
-`work.capability.request/v1`; the messaging kernel preserves it as opaque JSON.
-The authenticated sender supplies request authority, the explicit recipient is
-the first assignment policy, the invocation binds the exact message, and the
-session turn durably records binding generation and owner epoch.
+GOOIR owns capability and fact meaning, exact implementation offers,
+invocations, results, candidates, conformance, and admission. Fleetd consumes
+and produces those neutral documents. It does not define a provider interface,
+select an implementation by domain, or embed repository, UI, workflow, or
+model semantics in its worker.
 
-A capability-work adapter admits an exact configured semantic provider set and
-uses a session lane keyed by the request's RFC 8785/SHA-256 identity. Provider
-identity and implementation digest are adapter configuration, not agent
-self-report, and remain distinct from the harness plugin and ACP protocol. The
-controller persists this context beside raw terminal evidence.
+The CLI maps `gooir.capability.invocation/v1` and
+`gooir.capability.result/v1` message kinds to their exact GOOIR payloads. The
+generic envelope worker may reserve either kind when explicitly configured,
+but passes it opaquely to a harness. It neither manufactures a semantic prompt
+nor extracts a domain response. Given an invocation, exact offer, and immutable
+result message, Fleetd can produce a GOOIR candidate with canonical durable
+message evidence. GOOIR remains responsible for conformance and fact admission.
 
-The first response is an attempt record, not accepted output or conformance
-proof. Capability attempt v2 preserves the assistant transcript, uses ACP's
-message IDs to identify the final assistant message, and parses only that whole
-message as JSON. A strict deterministic lift independently reconstructs the
-same boundary, then requires the exact request, suite, and output fact set and
-emits either an unverified content-addressed candidate or an explicit unable
-result. Markdown, prose recovery, ambiguous boundaries, duplicate/missing
-outputs, and claims of conformance fail closed. GOOIR, not the messaging
-kernel, runs the independently identified named suite and decides whether any
-candidate facts enter its graph. See
-[ADR 0012](adr/0012-capability-needs-become-durable-work.md), the
-[capability request contract](contracts/capability-work-v1.md), the
-[structured attempt contract](contracts/capability-work-v2.md),
-[ADR 0013](adr/0013-raw-attempts-lift-to-unverified-candidates.md), and
-[ADR 0015](adr/0015-protocol-bounded-structured-results.md).
+Plugins return one package-level `CapabilityOfferSet` during initialization.
+One plugin may offer many capabilities, and several plugins may implement the
+same capability. Protocol and capability stay orthogonal: ACP currently
+transports agent-session capabilities but does not define them.
 
-Repository inspection is the first useful brownfield specialization of this
-boundary. Its exact brief fact binds one Git commit, bounded path scopes, and
-question IDs; its report fact carries an exact answer set and source locations.
-The semantic adapter reuses the generic request and attempt machinery, verifies
-a clean checkout at the requested `HEAD` before dispatch, and adds no Git
-meaning to the kernel. After strict lift, the named suite reads every citation
-from exact Git objects and validates scope and line ranges. That establishes a
-structurally conformant candidate, not the truth of natural-language claims.
-The path scope is an admissible-evidence rule rather than a filesystem sandbox.
-See [ADR 0018](adr/0018-repository-inspection-specializes-capability-work.md)
-and the [v1 contract](contracts/repository-inspection-v1.md).
-
-Repository patch proposal is the write-shaped counterpart without ambient
-mutation authority. A change brief binds one exact base revision, path scope,
-objective, criteria, and constraints. The provider returns an untrusted unified
-diff artifact; Fleetd applies it only to a temporary Git index, compares Git's
-exact changed path set, rejects binary and non-regular modes, and emits Git's
-canonical patch plus a byte digest. The authoritative worktree, index, branch,
-and history are untouched. Conformance proves applicability and artifact
-identity, not that the natural-language criteria pass. Test, review, commit,
-publication, and merge remain separate future capabilities. See
-[ADR 0019](adr/0019-patches-are-conformed-artifacts-not-workspace-mutation.md)
-and the [v1 contract](contracts/repository-patch-v1.md).
+Fleetd owns agent routing, deliveries, leases, process groups, session
+references, binding generations, owner epochs, write-ahead fences, and
+settlement. These facts never become fields on a GOOIR invocation or result;
+they can appear only as typed execution-host evidence. See
+[ADR 0020](adr/0020-gooir-capabilities-execution-host-boundary.md) and the
+[host contract](contracts/gooir-capability-host-v1.md).
 
 The first admitted-output target is a browser adapter for blocked-delivery
-review. Its static `/operator/contract.json` is the exact web target IR from
-the capability request; the script derives fields, actions, selectors, and API
+review. Its static `/operator/contract.json` is an exact GOOIR target artifact;
+the script derives fields, actions, selectors, and API
 paths from that document. It does not introduce a second hand-written UI API.
 Static assets are public so the browser can bootstrap, while all underlying
 data and effects remain behind the existing operator-authenticated API. See

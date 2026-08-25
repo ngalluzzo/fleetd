@@ -50,10 +50,9 @@ async fn operator_assets_are_public_exact_and_browser_hardened() {
 
     let contract = body(app.clone(), "/operator/contract.json").await;
     let observed: Value = serde_json::from_slice(&contract).expect("served contract JSON");
-    let request: Value =
-        serde_json::from_str(include_str!("fixtures/gooir_runnable_web_request.json"))
-            .expect("GOOIR request fixture");
-    assert_eq!(observed, request["inputs"][0]["payload"]);
+    assert!(observed.is_object());
+    assert_eq!(observed["record_type"], "BlockedDelivery");
+    assert_eq!(observed["binding"]["list_path"], "/v1/delivery-blocks");
 
     let html = String::from_utf8(body(app.clone(), "/operator/").await).expect("UTF-8 HTML");
     for marker in [
