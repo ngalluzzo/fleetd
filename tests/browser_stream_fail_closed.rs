@@ -4,7 +4,7 @@ use fleetd::{
     AppState, AuthService, BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse,
     BrowserStreamServerFrame, CreateAgent, CreateChannel, RegisteredAgent, Store, router,
 };
-use futures_util::{SinkExt, StreamExt, future::join_all};
+use futures_util::{SinkExt, StreamExt, future::join_all, stream};
 use serde_json::json;
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
@@ -21,6 +21,7 @@ use tokio_tungstenite::{
 const MAX_UNUSED_GRANTS_PER_CREDENTIAL: usize = 8;
 const MAX_PRE_AUTHENTICATION_SOCKETS_PER_DAEMON: usize = 64;
 const MAX_ACTIVE_BROWSER_STREAMS_PER_CREDENTIAL: usize = 16;
+const MAX_ACTIVE_BROWSER_STREAMS_PER_DAEMON: usize = 1_024;
 const MAX_REDEMPTION_FRAME_BYTES: usize = 1_024;
 const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(5);
 const GRANT_LIFETIME: Duration = Duration::from_secs(15);
@@ -28,6 +29,7 @@ const CREDENTIAL_REVALIDATION_INTERVAL: Duration = Duration::from_secs(30);
 
 struct BrowserDaemon {
     _directory: tempfile::TempDir,
+    client: reqwest::Client,
     operator_token: String,
     address: SocketAddr,
     server: tokio::task::JoinHandle<()>,
@@ -62,6 +64,10 @@ impl BrowserDaemon {
         });
         Self {
             _directory: directory,
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .expect("build bounded HTTP client"),
             operator_token,
             address,
             server,
@@ -69,7 +75,7 @@ impl BrowserDaemon {
     }
 
     async fn register(&self, name: &str) -> RegisteredAgent {
-        reqwest::Client::new()
+        self.client
             .post(format!("http://{}/v1/agents", self.address))
             .bearer_auth(&self.operator_token)
             .json(&CreateAgent {
@@ -87,7 +93,7 @@ impl BrowserDaemon {
     }
 
     async fn rotate(&self, agent_id: &str) {
-        reqwest::Client::new()
+        self.client
             .post(format!(
                 "http://{}/v1/agents/{agent_id}/credentials/rotate",
                 self.address
@@ -101,13 +107,17 @@ impl BrowserDaemon {
     }
 
     async fn channel(&self, member_id: &str) -> fleetd::Channel {
-        reqwest::Client::new()
+        self.channel_with_members(vec![member_id.to_owned()]).await
+    }
+
+    async fn channel_with_members(&self, member_ids: Vec<String>) -> fleetd::Channel {
+        self.client
             .post(format!("http://{}/v1/channels", self.address))
             .bearer_auth(&self.operator_token)
             .json(&CreateChannel {
                 name: "browser-fail-closed".to_owned(),
                 metadata: json!({}),
-                member_ids: vec![member_id.to_owned()],
+                member_ids,
                 members: Vec::new(),
             })
             .send()
@@ -121,7 +131,7 @@ impl BrowserDaemon {
     }
 
     async fn issue_response(&self, channel_id: &str, token: &str) -> reqwest::Response {
-        reqwest::Client::new()
+        self.client
             .post(format!(
                 "http://{}/v1/channels/{channel_id}/stream-grants",
                 self.address
@@ -417,6 +427,128 @@ async fn per_credential_active_bound_consumes_excess_grant_and_close_releases_ca
     drop(replacement_socket);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn global_active_bound_consumes_excess_grants_and_releases_exactly_one_slot() {
+    tokio::time::timeout(
+        Duration::from_mins(1),
+        Box::pin(qualify_global_active_bound()),
+    )
+    .await
+    .expect("global active-bound qualification must finish within its total deadline");
+}
+
+async fn qualify_global_active_bound() {
+    const CREDENTIALS_AT_CAPACITY: usize =
+        MAX_ACTIVE_BROWSER_STREAMS_PER_DAEMON / MAX_ACTIVE_BROWSER_STREAMS_PER_CREDENTIAL;
+    const SETUP_CONCURRENCY: usize = MAX_PRE_AUTHENTICATION_SOCKETS_PER_DAEMON;
+
+    let daemon = BrowserDaemon::start().await;
+    let mut member_ids = Vec::with_capacity(CREDENTIALS_AT_CAPACITY + 1);
+    let mut tokens = Vec::with_capacity(CREDENTIALS_AT_CAPACITY + 1);
+    for index in 0..=CREDENTIALS_AT_CAPACITY {
+        let member = daemon
+            .register(&format!("global-bound-member-{index}"))
+            .await;
+        member_ids.push(member.agent.id);
+        tokens.push(member.credential.token);
+    }
+    let channel = daemon.channel_with_members(member_ids).await;
+
+    // Interleave credentials so each setup wave has at most one outstanding
+    // grant per credential. The last capacity credential intentionally holds
+    // 15 streams, giving the daemon exactly 1,023 active streams.
+    let mut activation_tokens = Vec::with_capacity(MAX_ACTIVE_BROWSER_STREAMS_PER_DAEMON - 1);
+    for round in 0..MAX_ACTIVE_BROWSER_STREAMS_PER_CREDENTIAL {
+        for (index, token) in tokens.iter().take(CREDENTIALS_AT_CAPACITY).enumerate() {
+            if round + 1 == MAX_ACTIVE_BROWSER_STREAMS_PER_CREDENTIAL
+                && index + 1 == CREDENTIALS_AT_CAPACITY
+            {
+                continue;
+            }
+            activation_tokens.push(token.clone());
+        }
+    }
+    assert_eq!(
+        activation_tokens.len(),
+        MAX_ACTIVE_BROWSER_STREAMS_PER_DAEMON - 1
+    );
+
+    let active: Vec<BrowserSocket> = tokio::time::timeout(
+        Duration::from_secs(45),
+        stream::iter(activation_tokens)
+            .map(|token| activate_browser(&daemon, &channel.id, token))
+            .buffer_unordered(SETUP_CONCURRENCY)
+            .collect(),
+    )
+    .await
+    .expect("1,023 public browser streams must establish within the setup deadline");
+    assert_eq!(active.len(), MAX_ACTIVE_BROWSER_STREAMS_PER_DAEMON - 1);
+
+    let boundary_token = tokens.last().expect("dedicated global-bound credential");
+    let fill_grant = daemon.issue(&channel.id, boundary_token).await;
+    let excess_grant = daemon.issue(&channel.id, boundary_token).await;
+    let recovery_grant = daemon.issue(&channel.id, boundary_token).await;
+    let second_excess_grant = daemon.issue(&channel.id, boundary_token).await;
+    let origin = canonical_origin(&daemon);
+
+    // All four upgrades happen while the global count is 1,023. This reaches
+    // the authoritative reservation race instead of stopping at the advisory
+    // HTTP 503 capacity check.
+    let (fill, excess, recovery, second_excess) = tokio::join!(
+        connect_browser(&daemon, Some(&origin)),
+        connect_browser(&daemon, Some(&origin)),
+        connect_browser(&daemon, Some(&origin)),
+        connect_browser(&daemon, Some(&origin)),
+    );
+    let mut fill = fill.expect("global-bound fill upgrade").0;
+    let mut excess = excess.expect("global-bound excess upgrade").0;
+    let mut recovery = recovery.expect("global-bound recovery upgrade").0;
+    let mut second_excess = second_excess.expect("second global-bound excess upgrade").0;
+
+    redeem_raw(&mut fill, fill_grant.grant.expose_secret()).await;
+    assert_ready(&next_frame(&mut fill, Duration::from_secs(2)).await);
+
+    redeem_raw(&mut excess, excess_grant.grant.expose_secret()).await;
+    assert_close(&mut excess, 4_401, "grant_rejected", Duration::from_secs(2)).await;
+
+    close_and_wait(fill).await;
+
+    // A successful upgrade is the public synchronization point proving that
+    // the closed stream's global slot has actually been released. The rejected
+    // grant remains rejected after that release, proving redemption consumed it.
+    let mut consumed_retry = connect_after_capacity_release(&daemon, &origin).await;
+    redeem_raw(&mut consumed_retry, excess_grant.grant.expose_secret()).await;
+    assert_close(
+        &mut consumed_retry,
+        4_401,
+        "grant_rejected",
+        Duration::from_secs(2),
+    )
+    .await;
+
+    redeem_raw(&mut recovery, recovery_grant.grant.expose_secret()).await;
+    assert_ready(&next_frame(&mut recovery, Duration::from_secs(2)).await);
+
+    // Closing one established stream released one slot, not two: exactly one
+    // fresh redemption establishes and the next already-upgraded redemption is
+    // rejected by the daemon-wide bound, well below its credential-local bound.
+    redeem_raw(
+        &mut second_excess,
+        second_excess_grant.grant.expose_secret(),
+    )
+    .await;
+    assert_close(
+        &mut second_excess,
+        4_401,
+        "grant_rejected",
+        Duration::from_secs(2),
+    )
+    .await;
+
+    drop(recovery);
+    drop(active);
+}
+
 #[tokio::test]
 async fn idle_revalidation_closes_a_revoked_ready_stream_within_its_bound() {
     let daemon = BrowserDaemon::start().await;
@@ -454,7 +586,12 @@ async fn connect_browser(
     ),
     WebSocketError,
 > {
-    connect_async(browser_request(daemon.address, origin)).await
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        connect_async(browser_request(daemon.address, origin)),
+    )
+    .await
+    .expect("browser stream upgrade must finish within the deadline")
 }
 
 fn browser_request(address: SocketAddr, origin: Option<&str>) -> Request<()> {
@@ -518,6 +655,54 @@ async fn eventually_redeem_browser(
             other => panic!("active stream capacity did not recover: {other:?}"),
         }
     }
+}
+
+async fn activate_browser(
+    daemon: &BrowserDaemon,
+    channel_id: &str,
+    token: String,
+) -> BrowserSocket {
+    let issued = daemon.issue(channel_id, &token).await;
+    let mut socket = connect_browser(daemon, Some(&canonical_origin(daemon)))
+        .await
+        .expect("active global-bound stream upgrade")
+        .0;
+    redeem_raw(&mut socket, issued.grant.expose_secret()).await;
+    assert_ready(&next_frame(&mut socket, Duration::from_secs(2)).await);
+    socket
+}
+
+async fn close_and_wait(mut socket: BrowserSocket) {
+    socket
+        .close(None)
+        .await
+        .expect("close active browser stream");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(frame) = socket.next().await {
+            match frame {
+                Ok(WebSocketMessage::Close(_)) | Err(_) => return,
+                Ok(_) => {}
+            }
+        }
+    })
+    .await
+    .expect("closed browser stream must terminate within the deadline");
+}
+
+async fn connect_after_capacity_release(daemon: &BrowserDaemon, origin: &str) -> BrowserSocket {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match connect_browser(daemon, Some(origin)).await {
+                Ok((socket, _)) => return socket,
+                Err(WebSocketError::Http(response)) if response.status().as_u16() == 503 => {
+                    tokio::task::yield_now().await;
+                }
+                Err(error) => panic!("global active capacity did not recover: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("global active capacity must recover within the deadline")
 }
 
 async fn redeem_raw(socket: &mut BrowserSocket, grant: &str) {
