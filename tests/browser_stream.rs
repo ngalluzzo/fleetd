@@ -9,14 +9,14 @@ use fleetd::{
     BrowserStreamRedemptionMessageType, BrowserStreamRedemptionRequest, BrowserStreamServerFrame,
     CreateAgent, CreateChannel, Message, RegisteredAgent, SendMessage, Store, router,
 };
-use futures_util::{SinkExt, StreamExt, future::join_all};
+use futures_util::{SinkExt, StreamExt, future::join_all, stream};
 use serde_json::{Value, json};
 use sqlx::{
     Row,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async,
+    MaybeTlsStream, WebSocketStream, client_async, connect_async,
     tungstenite::{
         Error as WebSocketError, Message as WebSocketMessage,
         client::IntoClientRequest,
@@ -30,6 +30,7 @@ use tokio_tungstenite::{
 struct BrowserDaemon {
     directory: tempfile::TempDir,
     auth: AuthService,
+    client: reqwest::Client,
     operator_token: String,
     database_path: PathBuf,
     address: SocketAddr,
@@ -69,6 +70,7 @@ impl BrowserDaemon {
         Self {
             directory,
             auth,
+            client: reqwest::Client::new(),
             operator_token,
             database_path,
             address,
@@ -109,7 +111,7 @@ impl BrowserDaemon {
     }
 
     async fn channel(&self, name: &str, member_ids: Vec<String>) -> fleetd::Channel {
-        reqwest::Client::new()
+        self.client
             .post(format!("http://{}/v1/channels", self.address))
             .bearer_auth(&self.operator_token)
             .json(&CreateChannel {
@@ -134,7 +136,8 @@ impl BrowserDaemon {
         token: &str,
         after: i64,
     ) -> BrowserStreamGrantIssueResponse {
-        let response = reqwest::Client::new()
+        let response = self
+            .client
             .post(format!(
                 "http://{}/v1/channels/{channel_id}/stream-grants",
                 self.address
@@ -166,7 +169,7 @@ impl BrowserDaemon {
         kind: &str,
         payload: Value,
     ) -> Message {
-        reqwest::Client::new()
+        self.client
             .post(format!(
                 "http://{}/v1/channels/{channel_id}/messages",
                 self.address
@@ -466,6 +469,102 @@ async fn browser_stream_has_no_gap_across_authorization_and_replay_boundaries() 
         )
         .await;
     assert_message(next_server_frame(&mut socket).await, &live);
+}
+
+#[tokio::test]
+async fn slow_browser_disconnect_replays_broadcast_lag_from_last_accepted_cursor() {
+    const BROADCAST_RECEIVER_CAPACITY: usize = 1_024;
+
+    let daemon = BrowserDaemon::start().await;
+    let author = daemon.register("backpressure-author").await;
+    let watcher = daemon.register("backpressure-watcher").await;
+    let channel = daemon
+        .channel(
+            "browser-backpressure",
+            vec![author.agent.id.clone(), watcher.agent.id.clone()],
+        )
+        .await;
+    let checkpoint = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "backpressure.checkpoint/v1",
+            json!({"accepted": true}),
+        )
+        .await;
+
+    let grant = daemon
+        .issue(&channel.id, &watcher.credential.token, 0)
+        .await;
+    let (mut stalled, _) = connect_browser_with_receive_buffer(&daemon, 1_024)
+        .await
+        .expect("slow browser upgrade");
+    redeem(&mut stalled, grant).await;
+    assert_ready(next_server_frame(&mut stalled).await, &channel.id, 0);
+    assert_message(next_server_frame(&mut stalled).await, &checkpoint);
+
+    // The client accepts no more application frames. Its bounded TCP receive
+    // window is smaller than the first frame, so the stream task must remain
+    // in its ordinary socket-send path while later messages keep committing.
+    let first_blocking_message = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "backpressure.large/v1",
+            json!({"opaque": "x".repeat(1_048_576)}),
+        )
+        .await;
+    // More notifications than the production broadcast receiver can retain
+    // are committed while that send is backpressured. SQLite, not the
+    // broadcast queue or socket, must therefore remain the recovery source.
+    let backlog_payload = "x".repeat(4_096);
+    let mut backlog = stream::iter(0..=BROADCAST_RECEIVER_CAPACITY)
+        .map(|index| {
+            daemon.send(
+                &channel.id,
+                &author.credential.token,
+                None,
+                "backpressure.backlog/v1",
+                json!({"index": index, "opaque": backlog_payload}),
+            )
+        })
+        .buffer_unordered(64)
+        .collect::<Vec<_>>()
+        .await;
+    backlog.push(first_blocking_message);
+    backlog.sort_by_key(|message| message.seq);
+
+    // Model a slow browser being lost before it accepts any backlog cursor.
+    drop(stalled);
+
+    let reconnect = daemon
+        .issue(&channel.id, &watcher.credential.token, checkpoint.seq)
+        .await;
+    let (mut replay, _) = connect_browser(&daemon, None, None)
+        .await
+        .expect("reconnect after slow browser loss");
+    redeem(&mut replay, reconnect).await;
+    assert_ready(
+        next_server_frame(&mut replay).await,
+        &channel.id,
+        checkpoint.seq,
+    );
+    for expected in &backlog {
+        assert_message(next_server_frame(&mut replay).await, expected);
+    }
+
+    let live = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "backpressure.live/v1",
+            json!({"after_replay": true}),
+        )
+        .await;
+    assert_message(next_server_frame(&mut replay).await, &live);
 }
 
 #[tokio::test]
@@ -883,6 +982,35 @@ async fn connect_browser(
         origin.unwrap_or(&format!("http://{}", daemon.address)),
         subprotocol.unwrap_or(BROWSER_STREAM_PROTOCOL),
     ))
+    .await
+}
+
+async fn connect_browser_with_receive_buffer(
+    daemon: &BrowserDaemon,
+    receive_buffer_bytes: u32,
+) -> Result<
+    (
+        BrowserSocket,
+        tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
+    ),
+    WebSocketError,
+> {
+    let socket = tokio::net::TcpSocket::new_v4().expect("create browser TCP socket");
+    socket
+        .set_recv_buffer_size(receive_buffer_bytes)
+        .expect("bound browser receive buffer");
+    let stream = socket
+        .connect(daemon.address)
+        .await
+        .expect("connect slow browser TCP socket");
+    client_async(
+        browser_request(
+            daemon.address,
+            &format!("http://{}", daemon.address),
+            BROWSER_STREAM_PROTOCOL,
+        ),
+        MaybeTlsStream::Plain(stream),
+    )
     .await
 }
 
