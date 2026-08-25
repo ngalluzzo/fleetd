@@ -7,12 +7,11 @@ use uuid::Uuid;
 
 use super::{
     protocol::{
-        HealthResult, InitializeParams, LIFECYCLE_PROTOCOL_VERSION, PluginManifest,
-        PluginNotification, ShutdownResult, validate_identifier,
+        HealthResult, InitializeParams, LIFECYCLE_PROTOCOL_VERSION, PluginInterface,
+        PluginManifest, PluginNotification, ShutdownResult, validate_identifier,
     },
     rpc::RpcPeer,
 };
-use crate::gooir::ExactIdentity;
 
 const DEFAULT_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -29,8 +28,8 @@ pub enum PluginError {
     IdentityMismatch { expected: String, actual: String },
     #[error("plugin lifecycle version mismatch: expected {expected}, received {actual}")]
     ProtocolVersion { expected: u32, actual: u32 },
-    #[error("plugin is missing required capability {capability}")]
-    MissingCapability { capability: String },
+    #[error("plugin is missing required interface {interface}")]
+    MissingInterface { interface: String },
     #[error("plugin protocol error: {0}")]
     Protocol(String),
     #[error("plugin transport error: {0}")]
@@ -63,7 +62,7 @@ pub struct PluginSpec {
     executable: PathBuf,
     args: Vec<OsString>,
     config: Value,
-    required_capabilities: Vec<ExactIdentity>,
+    required_interfaces: Vec<PluginInterface>,
     initialize_timeout: Duration,
     request_timeout: Duration,
     shutdown_timeout: Duration,
@@ -78,7 +77,7 @@ impl PluginSpec {
             executable: executable.into(),
             args: Vec::new(),
             config: json!({}),
-            required_capabilities: Vec::new(),
+            required_interfaces: Vec::new(),
             initialize_timeout: DEFAULT_INITIALIZE_TIMEOUT,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
@@ -99,17 +98,10 @@ impl PluginSpec {
         self
     }
 
-    /// Requires an exact capability before startup can succeed.
+    /// Requires one exact operational interface before startup can succeed.
     #[must_use]
-    pub fn require(mut self, capability: ExactIdentity) -> Self {
-        self.required_capabilities.push(capability);
-        self
-    }
-
-    /// Requires every exact semantic capability in an offer family.
-    #[must_use]
-    pub fn require_all(mut self, capabilities: impl IntoIterator<Item = ExactIdentity>) -> Self {
-        self.required_capabilities.extend(capabilities);
+    pub fn require_interface(mut self, interface: PluginInterface) -> Self {
+        self.required_interfaces.push(interface);
         self
     }
 
@@ -155,10 +147,8 @@ impl PluginSpec {
                 "plugin lifecycle timeouts must be greater than zero".to_owned(),
             ));
         }
-        for capability in &self.required_capabilities {
-            capability
-                .validate()
-                .map_err(|error| PluginError::InvalidSpec(error.to_string()))?;
+        for interface in &self.required_interfaces {
+            interface.validate().map_err(PluginError::InvalidSpec)?;
         }
         Ok(())
     }
@@ -172,7 +162,7 @@ impl fmt::Debug for PluginSpec {
             .field("executable", &self.executable)
             .field("args_count", &self.args.len())
             .field("config", &"[REDACTED]")
-            .field("required_capabilities", &self.required_capabilities)
+            .field("required_interfaces", &self.required_interfaces)
             .field("initialize_timeout", &self.initialize_timeout)
             .field("request_timeout", &self.request_timeout)
             .field("shutdown_timeout", &self.shutdown_timeout)
@@ -213,7 +203,7 @@ impl PluginProcess {
     /// # Errors
     ///
     /// Returns an error for an invalid specification, process failure, timeout,
-    /// protocol violation, identity mismatch, or missing capability.
+    /// protocol violation, identity mismatch, or missing interface.
     pub async fn start(spec: PluginSpec) -> Result<Self, PluginError> {
         spec.validate()?;
         let mut command = Command::new(&spec.executable);
@@ -381,7 +371,7 @@ async fn initialize(rpc: &RpcPeer, spec: &PluginSpec) -> Result<PluginManifest, 
     let manifest: PluginManifest = rpc
         .call("fleetd.initialize", &params, spec.initialize_timeout)
         .await?;
-    manifest.validate(&spec.id, &spec.required_capabilities)?;
+    manifest.validate(&spec.id, &spec.required_interfaces)?;
     check_health(rpc, spec.request_timeout).await?;
     Ok(manifest)
 }

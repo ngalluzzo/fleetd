@@ -5,14 +5,14 @@ use std::{path::PathBuf, time::Duration};
 use fleetd::{
     Binding, CloseSession, ExecutionFence, HarnessAcpNotification, OpenSession, OpenSessionMode,
     PluginError, PluginProcess, PluginSpec, PromptBlock, StartTurn, ToolBudget, TurnPolicy,
-    TurnSource, harness_acp_capabilities,
+    TurnSource, harness_acp_interface,
 };
 
 fn fixture_spec(mode: &str) -> PluginSpec {
     PluginSpec::new("mock.harness", "/usr/bin/python3")
         .with_arg(fixture_path())
         .with_arg(mode)
-        .require_all(harness_acp_capabilities())
+        .require_interface(harness_acp_interface())
         .with_request_timeout(Duration::from_secs(1))
 }
 

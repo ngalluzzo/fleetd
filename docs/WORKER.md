@@ -27,8 +27,8 @@ Worker desired-state schema 2 requires an explicit adapter. The envelope
 adapter's `inbound` block declares schema 1 and a non-empty exact
 `message_kinds` set. The worker atomically reserves only matching kinds;
 non-matches remain pending without an attempt increment. Matching establishes
-eligibility, not semantic validity, so the adapter still validates the complete
-payload before dispatch. The acceptance contract participates in session
+eligibility, not semantic validity; the payload remains opaque through
+dispatch. The acceptance contract participates in session
 compatibility and changing it rotates the binding generation. See the
 [v1 contract](contracts/worker-inbound-acceptance-v1.md).
 
@@ -57,8 +57,9 @@ OpenCode's nested `task` permission: nested subagent activity is not admitted
 until its tools, progress, cancellation, and budgets are visible through the
 same typed Fleetd evidence boundary.
 
-`mcp_grants` is an allowlist of semantic capability names, not MCP commands,
-URLs, or credentials. The current worker accepts either no grants or exactly
+`mcp_grants` is an allowlist of invocation-scoped runtime grant names, not MCP
+commands, URLs, credentials, or semantic claims. The current worker accepts
+either no grants or exactly
 `fleet.messaging.send`. When enabled, it starts a random-port `127.0.0.1`
 Streamable HTTP endpoint and supplies its ephemeral token only in the resolved
 ACP session setup. The desired-state file, SQLite catalog, effective-config
@@ -71,22 +72,20 @@ self-send, permits at most eight committed messages per invocation, and caps
 the encoded payload at 64 KiB. Exact retries reuse the operation ID and return
 the same committed message. The agent cannot choose sender, channel,
 correlation, causation, or the durable idempotency key. See the
-[OpenCode qualification](qualification/message-capability-opencode-2026-08-24.md).
+[OpenCode qualification](qualification/message-grant-opencode-2026-08-24.md).
 
 ## Turn and lane behavior
 
 The built-in envelope adapter passes the full immutable Fleetd message envelope
 and its invocation attempt to the harness as JSON. It adds no task, Git, review,
-UI, workflow, or GOOIR capability semantics. Configured exact kinds decide only
+UI, workflow, or compiler semantics. Configured exact kinds decide only
 reservation eligibility. One durable native session lane is maintained per
 channel, so conversation context stays scoped to the channel.
 
-A seat can carry GOOIR by including `gooir.capability.invocation/v1` or
-`gooir.capability.result/v1` in its accepted kinds. The adapter still treats
-the payload as opaque. Capability packages—not the Fleetd worker—own semantic
-implementation selection, prompt construction, result parsing, and
-conformance. See the
-[GOOIR host contract](contracts/gooir-capability-host-v1.md).
+Any external system may define message kinds consumed by a seat. Fleetd does
+not recognize those contracts; their owners remain responsible for semantic
+validation, implementation selection, prompt construction, result parsing, and
+conformance. See the [integration boundary](INTEGRATION_BOUNDARY.md).
 
 The lease must cover the configured wall timeout, cancellation drain timeout,
 and a 60-second settlement margin. Permission requests are denied by the
@@ -109,7 +108,7 @@ bounds are validated before a process starts.
   complete protocol-bounded JSON value was captured. Host cancellation
   overrides a runtime `end_turn` and preserves that runtime claim separately as
   evidence.
-- Invocation capabilities are activated only after dispatch arming. Revocation
+- Invocation grants are activated only after dispatch arming. Revocation
   serializes behind any accepted durable append and completes before result or
   block settlement.
 - Plugin generations restart with bounded backoff. Their in-memory session

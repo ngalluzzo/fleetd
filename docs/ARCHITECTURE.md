@@ -11,184 +11,136 @@ The kernel owns six concepts:
 - **Delivery:** a recipient snapshot and its durable processing state.
 - **Principal:** an operator or one authenticated agent identity.
 
-The kernel does not know what Codex, DSH, a task, a pull request, or a model is.
-Those concepts are expressed by adapters and versioned message contracts.
+The kernel does not know what Codex, OpenCode, DSH, a task, a pull request, a
+workflow, or a semantic capability is. Adapters select exact message kinds but
+the kernel preserves every kind and payload opaquely.
 
 ## Data path
 
 An HTTP write is validated against channel membership and committed to SQLite.
-Only after the transaction commits is the message offered to the in-memory
-broadcast bus. WebSocket consumers subscribe before replaying the durable log,
-deduplicate by sequence number, and recover broadcast lag from SQLite. This
-makes the database authoritative while keeping delivery responsive.
+Only after commit is the message offered to the in-memory broadcast bus.
+WebSocket consumers subscribe before replaying the durable log, deduplicate by
+sequence number, and recover lag from SQLite.
 
-Messages intended for agent processing create delivery rows in the same
-transaction. Workers claim those rows with bounded leases and explicitly
-acknowledge or release them. WebSockets remain notification hints; the leased
-inbox is the work guarantee. See
-[ADR 0002](adr/0002-at-least-once-agent-inbox.md) for failure semantics.
+Addressed messages create delivery rows in the same transaction. Workers claim
+those rows with bounded leases and explicitly acknowledge, release, or park
+them. WebSockets are notification hints; the leased inbox is the work
+guarantee. See [ADR 0002](adr/0002-at-least-once-agent-inbox.md).
 
-An active worker can durably park a delivery when an external outcome is
-ambiguous. Parked work never becomes claimable merely because its old lease
-expires; only an operator can requeue or abandon the exact block record. This
-keeps retry policy outside harness stop reasons while giving the future worker
-controller a conservative kernel primitive. See
+An active worker parks a delivery when an external outcome is ambiguous.
+Parked work does not become claimable when a lease expires; only the operator
+can requeue or abandon the exact block record. See
 [ADR 0007](adr/0007-durable-blocked-deliveries.md).
 
-Managed controllers claim through an outer invocation module rather than
-leasing and then recording intent in two writes. Reservation atomically creates
-the lease and invocation fence. A second write-ahead transition arms dispatch;
-the controller may perform an external effect only after it commits. Recovery
+## Invocation fence
+
+Managed controllers reserve a delivery and write-ahead invocation record in
+one transaction. A second durable transition arms external dispatch. Recovery
 can therefore distinguish a provably unstarted reservation from an armed
-attempt whose outcome is unknown. All claim paths apply that recovery before
-selecting work. Known success crosses the other crash boundary with one atomic
-completion: append the correlated idempotent result, snapshot its recipients,
-acknowledge the input, and terminalize the invocation. See
+attempt whose outcome is unknown.
+
+Known completion appends the correlated idempotent result, snapshots its
+recipients, acknowledges the input, and terminalizes the invocation in one
+commit. Agent-scoped idempotency keys make publication safe to retry after a
+lost response without claiming that harness effects happen exactly once. See
+[ADR 0006](adr/0006-idempotent-message-append.md) and
 [ADR 0008](adr/0008-write-ahead-invocation-fence.md).
 
-Agent-scoped idempotency keys make message publication safely retryable after a
-lost response. The original message and delivery snapshot are returned for an
-identical replay; conflicting key reuse fails closed. This lets a future worker
-commit one correlated result before settling its input without claiming that
-external harness effects are exactly once. See
-[ADR 0006](adr/0006-idempotent-message-append.md).
+## Plugin boundary
+
+Harness and external-system integrations run in separately versioned child
+processes rather than inside the daemon or as Rust dynamic libraries. The
+lifecycle transport launches an absolute executable without a shell, clears
+its environment, bounds frames and deadlines, validates plugin identity and
+exact operational interfaces, and terminates the complete process group on
+failure or shutdown overrun.
+
+An operational interface identifies a wire contract spoken by the plugin. It
+does not claim what semantic work an agent, model, or tool composition can do.
+The lifecycle protocol exposes initialize, readiness, notifications, and
+shutdown; typed interface clients own all other methods. There is no generic
+execute tunnel.
+
+Plugins receive only explicit opaque configuration and no Fleetd bearer
+credentials. The boundary isolates crashes and language/toolchain choices; it
+is not an operating-system security sandbox. See
+[ADR 0004](adr/0004-out-of-process-plugins.md) and the
+[lifecycle contract](contracts/plugin-lifecycle-v1.md).
+
+## Harness boundary
+
+ACP is an inner harness interoperability protocol. Fleetd's current harness
+plugins negotiate the operational interface `fleetd.harness-acp@0.1.0`, whose
+typed methods cover description, session open/resume, fenced turn start,
+permission resolution, cancellation, ordered events, terminal evidence, and
+close.
+
+The shared ACP host owns protocol translation and process containment. Each
+vendor plugin owns launch arguments, environment grants, model routing, and
+profile identity. The worker owns each plugin and native runtime as one process
+group. No raw JSON-RPC call surface escapes the typed client. See
+[ADR 0005](adr/0005-acp-harness-boundary.md),
+[ADR 0009](adr/0009-typed-acp-driver-and-process-ownership.md), and
+[ADR 0011](adr/0011-vendor-owned-harness-plugins.md).
+
+## Sessions and continuous worker
+
+The worker is a trusted local process outside the daemon's messaging kernel.
+It composes delivery reservation, native session acquisition, owner-epoch
+fencing, dispatch arming, prompt drain, settlement, process restart, and
+conservative ambiguity parking.
+
+Session bindings are keyed by agent, channel, and working-directory identity.
+Compatible restarts adopt a binding under a higher owner epoch. Incompatible
+profiles rotate the binding generation. Active or uncertain bindings are not
+silently reused. See [ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md)
+and [the worker guide](WORKER.md).
+
+The envelope adapter provides the complete immutable Fleetd message to the
+harness. It neither recognizes product contracts nor parses domain results.
+Its exact inbound-kind allowlist is routing policy only.
+
+## Invocation-scoped message grant
+
+An armed turn may receive the named runtime grant `fleet.messaging.send`.
+Fleetd resolves it to an ephemeral controller-owned MCP endpoint and supplies
+only that endpoint to the harness. The controller derives sender, channel,
+correlation, causation, and idempotency from the armed invocation.
+
+The grant is activated after dispatch arming and revoked before settlement.
+Its token is not a Fleetd bearer, cannot select another sender or channel, and
+expires with the invocation. See
+[ADR 0016](adr/0016-invocation-scoped-message-grant.md).
+
+## External semantic integration
+
+Fleetd has no semantic compiler dependency and no special semantic document
+paths. An external integration may:
+
+1. lift Fleetd's public API, plugin observations, or generated artifacts into
+   its own native facts;
+2. bridge those facts to semantic claims only with explicit evidence and
+   qualification;
+3. lower an already-linked deployment to Fleetd's public API or worker config.
+
+That lift/bridge/lower package is independently versioned and outside Fleetd.
+Fleetd transports any documents it emits as ordinary opaque messages. See
+[the integration boundary](INTEGRATION_BOUNDARY.md).
+
+## Operator surface
+
+The first browser surface is a static adapter over one checked-in target
+contract. It uses only public authenticated endpoints and exposes blocked-work
+resolution. The contract can be generated externally, but the served artifact
+contains no compiler runtime dependency. See
+[ADR 0014](adr/0014-generated-operator-surface.md).
 
 ## Deliberate constraints
 
 - One trusted local node.
-- SQLite is the only source of truth.
-- Schema changes are forward-only, checksummed migrations.
-- Messages are never edited or deleted.
-- Unknown message kinds and payload fields remain opaque JSON.
-- Harness execution and workflow policy live outside the kernel.
-- Git remains Git; fleetd will coordinate adapters instead of hosting it.
-
-## Plugin boundary
-
-Domain-specific code runs in separately versioned child processes rather than
-inside the kernel or as Rust dynamic libraries. A strict lifecycle transport
-launches an absolute executable without a shell, clears its environment, bounds
-JSON-RPC frames and request deadlines, validates its identity and exact GOOIR
-capability offers, and terminates it on failed startup or shutdown overrun.
-
-The boundary isolates crashes and language/toolchain choices; it is not an
-operating-system security sandbox. Plugins receive only explicit opaque
-configuration and no fleetd bearer credentials. Execution adapters mediate
-durable inbox work without granting plugins ambient access to kernel
-storage or authority. See
-[ADR 0004](adr/0004-out-of-process-capability-plugins.md) and the
-[lifecycle v1 contract](contracts/plugin-lifecycle-v1.md).
-
-## Harness boundary
-
-The experimental harness layer has a policy-free typed ACP host library and
-separately identified harness plugins. ACP is an inner transport protocol, not
-a capability identity. Current plugins advertise four exact agent-session
-capabilities—open, execute a turn, resolve permission, and close—through a
-GOOIR offer set. Another protocol could implement the same capabilities.
-Fleetd keeps invocation identity, session fencing, deadlines, and runtime
-evidence outside those semantic documents. OpenCode, Codex, DSH, and future
-integrations own launch configuration and environment grants in their plugin
-packages. The supervisor owns each plugin and its runtime as one process group.
-
-A continuous local worker composes atomic reservation with durable session
-binding, exclusive owner epochs, write-ahead dispatch arming, typed prompt
-drain, conservative ambiguity parking, atomic correlated-result completion,
-inbox polling, and supervised process restart. One process owns one serialized
-seat and caches one native session per channel lane. A fresh process generation
-adopts a compatible ready session under a higher epoch and performs the native
-resume before it handles more work. Binding activation commits with invocation
-arming, and known quiescent completion returns the binding to ready in the same
-commit as result publication.
-
-Before reservation, each adapter declares a versioned exact-kind inbound
-acceptance set. SQLite applies it only as an opaque selector over immutable
-envelopes: earlier non-matches stay pending without leases or attempt changes,
-while payload semantics remain adapter-owned and are validated after
-reservation. The declaration participates in session compatibility. See
-[ADR 0017](adr/0017-adapters-declare-inbound-acceptance.md).
-
-The worker opens SQLite directly as a trusted local controller. It is neither
-part of the public HTTP API nor embedded in the messaging kernel. Persisted
-invocation-event fragments and explicit runtime-generation evidence remain the
-next controller boundary.
-
-An optional `fleet.messaging.send` grant gives a turn one narrow
-`publish_durable_message` capability through a controller-owned loopback MCP
-endpoint. Its random token is not a fleet bearer and grants no inbox, operator,
-or arbitrary database access. Activation follows the durable dispatch fence;
-revocation waits for every accepted append and precedes terminal settlement.
-The broker derives sender and channel from the invocation, carries or
-establishes correlation from the source message, fixes causation to that
-message, and makes `(invocation, operation_id)` the durable idempotency scope.
-SQLite membership and append transactions remain authoritative. A real
-OpenCode turn has exercised this path end to end.
-
-Codex has passed one real end-to-end turn; DSH has passed initialization but
-still requires an approved credential path for session and turn qualification.
-Invocation, resumption, retry policy, and restart policy remain outside the
-messaging kernel. See the
-[harness execution architecture](HARNESS_EXECUTION.md),
-[worker operations guide](WORKER.md),
-[ADR 0005](adr/0005-acp-harness-boundary.md),
-[ADR 0011](adr/0011-vendor-owned-harness-plugins.md),
-[ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md),
-[ADR 0016](adr/0016-invocation-scoped-message-capability.md),
-[ADR 0017](adr/0017-adapters-declare-inbound-acceptance.md),
-[OpenCode plugin qualification](qualification/opencode-plugin-2026-08-24.md),
-and the
-[continuous two-seat qualification](qualification/continuous-two-seat-opencode-loop-2026-08-24.md).
-
-## GOOIR boundary
-
-GOOIR owns capability and fact meaning, exact implementation offers,
-invocations, results, candidates, conformance, and admission. Fleetd consumes
-and produces those neutral documents. It does not define a provider interface,
-select an implementation by domain, or embed repository, UI, workflow, or
-model semantics in its worker.
-
-The CLI maps `gooir.capability.invocation/v1` and
-`gooir.capability.result/v1` message kinds to their exact GOOIR payloads. The
-generic envelope worker may reserve either kind when explicitly configured,
-but passes it opaquely to a harness. It neither manufactures a semantic prompt
-nor extracts a domain response. Given an invocation, exact offer, and immutable
-result message, Fleetd can produce a GOOIR candidate with canonical durable
-message evidence. GOOIR remains responsible for conformance and fact admission.
-
-Plugins return one package-level `CapabilityOfferSet` during initialization.
-One plugin may offer many capabilities, and several plugins may implement the
-same capability. Protocol and capability stay orthogonal: ACP currently
-transports agent-session capabilities but does not define them.
-
-Fleetd owns agent routing, deliveries, leases, process groups, session
-references, binding generations, owner epochs, write-ahead fences, and
-settlement. These facts never become fields on a GOOIR invocation or result;
-they can appear only as typed execution-host evidence. See
-[ADR 0020](adr/0020-gooir-capabilities-execution-host-boundary.md) and the
-[host contract](contracts/gooir-capability-host-v1.md).
-
-The first admitted-output target is a browser adapter for blocked-delivery
-review. Its static `/operator/contract.json` is an exact GOOIR target artifact;
-the script derives fields, actions, selectors, and API
-paths from that document. It does not introduce a second hand-written UI API.
-Static assets are public so the browser can bootstrap, while all underlying
-data and effects remain behind the existing operator-authenticated API. See
-[ADR 0014](adr/0014-gooir-derived-operator-surface.md).
-
-## Identity boundary
-
-The local operator token file is authoritative for node administration and is
-readable only by its operating-system user. Its digest is reconciled
-transactionally at startup, and revocation is permanent: a file holding a
-revoked digest fails startup rather than reviving the credential. Agent
-credentials are independently rotatable and bound to one stable agent ID.
-SQLite stores only SHA-256 digests of 256-bit random bearer tokens.
-
-Authentication is read-only on the request hot path. The API derives message
-attribution from the principal, restricts inbox settlement to that agent, and
-scopes channel reads: members see broadcasts plus direct messages they sent or
-received, while operators see everything. Channel membership never shrinks
-within a channel's lifetime, so authorization is evaluated when each request
-or stream upgrade arrives; rotating an agent credential is the single
-mechanism that revokes an agent across all of its channels. See
-[ADR 0003](adr/0003-agent-bound-local-credentials.md).
+- SQLite is the only authoritative control store.
+- Schema changes are forward-only and checksummed.
+- Messages are immutable and unknown payload data is preserved.
+- Harness and workflow semantics remain outside the kernel.
+- Git remains Git; Fleetd coordinates agents instead of hosting a forge.
+- Remote workers wait for encrypted transport and enrollment.

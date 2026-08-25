@@ -1,8 +1,8 @@
-# OpenCode durable-message capability qualification — 2026-08-24
+# OpenCode durable-message grant qualification — 2026-08-24
 
 ## Scope
 
-This checkpoint exercises the first capability made available to a real
+This checkpoint exercises the first invocation-scoped runtime grant made available to a real
 continuous-worker turn. It proves protocol plumbing and durable authority, not
 the semantics of the peer request or a general-purpose agent API.
 

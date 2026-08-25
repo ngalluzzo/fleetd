@@ -1,4 +1,4 @@
-//! Out-of-process plugin lifecycle and capability negotiation.
+//! Out-of-process plugin lifecycle and operational interface negotiation.
 
 mod harness_acp;
 mod protocol;
@@ -12,7 +12,7 @@ pub use harness_acp::{
     OpenSessionResult, PermissionOutcome, PermissionRequested, PermissionResolution, PromptBlock,
     ResolvedMcpEndpoint, ResolvedMcpGrant, ResolvedMcpHttpHeader, RuntimeIdentity,
     SessionPersistence, StartTurn, StartTurnResult, ToolBudget, TurnEvent, TurnPolicy, TurnSource,
-    TurnTerminal, capabilities as harness_acp_capabilities, offer_set as harness_acp_offer_set,
+    TurnTerminal, interface as harness_acp_interface,
 };
-pub use protocol::{PluginIdentity, PluginManifest, PluginNotification};
+pub use protocol::{PluginIdentity, PluginInterface, PluginManifest, PluginNotification};
 pub use supervisor::{PluginError, PluginExit, PluginProcess, PluginSpec, ShutdownOutcome};

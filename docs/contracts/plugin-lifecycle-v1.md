@@ -1,71 +1,54 @@
-# Plugin lifecycle protocol v1
+# Fleetd plugin lifecycle v1
 
-The transport is JSON-RPC 2.0 with one UTF-8 JSON object per line. Lines are
-bounded to one MiB. Plugin standard output must contain no prose or logging.
+Status: implemented.
+
+The lifecycle contract starts, identifies, health-checks, observes, and stops
+one out-of-process integration. It negotiates operational wire interfaces only;
+it does not advertise semantic capabilities.
+
+## Framing
+
+The host and plugin exchange newline-delimited JSON-RPC 2.0 on stdin/stdout.
+Plugin stdout contains protocol frames only. Frames are bounded to 1 MiB.
 
 ## Initialize
 
-The host's first request is `fleetd.initialize`:
+The first request is `fleetd.initialize`:
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 1,
-  "method": "fleetd.initialize",
-  "params": {
-    "protocol_version": 1,
-    "instance_id": "uuid",
-    "host_version": "0.1.0",
-    "config": {}
-  }
+  "protocol_version": 1,
+  "instance_id": "host-generated-uuid",
+  "host_version": "0.1.0",
+  "config": {}
 }
 ```
 
-The plugin returns its identity and one exact GOOIR capability offer set:
+The plugin returns its identity and one or more exact operational interfaces:
 
 ```json
 {
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "protocol_version": 1,
-    "plugin": {
-      "id": "example.harness",
-      "name": "Example harness",
-      "version": "1.2.0"
-    },
-    "capability_offers": {
-      "protocol": "org.gooi.capability.offers/v1",
-      "package": {
-        "package": "example.harness",
-        "name": "package",
-        "version": "1.2.0"
-      },
-      "offers": [
-        {
-          "implementation": {
-            "package": "example.harness",
-            "name": "turn_execute",
-            "version": "1.2.0"
-          },
-          "capability": {
-            "package": "org.gooi.capability.agent_session",
-            "name": "turn_execute",
-            "version": "1.0.0"
-          },
-          "implementation_digest": "sha256:..."
-        }
-      ]
+  "protocol_version": 1,
+  "plugin": {
+    "id": "fleetd.harness.opencode",
+    "name": "fleetd OpenCode harness",
+    "version": "0.1.0"
+  },
+  "interfaces": [
+    {
+      "id": "fleetd.harness-acp",
+      "version": "0.1.0"
     }
-  }
+  ]
 }
 ```
 
-The supervisor rejects identity mismatches, duplicate or malformed offers,
-unsupported lifecycle versions, and missing exact required capabilities.
-Lifecycle compatibility does not imply capability compatibility. One package
-may offer several implementations, and lifecycle transport names do not imply
-semantic capabilities.
+Interface identity and version match exactly. The supervisor rejects lifecycle
+version mismatches, plugin identity mismatches, malformed or duplicate
+interfaces, empty interface sets, and missing required interfaces.
+
+An interface names a transport contract implemented by the process. It does
+not imply a task, workflow, repository, review, or other semantic ability.
 
 ## Health
 
@@ -75,18 +58,18 @@ Health is readiness, not merely process liveness.
 ## Shutdown
 
 `fleetd.shutdown` accepts an empty object and returns `{ "accepted": true }`.
-The plugin must then exit within the configured shutdown deadline. fleetd kills
-processes that overrun the deadline and records that the shutdown was forced.
+The plugin must then exit within the configured shutdown deadline. Fleetd kills
+the complete process group when the deadline is exceeded.
 
 ## Notifications and errors
 
-Plugins may emit JSON-RPC notifications. Unknown notifications remain opaque
-to the lifecycle transport and can be consumed by a typed plugin client.
-Plugin-initiated requests are not part of lifecycle v1.
+Plugins may emit JSON-RPC notifications. The lifecycle transport preserves
+unknown notifications for a typed interface client. Plugin-initiated requests
+are rejected.
 
-Lifecycle v1 intentionally exposes no generic domain invocation method. Each
-domain operation is defined by a separately versioned capability contract.
-
-JSON-RPC errors retain their numeric code and message. Transport framing,
+JSON-RPC errors retain their numeric code, message, and optional data. Framing,
 malformed JSON, unknown response IDs, timeouts, and premature process exit are
-supervisor failures rather than capability results.
+supervisor failures.
+
+Lifecycle v1 intentionally exposes no generic domain invocation method. Typed
+clients such as `fleetd.harness-acp@0.1.0` define their own bounded methods.

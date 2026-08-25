@@ -9,11 +9,10 @@ use std::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleetd::{
     AckDelivery, AddMember, AppState, ArmInvocation, AuthService, BlockDelivery, BlockResolution,
-    CAPABILITY_INVOCATION_KIND, CapabilityInvocation, CapabilityOffer, ClaimDeliveries,
-    CompleteInvocation, ContinuousHarnessWorker, ContinuousWorkerConfig, CreateAgent,
-    CreateChannel, EnvelopeTurnAdapter, IssuedCredential, Message, MessagePage, PluginSpec,
+    ClaimDeliveries, CompleteInvocation, ContinuousHarnessWorker, ContinuousWorkerConfig,
+    CreateAgent, CreateChannel, EnvelopeTurnAdapter, IssuedCredential, MessagePage, PluginSpec,
     RegisteredAgent, ResolveDeliveryBlock, RetryDelivery, SendMessage, Store, ToolBudget,
-    TurnPolicy, candidate_from_result_message, harness_acp_capabilities, router,
+    TurnPolicy, harness_acp_interface, router,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -55,11 +54,6 @@ enum Command {
     Invocation {
         #[command(subcommand)]
         command: InvocationCommand,
-    },
-    /// Exchange neutral GOOIR documents over fleetd's durable message log.
-    Gooir {
-        #[command(subcommand)]
-        command: GooirCommand,
     },
     /// Run a local harness worker against fleetd's authoritative database.
     Worker {
@@ -256,32 +250,6 @@ enum WorkerCommand {
     Run(WorkerRunArgs),
 }
 
-#[derive(Subcommand)]
-enum GooirCommand {
-    /// Validate and submit one exact capability invocation.
-    Submit {
-        #[arg(long)]
-        channel: String,
-        #[arg(long = "to")]
-        recipient: String,
-        #[arg(long)]
-        invocation: PathBuf,
-        #[arg(long)]
-        idempotency_key: Option<String>,
-        #[arg(long)]
-        causation: Option<String>,
-    },
-    /// Bind a GOOIR result message to its invocation, offer, and durable evidence.
-    Candidate {
-        #[arg(long)]
-        invocation: PathBuf,
-        #[arg(long)]
-        offer: PathBuf,
-        #[arg(long = "attempt-message")]
-        result_message: PathBuf,
-    },
-}
-
 #[derive(Args)]
 struct WorkerRunArgs {
     #[arg(long, env = "FLEETD_DB", default_value = "fleetd.db")]
@@ -433,67 +401,7 @@ pub async fn run() -> MainResult<()> {
             )
             .await
         }
-        Command::Gooir { command } => {
-            gooir_command(&cli.server, cli.token_file.as_deref(), command).await
-        }
         Command::Worker { command } => worker_command(command).await,
-    }
-}
-
-async fn gooir_command(
-    server: &str,
-    token_file: Option<&Path>,
-    command: GooirCommand,
-) -> MainResult<()> {
-    match command {
-        GooirCommand::Submit {
-            channel,
-            recipient,
-            invocation,
-            idempotency_key,
-            causation,
-        } => {
-            let api = ApiClient::load(server, token_file)?;
-            let raw = fs::read(&invocation)?;
-            let invocation: CapabilityInvocation =
-                serde_json::from_slice(&raw).map_err(|error| {
-                    format!(
-                        "GOOIR capability invocation {} is malformed: {error}",
-                        invocation.display()
-                    )
-                })?;
-            invocation.validate()?;
-            let invocation_id = invocation.invocation_id.clone();
-            let idempotency_key =
-                idempotency_key.unwrap_or_else(|| format!("gooir-invocation/{invocation_id}"));
-            let response = api
-                .post(&format!("/v1/channels/{channel}/messages"))
-                .json(&SendMessage {
-                    idempotency_key: Some(idempotency_key),
-                    recipient_id: Some(recipient),
-                    kind: CAPABILITY_INVOCATION_KIND.to_owned(),
-                    payload: serde_json::to_value(invocation)?,
-                    correlation_id: Some(invocation_id),
-                    causation_id: causation,
-                })
-                .send()
-                .await?;
-            print_response(response).await
-        }
-        GooirCommand::Candidate {
-            invocation,
-            offer,
-            result_message,
-        } => {
-            let invocation: CapabilityInvocation = serde_json::from_slice(&fs::read(invocation)?)?;
-            let offer: CapabilityOffer = serde_json::from_slice(&fs::read(offer)?)?;
-            let result_message: Message = serde_json::from_slice(&fs::read(result_message)?)?;
-            print_json(&candidate_from_result_message(
-                &invocation,
-                offer,
-                &result_message,
-            )?)
-        }
     }
 }
 
@@ -603,7 +511,7 @@ impl WorkerPluginConfig {
     fn into_spec(self) -> PluginSpec {
         let mut spec = PluginSpec::new(self.id, self.executable)
             .with_config(self.config)
-            .require_all(harness_acp_capabilities())
+            .require_interface(harness_acp_interface())
             .with_initialize_timeout(std::time::Duration::from_millis(self.initialize_timeout_ms))
             .with_request_timeout(std::time::Duration::from_millis(self.request_timeout_ms))
             .with_shutdown_timeout(std::time::Duration::from_millis(self.shutdown_timeout_ms));

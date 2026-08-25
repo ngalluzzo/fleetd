@@ -21,9 +21,9 @@ pub struct ManagedTurn {
     pub session_ref: String,
     pub prompt: Vec<PromptBlock>,
     pub policy: TurnPolicy,
-    /// Narrow controller-owned capabilities activated only after the durable
+    /// Narrow controller-owned grants activated only after the durable
     /// invocation fence and revoked before settlement.
-    pub capabilities: Vec<Arc<dyn ManagedTurnCapability>>,
+    pub grants: Vec<Arc<dyn ManagedTurnGrant>>,
     pub result_kind: String,
     /// Adapter-selected result representation. The raw assistant transcript is
     /// always retained; structured capture only identifies and parses one
@@ -34,13 +34,12 @@ pub struct ManagedTurn {
 }
 
 /// Invocation-scoped authority made available to a harness turn.
-///
-pub trait ManagedTurnCapability: Send + Sync {
-    /// Activates this capability for one already-armed invocation.
+pub trait ManagedTurnGrant: Send + Sync {
+    /// Activates this grant for one already-armed invocation.
     ///
     /// # Errors
     ///
-    /// Returns a bounded diagnostic when the capability cannot establish the
+    /// Returns a bounded diagnostic when the grant cannot establish the
     /// exact invocation scope.
     fn activate<'a>(&'a self, invocation: &'a Invocation) -> BoxFuture<'a, Result<(), String>>;
 
@@ -74,8 +73,8 @@ pub enum ManagedTurnError {
     HarnessBeforeArm(#[source] Box<crate::PluginError>),
 }
 
-/// Trusted controller that composes invocation fences with the typed harness
-/// capability. It owns settlement policy but no harness-specific semantics.
+/// Trusted controller that composes invocation fences with a typed harness
+/// interface. It owns settlement policy but no harness-specific semantics.
 pub struct ManagedHarnessController<'store> {
     store: &'store Store,
 }
@@ -115,7 +114,7 @@ impl<'store> ManagedHarnessController<'store> {
             session_ref,
             prompt,
             policy,
-            capabilities,
+            grants,
             result_kind,
             result_capture,
             result_context,
@@ -133,14 +132,14 @@ impl<'store> ManagedHarnessController<'store> {
             )
             .await?;
 
-        for (activated, capability) in capabilities.iter().enumerate() {
-            if let Err(error) = capability.activate(&invocation).await {
-                deactivate_capabilities(&capabilities[..activated], &invocation.id).await;
+        for (activated, grant) in grants.iter().enumerate() {
+            if let Err(error) = grant.activate(&invocation).await {
+                revoke_grants(&grants[..activated], &invocation.id).await;
                 return self
                     .block_after_arm(
                         &invocation,
                         &binding,
-                        format!("invocation capability activation failed: {error}"),
+                        format!("invocation grant activation failed: {error}"),
                     )
                     .await;
             }
@@ -168,7 +167,7 @@ impl<'store> ManagedHarnessController<'store> {
             policy: policy.clone(),
         };
         if let Err(error) = harness.start_turn(&request).await {
-            deactivate_capabilities(&capabilities, &invocation.id).await;
+            revoke_grants(&grants, &invocation.id).await;
             return self
                 .block_after_arm(&invocation, &binding, format!("turn start failed: {error}"))
                 .await;
@@ -177,7 +176,7 @@ impl<'store> ManagedHarnessController<'store> {
         let terminal_result = self
             .await_terminal(harness, &invocation, &binding, &fence, &policy)
             .await;
-        deactivate_capabilities(&capabilities, &invocation.id).await;
+        revoke_grants(&grants, &invocation.id).await;
         let terminal = match terminal_result? {
             TerminalDrain::Terminal(terminal) => terminal,
             TerminalDrain::Blocked(blocked) => return Ok(ManagedTurnOutcome::Blocked(blocked)),
@@ -429,12 +428,9 @@ fn terminal_payload(
     payload
 }
 
-async fn deactivate_capabilities(
-    capabilities: &[Arc<dyn ManagedTurnCapability>],
-    invocation_id: &str,
-) {
-    for capability in capabilities.iter().rev() {
-        capability.deactivate(invocation_id).await;
+async fn revoke_grants(grants: &[Arc<dyn ManagedTurnGrant>], invocation_id: &str) {
+    for grant in grants.iter().rev() {
+        grant.deactivate(invocation_id).await;
     }
 }
 

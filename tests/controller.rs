@@ -11,21 +11,21 @@ use std::{
 
 use fleetd::{
     AcquireSessionBinding, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, Invocation,
-    InvocationState, ManagedHarnessController, ManagedTurn, ManagedTurnCapability,
-    ManagedTurnOutcome, OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock,
-    SessionAcquisitionMode, SessionBindingState, SessionPersistence, Store, ToolBudget, TurnPolicy,
-    TurnResultCapture, harness_acp_capabilities,
+    InvocationState, ManagedHarnessController, ManagedTurn, ManagedTurnGrant, ManagedTurnOutcome,
+    OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock, SessionAcquisitionMode,
+    SessionBindingState, SessionPersistence, Store, ToolBudget, TurnPolicy, TurnResultCapture,
+    harness_acp_interface,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
-struct RecordingCapability {
+struct RecordingGrant {
     store: Store,
     activated_after_arm: Arc<AtomicBool>,
     deactivated: Arc<AtomicBool>,
 }
 
-impl ManagedTurnCapability for RecordingCapability {
+impl ManagedTurnGrant for RecordingGrant {
     fn activate<'a>(&'a self, invocation: &'a Invocation) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
             let armed = self
@@ -40,7 +40,7 @@ impl ManagedTurnCapability for RecordingCapability {
             if armed {
                 Ok(())
             } else {
-                Err("capability activated before dispatch arm".to_owned())
+                Err("grant activated before dispatch arm".to_owned())
             }
         })
     }
@@ -60,7 +60,7 @@ fn harness_spec(mode: &str) -> PluginSpec {
     PluginSpec::new("mock.harness", "/usr/bin/python3")
         .with_arg(fixture_path())
         .with_arg(mode)
-        .require_all(harness_acp_capabilities())
+        .require_interface(harness_acp_interface())
         .with_request_timeout(Duration::from_secs(2))
 }
 
@@ -194,7 +194,7 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
     let (mut harness, session_ref, binding) = open_harness(&store, &agent_id, "healthy").await;
     let activated_after_arm = Arc::new(AtomicBool::new(false));
     let deactivated = Arc::new(AtomicBool::new(false));
-    let capability: Arc<dyn ManagedTurnCapability> = Arc::new(RecordingCapability {
+    let grant: Arc<dyn ManagedTurnGrant> = Arc::new(RecordingGrant {
         store: store.clone(),
         activated_after_arm: Arc::clone(&activated_after_arm),
         deactivated: Arc::clone(&deactivated),
@@ -210,7 +210,7 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
                     text: "perform managed work".to_owned(),
                 }],
                 policy: policy(),
-                capabilities: vec![capability],
+                grants: vec![grant],
                 result_kind: "work.result/v1".to_owned(),
                 result_capture: TurnResultCapture::Transcript,
                 result_context: json!({"adapter": "fixture"}),
@@ -270,7 +270,7 @@ async fn managed_controller_marks_unavailable_structured_capture_failed() {
                     text: "return structured work".to_owned(),
                 }],
                 policy: policy(),
-                capabilities: Vec::new(),
+                grants: Vec::new(),
                 result_kind: "work.attempt/v2".to_owned(),
                 result_capture: TurnResultCapture::FinalAssistantJson,
                 result_context: Value::Null,
@@ -309,7 +309,7 @@ async fn managed_controller_preserves_host_cancellation_over_runtime_end_turn() 
                     text: "run until the host deadline".to_owned(),
                 }],
                 policy: short_policy,
-                capabilities: Vec::new(),
+                grants: Vec::new(),
                 result_kind: "work.attempt/v1".to_owned(),
                 result_capture: TurnResultCapture::Transcript,
                 result_context: Value::Null,
@@ -347,7 +347,7 @@ async fn managed_controller_parks_post_arm_protocol_ambiguity() {
                     text: "perform ambiguous work".to_owned(),
                 }],
                 policy: policy(),
-                capabilities: Vec::new(),
+                grants: Vec::new(),
                 result_kind: "work.result/v1".to_owned(),
                 result_capture: TurnResultCapture::Transcript,
                 result_context: Value::Null,

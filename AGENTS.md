@@ -16,12 +16,19 @@ Read `VISION.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, and
   authenticated principal, not caller-supplied identity fields.
 - Keep network listeners on loopback until encrypted transport and enrollment
   are explicitly implemented.
-- Put domain behavior in out-of-process plugins with narrow, independently
-  versioned capabilities. Do not add a generic execution escape hatch.
+- Put harness and external-system integrations in out-of-process plugins behind
+  narrow, independently versioned operational interfaces. Do not add a generic
+  execution escape hatch.
+- Plugin manifests negotiate transport interfaces, never semantic capability
+  claims. Fleetd must not import a semantic compiler or understand its facts,
+  plans, offers, invocations, candidates, or conformance results.
+- Semantic integrations use public Fleetd artifacts through a separately
+  versioned lift/bridge/lower package. Fleetd source contains neither side of
+  that bridge and transports any resulting documents as opaque message data.
 - Launch plugin executables directly without a shell. Plugin stdout is protocol
   traffic only, and plugins must not receive fleetd credentials or ambient
   environment variables.
-- Exercise a proposed capability in at least two real implementations before
+- Exercise a proposed plugin interface in at least two real integrations before
   treating its contract as stable.
 - Reuse Git, harnesses, parsers, and model servers instead of rebuilding them.
 - Run formatting, clippy with warnings denied, and all tests before claiming a

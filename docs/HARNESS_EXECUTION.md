@@ -2,7 +2,7 @@
 
 Status: implementation baseline for M1. The typed host, vendor-owned plugins,
 durable session owner fencing, and continuous local worker exist; the
-capability contract remains a draft until two independently versioned harness
+operational interface remains a draft until two independently versioned harness
 plugins pass the complete qualification matrix.
 
 This document defines the layer between fleetd's durable agent inbox and an
@@ -31,7 +31,7 @@ flowchart TB
         db[(SQLite<br/>authoritative control state)]
         controller[Worker controller<br/>leases · sessions · invocations · policy]
         supervisor[Plugin supervisor<br/>lifecycle · generations · process cleanup]
-        broker[Capability broker<br/>invocation-scoped grants]
+        broker[Grant broker<br/>invocation-scoped authority]
 
         kernel <--> db
         controller <--> db
@@ -105,13 +105,13 @@ schema.
 | Native session handle | Harness issues it; fleetd stores it opaquely | Message protocol |
 | Model/tool loop | Harness | Worker controller |
 | Wall-clock and cancellation deadlines | Worker controller | Prompt text |
-| Tool or token budget strength | Negotiated effective capability | Requested configuration alone |
+| Tool or token budget strength | Negotiated effective enforcement | Requested configuration alone |
 | Retry, block, or admit result | Worker controller policy | Harness stop reason alone |
 | Raw trajectory | Harness session store | Fleetd message log |
 | Bounded evidence and provenance | fleetd execution ledger | Operator UI projection |
 
 The kernel still knows no `session`, `prompt`, `Codex`, or `DSH`. Those names
-exist in the controller, capability contract, and replaceable plugins.
+exist in the controller, harness interface, and replaceable plugins.
 
 ## Identity and fencing
 
@@ -189,7 +189,7 @@ One supervised launch attempt:
 
 - plugin generation and instance ID;
 - profile digest;
-- observed plugin and ACP capabilities;
+- observed plugin interfaces and ACP features;
 - start, ready, drain, exit, and forced-kill evidence;
 - desired versus effective configuration drift.
 
@@ -303,13 +303,13 @@ sequenceDiagram
     participant C as Worker controller
     participant P as Harness plugin
     participant A as ACP harness
-    participant B as Capability broker
+    participant B as Grant broker
 
     C->>K: claim delivery and reserve invocation
     K-->>C: message + lease + invocation fence
     C->>P: session.open or resume (binding + owner epoch)
     P->>A: initialize, then session/new or session/load
-    A-->>P: native session reference + effective capabilities
+    A-->>P: native session reference + effective ACP features
     P-->>C: session ready
     C->>K: atomically arm invocation + activate exact binding epoch
     K-->>C: durable dispatch authorization and exclusive session ownership
@@ -365,7 +365,7 @@ session is ready and `turn.start` is accepted.
 Only one active turn may own a binding. Session resumption requires:
 
 1. the same session compatibility key;
-2. an ACP capability that can load or resume the native reference;
+2. observed ACP support for loading or resuming the native reference;
 3. exclusive adoption with an incremented owner epoch;
 4. no unresolved invocation whose outcome might still arrive.
 
@@ -456,7 +456,7 @@ one of these enforcement strengths:
 | Captured event/output bytes | `hard` at the ACP host boundary |
 | Tool calls or batches | `observe_then_cancel` unless permission/MCP mediation gates admission |
 | Tokens | `provider_enforced` or `observe_then_cancel`; never inferred from prompt text |
-| External side effects | `hard` only through an idempotent or authorization-mediating capability |
+| External side effects | `hard` only through an idempotent or authorization-mediating grant |
 
 ACP tool updates may arrive after the harness has already admitted a tool. The
 ACP host therefore cannot advertise a hard tool budget merely because it counts
@@ -521,7 +521,7 @@ There are three different credential classes:
 2. **Model-provider credential:** supplied to the harness through an explicit
    broker, file descriptor, keychain lookup, or narrowly allowlisted launch
    field. It is never copied into a profile snapshot or log.
-3. **Invocation grant:** short-lived authority for a named fleet capability,
+3. **Invocation grant:** short-lived authority for a named Fleetd operation,
    bound to agent, invocation, fence, operation set, and expiry.
 
 The preferred privileged-action path is a controller-spawned MCP sidecar with
@@ -552,7 +552,7 @@ harness plugin digest
 = effective profile digest
 ```
 
-Qualification records observed capability responses rather than trusting CLI
+Qualification records observed runtime responses rather than trusting CLI
 flags or marketing claims. The architecture study identified this exact local
 DSH stack, which is not yet fully fleetd-qualified:
 
@@ -602,7 +602,7 @@ The first vertical slice now implements:
    safe fragment coalescing remain pending.
 4. **Observed instance evidence.** `describe` reports the profile digest,
    adapter digest, exact runtime identity, ACP SDK/protocol version, effective
-   capabilities, and bounded raw initialize response. Persisting those facts
+   ACP features, and bounded raw initialize response. Persisting those facts
    with lifecycle generation and exit evidence remains pending.
 5. **Bounded capture.** Frames are capped at one MiB and turn capture at 512
    KiB. Oversized JSON becomes an explicit byte-count and SHA-256 truncation
@@ -636,10 +636,10 @@ The inner turn controller deliberately requires an already-reserved invocation
 and a session acquired through the durable binding API. The continuous worker
 owns reservation, native create/resume, and opaque-reference recording before
 it invokes that controller. Invocation-event storage and persistent
-runtime-generation evidence are not implemented yet. The first capability
+runtime-generation evidence are not implemented yet. The first message-grant
 broker slice implements durable outbound peer messages only; inbox reads,
-dependency waiting, reviews, approvals, and other semantic operations remain
-separately versioned capabilities or work contracts.
+dependency waiting, reviews, approvals, and other domain operations remain
+outside the Fleetd runtime.
 
 These are reliability requirements for the first vertical loop, not a request
 to expand the messaging kernel with harness semantics.
@@ -657,10 +657,10 @@ cannot automatically reclaim an armed ambiguous attempt or session.
 
 ## First implementation acceptance matrix
 
-The ACP adapter and its agent-session capability implementations are not stable
+The Fleetd ACP harness interface is not stable
 until the same tests pass through both `codex-acp` and `dsh-acp`:
 
-1. initialize and capture exact effective capabilities;
+1. initialize and capture exact effective ACP features;
 2. create a session, finish a turn, restart the plugin, and resume a second
    turn when the harness advertises support;
 3. preserve text, reasoning, tool, plan, usage, and unknown update data;
@@ -690,8 +690,8 @@ turn and a second vendor-owned plugin are still required. See the
 [qualification record](qualification/acp-driver-2026-08-24.md). These partial
 results and the
 [OpenCode plugin checkpoint](qualification/opencode-plugin-2026-08-24.md) do
-not stabilize the capability or satisfy the matrix above. The later
-[real OpenCode message-capability checkpoint](qualification/message-capability-opencode-2026-08-24.md)
+not stabilize the interface or satisfy the matrix above. The later
+[real OpenCode message-grant checkpoint](qualification/message-grant-opencode-2026-08-24.md)
 does prove that one real model can discover the MCP tool and commit an
 attributed peer message through the continuous worker.
 

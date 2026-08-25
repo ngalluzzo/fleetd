@@ -28,7 +28,7 @@ async fn messages_are_durable_ordered_and_cursor_addressable() {
         .expect("create weaver");
     let channel = store
         .create_channel(CreateChannel {
-            name: "gooir-001".to_owned(),
+            name: "project-001".to_owned(),
             metadata: json!({}),
             member_ids: vec![piler.id.clone(), weaver.id.clone()],
         })
@@ -44,7 +44,7 @@ async fn messages_are_durable_ordered_and_cursor_addressable() {
                 recipient_id: Some(weaver.id.clone()),
                 kind: "review.requested/v1".to_owned(),
                 payload: json!({ "commit": "5fe343f" }),
-                correlation_id: Some("gooir-001".to_owned()),
+                correlation_id: Some("project-001".to_owned()),
                 causation_id: None,
             },
         )
@@ -59,7 +59,7 @@ async fn messages_are_durable_ordered_and_cursor_addressable() {
                 recipient_id: Some(piler.id),
                 kind: "review.completed/v1".to_owned(),
                 payload: json!({ "verdict": "approve" }),
-                correlation_id: Some("gooir-001".to_owned()),
+                correlation_id: Some("project-001".to_owned()),
                 causation_id: Some(first.id.clone()),
             },
         )

@@ -1,14 +1,14 @@
-# ACP transport for agent-session capabilities v1 draft
+# Fleetd ACP harness interface v1 draft
 
 Status: experimental. The adapter is not stable until the Codex and DSH
 acceptance matrix passes.
 
 This typed protocol adapter is carried over Fleetd's plugin lifecycle JSON-RPC
 transport. It wraps one ACP client connection with Fleetd ownership, fencing,
-deadlines, and evidence. Plugins advertise the independent GOOIR agent-session
-capabilities they implement; the `harness.acp.*` names below are transport
-methods, not capability identities. The adapter is deliberately smaller than
-ACP and is not an arbitrary protocol tunnel.
+deadlines, and evidence. Plugins advertise the exact operational interface
+`fleetd.harness-acp@0.1.0`; the `harness.acp.*` names below are its typed methods.
+The adapter is deliberately smaller than ACP and is not an arbitrary protocol
+tunnel. It makes no semantic claim about the work an agent can perform.
 
 ## Common rules
 
@@ -77,7 +77,7 @@ Result:
 
 `raw_initialize_result` preserves extension data but is subject to the frame
 bound and redaction policy. Readiness fails when observed runtime identity or
-capabilities do not match the immutable profile.
+ACP feature observations do not match the immutable profile.
 
 ## `harness.acp.session.open`
 
@@ -106,7 +106,7 @@ Request:
         "url": "http://127.0.0.1:49152/mcp",
         "headers": [
           {
-            "name": "x-fleetd-capability-token",
+            "name": "x-fleetd-grant-token",
             "value": "ephemeral-redacted-value"
           }
         ]
@@ -159,7 +159,7 @@ definition in `resolved_mcp_grants`. This second field is derived
 controller-to-driver data, never operator-authored desired state. The current
 host accepts only explicit `127.0.0.1` HTTP endpoints, rejects missing,
 duplicate, or unrequested resolutions, and redacts header values from debug
-output. Ephemeral capability tokens are not fleet bearer credentials and are
+output. Ephemeral grant tokens are not fleet bearer credentials and are
 not persisted in session-binding or effective-config evidence.
 
 ## `harness.acp.turn.start`
@@ -334,8 +334,9 @@ cancelled before the prompt can become quiescent. Expiry defaults to denial and
 is recorded; it never silently selects a permissive option.
 
 Other ACP agent-to-client requests, including optional filesystem or terminal
-services, are not tunneled through this capability. They require an explicitly
-negotiated typed capability or remain unadvertised to the inner agent.
+services, are not tunneled through this interface. They require another
+explicitly negotiated operational interface or remain unadvertised to the
+inner agent.
 
 ## `harness.acp.turn.cancel`
 

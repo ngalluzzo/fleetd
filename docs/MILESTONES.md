@@ -1,68 +1,58 @@
 # Milestones
 
-## M0 — Agents can talk (current)
+## M0 — Agents can talk
 
-- Durable identities, channels, and membership.
-- Immutable structured messages.
-- Cursor replay plus live WebSocket delivery.
-- A CLI that exposes the entire slice.
+- [x] Durable identities, channels, and membership.
+- [x] Immutable structured messages.
+- [x] Cursor replay plus live WebSocket delivery.
+- [x] A CLI exposing the complete messaging slice.
 
-## M1 — Harness inbox
+## M1 — Reliable harness inbox
 
 - [x] Local bearer credentials bound to agent identities.
-- [x] Out-of-process plugin lifecycle and exact capability negotiation.
-- [x] A durable invocation ledger with session generations, owner fencing, and
-  idempotent result append.
-- [x] Atomic delivery reservation and write-ahead invocation dispatch fence.
+- [x] Out-of-process plugin lifecycle with exact operational-interface
+  negotiation.
+- [x] Atomic delivery reservation and write-ahead dispatch fence.
 - [x] Atomic idempotent result publication and input acknowledgement.
-- [ ] Two independently versioned harness plugins qualified against the shared
-  typed ACP host. OpenCode is the first production-shaped plugin; historical
-  Codex and DSH qualification used the development reference plugin and must
-  move behind their own identities.
-- [x] A managed local worker controller that continuously consumes addressed
-  messages and replies with correlation and causation intact, with supervised
-  plugin restart and durable native-session adoption.
-- [x] Delivery leases, acknowledgement, retry, and restart resumption.
+- [x] Durable session bindings, generations, and owner epochs.
+- [x] Managed continuous worker with supervised plugin restart and native
+  session adoption.
 - [x] Durable unknown-outcome parking with operator-only resolution.
-- [x] First invocation-scoped outbound message capability: a real OpenCode
-  turn committed an idempotent, attributed peer message through a
-  controller-owned MCP endpoint without receiving a fleet bearer credential.
-- [x] A bounded two-seat OpenCode loop composed three capability-authored hops
-  and resumed A's same native session under a higher owner epoch.
-- [x] Versioned inbound message acceptance at the worker/adapter boundary so
-  continuous seats do not treat generic completion results as new work.
+- [ ] Qualify two independently versioned vendor harness plugins against the
+  complete `fleetd.harness-acp@0.1.0` matrix. OpenCode is the first
+  production-shaped integration; Codex still needs real-runtime qualification.
+- [ ] Persist plugin-generation and bounded invocation-event evidence rather
+  than keeping it only in controller memory and harness transcripts.
 
-## M2 — GOOIR capability ecosystem
+## M2 — Continuous workforce
 
-- [x] Negotiate one package-level GOOIR offer set containing several exact
-  capability implementations.
-- [x] Keep ACP as a transport for independently versioned agent-session
-  capabilities.
-- [x] Consume exact GOOIR invocations and results without teaching the worker
-  their domain meaning.
-- [x] Produce content-addressed GOOIR candidates with immutable Fleetd message
-  evidence while leaving conformance and admission to GOOIR.
-- [ ] Publish a separately versioned GOOIR protocol artifact and consume it as
-  Fleetd's single wire source of truth.
-- [ ] Advertise Fleetd's durable-message implementation as an exact GOOIR
-  capability while keeping invocation grants in the runtime layer.
-- [ ] Qualify two independent plugins that implement the same capability and
-  one plugin package that implements capabilities from two families.
+- [x] Invocation-scoped durable peer-message grant without Fleetd bearer
+  credentials in the harness.
+- [x] Bounded A → B → A run with exact correlation and causation lineage.
+- [x] Resume the originating native session after worker restart.
+- [x] Explicit inbound message-kind acceptance so results do not recursively
+  become new work.
+- [ ] Run several real seats continuously against one daemon for a full night
+  while recording restart, latency, throughput, and ambiguity evidence.
+- [ ] Add operator-visible worker, plugin-generation, session, and invocation
+  health through explicit read models.
+- [ ] Exercise an author/reviewer loop on Fleetd itself using only opaque
+  messages and external agent instructions.
 
-## M3 — Distributed work
+## M3 — Integration ecosystem
 
-- Define Git, GitHub, and GitLab capability packages as independent,
-  composable implementations rather than one repository provider interface.
-- Version task, progress, result, review, and approval capability contracts
-  outside Fleetd core.
-- Express dependency scheduling in GOOIR or a workflow package, not the
-  messaging kernel.
-- Exercise a complete author-reviewer loop on Fleetd itself.
-- Keep Git hosting, direct-push policy, and merge semantics outside Fleetd.
+- Stabilize the plugin authoring SDK only after two independent integrations
+  pass the same operational-interface suite.
+- Keep Git, GitHub, GitLab, issue trackers, and model servers in external
+  adapters or agent tools; do not add repository or workflow semantics to the
+  daemon.
+- Publish reproducible plugin qualification records and launch-profile digests.
+- Permit external lift/bridge/lower packages to consume public Fleetd artifacts
+  without adding their semantic systems to this repository.
 
 ## M4 — Operator surface
 
-- [x] First small web surface backed exclusively by the public API, with its
-  columns, actions, selector, and bindings derived from exact GOOIR target IR.
-- Fleet health, blocked work, message traces, and model throughput.
-- Remote workers only after authenticated transport is complete.
+- [x] First small browser surface backed only by public Fleetd APIs.
+- Fleet health, blocked work, message traces, session ownership, and model
+  throughput.
+- Remote workers only after authenticated encrypted transport and enrollment.

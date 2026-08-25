@@ -3,7 +3,7 @@
 ## Scope
 
 This checkpoint composes the continuous worker, durable session binding, and
-invocation-scoped `fleet.messaging.send` capability across two real OpenCode
+invocation-scoped `fleet.messaging.send` grant across two real OpenCode
 seats. It tests a bounded three-hop exchange:
 
 ```text
@@ -23,7 +23,7 @@ durable native session after process exit.
 ## Durable exchange
 
 Upstream seed `68143320-f20c-45e9-8ea9-b3ae923601f5` asked A to delegate one
-exact instruction to B. The following capability-authored messages committed:
+exact instruction to B. The following grant-authorized messages committed:
 
 | Sequence | Message | Sender -> recipient | Kind | Correlation | Causation |
 | --- | --- | --- | --- | --- | --- |

@@ -26,7 +26,7 @@ route, and non-secret process paths. The plugin constructed
 `OPENCODE_CONFIG_CONTENT` internally. No arbitrary environment map or provider
 credential field crossed the fleetd plugin configuration boundary.
 
-## Observed capabilities
+## Observed runtime features
 
 OpenCode reported native session loading, session list/resume/fork extensions,
 image and embedded-context prompt support, and HTTP/SSE MCP transports. The

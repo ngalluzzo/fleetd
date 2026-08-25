@@ -1,4 +1,4 @@
-//! Controller-owned, invocation-scoped capability endpoints.
+//! Controller-owned, invocation-scoped message grants.
 
 use std::{
     collections::BTreeSet,
@@ -33,14 +33,14 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    CreateMessage, FleetError, Invocation, ManagedTurnCapability, ResolvedMcpEndpoint,
-    ResolvedMcpGrant, ResolvedMcpHttpHeader, Store,
+    CreateMessage, FleetError, Invocation, ManagedTurnGrant, ResolvedMcpEndpoint, ResolvedMcpGrant,
+    ResolvedMcpHttpHeader, Store,
 };
 
-/// Semantic grant name resolved by the first message capability broker.
+/// Runtime grant name for invocation-scoped durable message publication.
 pub const PUBLISH_DURABLE_MESSAGE_GRANT: &str = "fleet.messaging.send";
 
-const CAPABILITY_HEADER: &str = "x-fleetd-capability-token";
+const GRANT_HEADER: &str = "x-fleetd-grant-token";
 const MAX_MESSAGES_PER_INVOCATION: u32 = 8;
 const MAX_OPERATION_ID_BYTES: usize = 128;
 const MAX_AGENT_ID_BYTES: usize = 256;
@@ -49,21 +49,21 @@ const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 
 /// Failure to establish the controller-owned loopback endpoint.
 #[derive(Debug, Error)]
-pub enum CapabilityBrokerError {
-    #[error("failed to bind capability broker: {0}")]
+pub enum MessageGrantBrokerError {
+    #[error("failed to bind message grant broker: {0}")]
     Bind(#[source] std::io::Error),
 }
 
 /// Running loopback MCP endpoint plus the authority handle used by the
 /// managed-turn controller.
-pub struct MessageCapabilityBroker {
+pub struct MessageGrantBroker {
     inner: Arc<MessageBrokerInner>,
     endpoint: ResolvedMcpGrant,
     cancellation: CancellationToken,
     task: Option<JoinHandle<()>>,
 }
 
-impl MessageCapabilityBroker {
+impl MessageGrantBroker {
     /// Binds a random loopback port and starts the official MCP Streamable HTTP
     /// server. The endpoint has no active invocation until the controller arms
     /// a turn.
@@ -71,11 +71,13 @@ impl MessageCapabilityBroker {
     /// # Errors
     ///
     /// Returns an error when the loopback listener cannot be bound.
-    pub async fn start(store: Store) -> Result<Self, CapabilityBrokerError> {
+    pub async fn start(store: Store) -> Result<Self, MessageGrantBrokerError> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
-            .map_err(CapabilityBrokerError::Bind)?;
-        let address = listener.local_addr().map_err(CapabilityBrokerError::Bind)?;
+            .map_err(MessageGrantBrokerError::Bind)?;
+        let address = listener
+            .local_addr()
+            .map_err(MessageGrantBrokerError::Bind)?;
         let token = Uuid::new_v4().to_string();
         let inner = Arc::new(MessageBrokerInner {
             store,
@@ -94,7 +96,7 @@ impl MessageCapabilityBroker {
                 .nest_service("/mcp", service)
                 .layer(middleware::from_fn_with_state(
                     token.clone(),
-                    require_capability_token,
+                    require_grant_token,
                 ));
         let server_cancellation = cancellation.clone();
         let task = tokio::spawn(async move {
@@ -102,7 +104,7 @@ impl MessageCapabilityBroker {
                 .with_graceful_shutdown(server_cancellation.cancelled_owned())
                 .await
             {
-                tracing::error!(%error, "message capability broker stopped unexpectedly");
+                tracing::error!(%error, "message grant broker stopped unexpectedly");
             }
         });
         Ok(Self {
@@ -112,7 +114,7 @@ impl MessageCapabilityBroker {
                 endpoint: ResolvedMcpEndpoint::Http {
                     url: format!("http://{address}/mcp"),
                     headers: vec![ResolvedMcpHttpHeader {
-                        name: CAPABILITY_HEADER.to_owned(),
+                        name: GRANT_HEADER.to_owned(),
                         value: token,
                     }],
                 },
@@ -131,7 +133,7 @@ impl MessageCapabilityBroker {
 
     /// Returns the generic managed-turn authority hook for this broker.
     #[must_use]
-    pub fn turn_capability(&self) -> Arc<dyn ManagedTurnCapability> {
+    pub fn turn_grant(&self) -> Arc<dyn ManagedTurnGrant> {
         self.inner.clone()
     }
 
@@ -144,7 +146,7 @@ impl MessageCapabilityBroker {
     }
 }
 
-impl Drop for MessageCapabilityBroker {
+impl Drop for MessageGrantBroker {
     fn drop(&mut self) {
         self.cancellation.cancel();
     }
@@ -169,7 +171,7 @@ struct MessageBrokerInner {
     active: Mutex<Option<ActiveMessageGrant>>,
 }
 
-impl ManagedTurnCapability for MessageBrokerInner {
+impl ManagedTurnGrant for MessageBrokerInner {
     fn activate<'a>(&'a self, invocation: &'a Invocation) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
             if invocation.lease_expires_at_ms <= now_ms() {
@@ -177,7 +179,7 @@ impl ManagedTurnCapability for MessageBrokerInner {
             }
             let mut active = self.active.lock().await;
             if active.is_some() {
-                return Err("message capability already has an active invocation".to_owned());
+                return Err("message grant already has an active invocation".to_owned());
             }
             *active = Some(ActiveMessageGrant {
                 invocation_id: invocation.id.clone(),
@@ -363,20 +365,20 @@ fn public_fleet_error(error: FleetError) -> String {
         | FleetError::Forbidden(_)
         | FleetError::Conflict(_) => error.to_string(),
         error => {
-            tracing::error!(%error, "message capability commit failed");
+            tracing::error!(%error, "message grant commit failed");
             "Fleetd could not commit the durable message".to_owned()
         }
     }
 }
 
-async fn require_capability_token(
+async fn require_grant_token(
     State(expected): State<String>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
     let supplied = request
         .headers()
-        .get(HeaderName::from_static(CAPABILITY_HEADER))
+        .get(HeaderName::from_static(GRANT_HEADER))
         .and_then(|value| value.to_str().ok());
     if supplied != Some(expected.as_str()) {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -424,7 +426,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_publish_is_invocation_scoped_attributed_and_idempotent() {
         let fixture = fixture().await;
-        let broker = MessageCapabilityBroker::start(fixture.store.clone())
+        let broker = MessageGrantBroker::start(fixture.store.clone())
             .await
             .expect("start broker");
         let ResolvedMcpEndpoint::Http { url, headers } = broker.resolved_grant().endpoint;
@@ -446,7 +448,7 @@ mod tests {
             call_publish(&client, "send-1", &fixture.peer.id, json!({"answer": 42})).await;
         assert_eq!(before_activation.is_error, Some(true));
 
-        let authority = broker.turn_capability();
+        let authority = broker.turn_grant();
         authority
             .activate(&fixture.invocation)
             .await
@@ -519,7 +521,7 @@ mod tests {
             .expect("create peer");
         let channel = store
             .create_channel(CreateChannel {
-                name: "capability-test".to_owned(),
+                name: "grant-test".to_owned(),
                 metadata: json!({}),
                 member_ids: vec![sender.id.clone(), worker.id.clone(), peer.id.clone()],
             })
@@ -613,9 +615,9 @@ mod tests {
     }
 
     #[test]
-    fn resolved_header_debug_output_redacts_the_capability_token() {
+    fn resolved_header_debug_output_redacts_the_grant_token() {
         let header = ResolvedMcpHttpHeader {
-            name: CAPABILITY_HEADER.to_owned(),
+            name: GRANT_HEADER.to_owned(),
             value: "secret-token".to_owned(),
         };
         let debug = format!("{header:?}");

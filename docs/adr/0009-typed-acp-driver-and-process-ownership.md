@@ -11,7 +11,7 @@
 
 ADR 0005 selects ACP as the inner harness protocol, but leaves two dangerous
 implementation choices open. Exposing generic JSON-RPC calls would let every
-controller invent an unversioned capability surface. Supervising only the outer
+controller invent an unversioned method surface. Supervising only the outer
 driver process would also leave its ACP adapter, model gateway, or tool
 descendants alive after a driver crash or host drop.
 
@@ -21,8 +21,8 @@ over which operations cross the trusted boundary.
 
 ## Decision
 
-The host exports `HarnessAcpClient` as the only typed protocol surface for the
-agent-session capability family over ACP v1. Generic protocol calls remain
+The host exports `HarnessAcpClient` as the only typed Fleetd harness interface
+over ACP v1. Generic protocol calls remain
 crate-private. The client
 validates local bounds before dispatch and admits notifications only when their
 complete fence and contiguous event sequence match its active turn.
@@ -32,7 +32,7 @@ fleetd lifecycle JSON-RPC; its inner transport uses the exactly pinned official
 Rust ACP SDK. Raw typed SDK wrappers retain unknown initialize results, session
 updates, permission requests, and prompt responses within explicit bounds. The
 driver verifies observed runtime name, version, adapter digest, protocol
-version, and effective capabilities against a strict immutable profile. It
+version, and effective ACP features against a strict immutable profile. It
 receives no ambient environment or fleet credential and grants the runtime only
 an allowlist of non-secret environment settings.
 

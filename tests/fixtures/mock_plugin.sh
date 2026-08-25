@@ -19,19 +19,19 @@ case "$mode" in
     ;;
   wrong-id)
     plugin_id='wrong.plugin'
-    offers='[{"implementation":{"package":"mock.plugin","name":"echo","version":"0.1.0"},"capability":{"package":"dev.fleetd.test","name":"echo","version":"1.0.0"},"implementation_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'
+    interfaces='[{"id":"fleetd.test.echo","version":"1.0.0"}]'
     ;;
-  missing-capability)
+  missing-interface)
     plugin_id='mock.plugin'
-    offers='[{"implementation":{"package":"mock.plugin","name":"other","version":"0.1.0"},"capability":{"package":"dev.fleetd.test","name":"other","version":"1.0.0"},"implementation_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'
+    interfaces='[{"id":"fleetd.test.other","version":"1.0.0"}]'
     ;;
-  duplicate-capability)
+  duplicate-interface)
     plugin_id='mock.plugin'
-    offers='[{"implementation":{"package":"mock.plugin","name":"echo","version":"0.1.0"},"capability":{"package":"dev.fleetd.test","name":"echo","version":"1.0.0"},"implementation_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"implementation":{"package":"mock.plugin","name":"echo","version":"0.1.0"},"capability":{"package":"dev.fleetd.test","name":"echo","version":"1.0.0"},"implementation_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'
+    interfaces='[{"id":"fleetd.test.echo","version":"1.0.0"},{"id":"fleetd.test.echo","version":"1.0.0"}]'
     ;;
   *)
     plugin_id='mock.plugin'
-    offers='[{"implementation":{"package":"mock.plugin","name":"echo","version":"0.1.0"},"capability":{"package":"dev.fleetd.test","name":"echo","version":"1.0.0"},"implementation_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'
+    interfaces='[{"id":"fleetd.test.echo","version":"1.0.0"}]'
     ;;
 esac
 
@@ -40,7 +40,7 @@ if [ "$mode" = 'unsupported-protocol' ]; then
   protocol_version=2
 fi
 
-printf '{"jsonrpc":"2.0","id":1,"result":{"protocol_version":%s,"plugin":{"id":"%s","name":"Mock plugin","version":"0.1.0"},"capability_offers":{"protocol":"org.gooi.capability.offers/v1","package":{"package":"mock.plugin","name":"package","version":"0.1.0"},"offers":%s}}}\n' "$protocol_version" "$plugin_id" "$offers"
+printf '{"jsonrpc":"2.0","id":1,"result":{"protocol_version":%s,"plugin":{"id":"%s","name":"Mock plugin","version":"0.1.0"},"interfaces":%s}}\n' "$protocol_version" "$plugin_id" "$interfaces"
 if [ "$mode" = 'plugin-request' ]; then
   printf '%s\n' '{"jsonrpc":"2.0","id":99,"method":"plugin.request","params":{}}'
 else

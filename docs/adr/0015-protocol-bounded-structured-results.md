@@ -23,12 +23,11 @@ result boundary.
 Turn adapters may choose transcript capture or final-assistant-JSON capture.
 The controller performs only boundary selection and whole-message JSON parsing.
 It retains the complete assistant transcript and records which protocol message
-supplied the structured value. It does not search prose, interpret capability
-meaning, or establish conformance.
+supplied the structured value. It does not search prose, interpret domain
+meaning, or establish domain conformance.
 
-The generic Fleetd envelope worker uses transcript capture. A capability plugin
-that needs structured output owns its semantic parsing and produces the exact
-GOOIR result contract outside Fleetd core.
+The generic Fleetd envelope worker uses transcript capture. An external adapter
+that needs structured domain output owns its semantic parsing outside Fleetd.
 
 ## Consequences
 
@@ -37,7 +36,7 @@ GOOIR result contract outside Fleetd core.
   evidence.
 - Runtimes that omit optional IDs still work for one JSON-only response but
   cannot claim a boundary across multiple messages.
-- ACP is one implementation of the boundary, not the capability itself. Other
+- ACP is one implementation of the message-boundary mechanism. Other
   harnesses may satisfy the same result capture with their own trustworthy
   final-message primitive.
 - Durable tool, reasoning, permission, and plan event fragments remain future

@@ -6,7 +6,7 @@ use fleetd::{
     ClaimDeliveries, ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError,
     CreateAgent, CreateChannel, CreateMessage, EnvelopeTurnAdapter, ExecutionCertainty,
     InboundAcceptance, InvocationState, PluginSpec, PreparedTurn, SessionBindingState, Store,
-    ToolBudget, TurnAdapter, TurnPolicy, harness_acp_capabilities,
+    ToolBudget, TurnAdapter, TurnPolicy, harness_acp_interface,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -19,7 +19,7 @@ fn harness_spec(mode: &str) -> PluginSpec {
     PluginSpec::new("mock.harness", "/usr/bin/python3")
         .with_arg(fixture_path())
         .with_arg(mode)
-        .require_all(harness_acp_capabilities())
+        .require_interface(harness_acp_interface())
         .with_request_timeout(Duration::from_secs(2))
 }
 
@@ -341,7 +341,7 @@ async fn session_open_crash_releases_unarmed_work_and_restarts_generation() {
         .with_arg(fixture_path())
         .with_arg("fail-open-once")
         .with_arg(&marker)
-        .require_all(harness_acp_capabilities())
+        .require_interface(harness_acp_interface())
         .with_request_timeout(Duration::from_secs(2));
     let worker = ContinuousHarnessWorker::new(&fixture.store, config, envelope_adapter())
         .expect("valid worker");

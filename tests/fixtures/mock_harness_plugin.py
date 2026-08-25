@@ -8,35 +8,6 @@ marker_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
 active_fence = None
 
 
-def harness_offers():
-    digest = "sha256:" + ("a" * 64)
-    capability_package = "org.gooi.capability.agent_session"
-    return {
-        "protocol": "org.gooi.capability.offers/v1",
-        "package": {
-            "package": "mock.harness",
-            "name": "package",
-            "version": "0.1.0",
-        },
-        "offers": [
-            {
-                "implementation": {
-                    "package": "mock.harness",
-                    "name": name,
-                    "version": "0.1.0",
-                },
-                "capability": {
-                    "package": capability_package,
-                    "name": name,
-                    "version": "1.0.0",
-                },
-                "implementation_digest": digest,
-            }
-            for name in ("open", "turn_execute", "permission_resolve", "close")
-        ],
-    }
-
-
 def send(payload):
     sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
     sys.stdout.flush()
@@ -56,7 +27,7 @@ result(
             "name": "Mock ACP harness",
             "version": "0.1.0",
         },
-        "capability_offers": harness_offers(),
+        "interfaces": [{"id": "fleetd.harness-acp", "version": "0.1.0"}],
     },
 )
 

@@ -1,9 +1,9 @@
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 use super::supervisor::PluginError;
-use crate::gooir::{CapabilityOfferSet, ExactIdentity};
 
 pub const LIFECYCLE_PROTOCOL_VERSION: u32 = 1;
 
@@ -15,19 +15,50 @@ pub struct PluginIdentity {
     pub version: Version,
 }
 
-/// Negotiated lifecycle version, identity, and GOOIR capability offers.
+/// One exact operational interface spoken by a plugin process.
+///
+/// An interface identifies a wire protocol implemented by the process. It says
+/// nothing about the semantic work an agent using that process can perform.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct PluginInterface {
+    pub id: String,
+    pub version: Version,
+}
+
+impl PluginInterface {
+    /// Creates an exact interface identity.
+    #[must_use]
+    pub fn new(id: impl Into<String>, version: Version) -> Self {
+        Self {
+            id: id.into(),
+            version,
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        validate_identifier("plugin interface", &self.id)
+    }
+}
+
+impl std::fmt::Display for PluginInterface {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}@{}", self.id, self.version)
+    }
+}
+
+/// Negotiated lifecycle version, identity, and operational interfaces.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PluginManifest {
     pub protocol_version: u32,
     pub plugin: PluginIdentity,
-    pub capability_offers: CapabilityOfferSet,
+    pub interfaces: Vec<PluginInterface>,
 }
 
 impl PluginManifest {
     pub(crate) fn validate(
         &self,
         expected_id: &str,
-        required: &[ExactIdentity],
+        required: &[PluginInterface],
     ) -> Result<(), PluginError> {
         if self.protocol_version != LIFECYCLE_PROTOCOL_VERSION {
             return Err(PluginError::ProtocolVersion {
@@ -47,13 +78,24 @@ impl PluginManifest {
                 "plugin name must contain between 1 and 128 bytes".to_owned(),
             ));
         }
-        self.capability_offers
-            .validate()
-            .map_err(|error| PluginError::InvalidManifest(error.to_string()))?;
-        for required_capability in required {
-            if !self.capability_offers.offers(required_capability) {
-                return Err(PluginError::MissingCapability {
-                    capability: required_capability.to_string(),
+        if self.interfaces.is_empty() {
+            return Err(PluginError::InvalidManifest(
+                "plugin must expose at least one operational interface".to_owned(),
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        for interface in &self.interfaces {
+            interface.validate().map_err(PluginError::InvalidManifest)?;
+            if !seen.insert(interface.clone()) {
+                return Err(PluginError::InvalidManifest(format!(
+                    "duplicate plugin interface {interface}"
+                )));
+            }
+        }
+        for required_interface in required {
+            if !seen.contains(required_interface) {
+                return Err(PluginError::MissingInterface {
+                    interface: required_interface.to_string(),
                 });
             }
         }

@@ -1404,7 +1404,7 @@ mod tests {
         request.resolved_mcp_grants[0].endpoint = ResolvedMcpEndpoint::Http {
             url: "http://127.0.0.1:49152/mcp".to_owned(),
             headers: vec![ResolvedMcpHttpHeader {
-                name: "x-fleetd-capability-token".to_owned(),
+                name: "x-fleetd-grant-token".to_owned(),
                 value: "narrow-token".to_owned(),
             }],
         };

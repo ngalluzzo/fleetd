@@ -16,10 +16,10 @@ use uuid::Uuid;
 
 use crate::{
     AcquireSessionBinding, FleetError, HarnessAcpClient, Invocation, ManagedHarnessController,
-    ManagedTurn, ManagedTurnCapability, ManagedTurnError, ManagedTurnOutcome,
-    MessageCapabilityBroker, OpenSession, OpenSessionMode, PUBLISH_DURABLE_MESSAGE_GRANT,
-    PluginError, PluginProcess, PluginSpec, PromptBlock, RetryDelivery, SessionAcquisitionMode,
-    Store, TurnPolicy, TurnResultCapture, plugin::Binding,
+    ManagedTurn, ManagedTurnError, ManagedTurnGrant, ManagedTurnOutcome, MessageGrantBroker,
+    OpenSession, OpenSessionMode, PUBLISH_DURABLE_MESSAGE_GRANT, PluginError, PluginProcess,
+    PluginSpec, PromptBlock, RetryDelivery, SessionAcquisitionMode, Store, TurnPolicy,
+    TurnResultCapture, plugin::Binding,
 };
 
 const MAX_LEASE_DURATION_MS: u64 = 3_600_000;
@@ -238,8 +238,8 @@ pub enum ContinuousWorkerError {
     InvalidConfig(String),
     #[error("turn adapter rejected a reserved message: {0}")]
     Adapter(String),
-    #[error("capability broker failed: {0}")]
-    CapabilityBroker(#[from] crate::CapabilityBrokerError),
+    #[error("message grant broker failed: {0}")]
+    MessageGrantBroker(#[from] crate::MessageGrantBrokerError),
     #[error("failed to safely release an unarmed reservation after {context}: {source}")]
     PreArmSettlement {
         context: String,
@@ -313,7 +313,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
             .iter()
             .any(|grant| grant == PUBLISH_DURABLE_MESSAGE_GRANT)
         {
-            Some(MessageCapabilityBroker::start(self.store.clone()).await?)
+            Some(MessageGrantBroker::start(self.store.clone()).await?)
         } else {
             None
         };
@@ -360,7 +360,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
         cancellation: &CancellationToken,
         max_settled_turns: Option<u64>,
         report: &mut WorkerReport,
-        broker: Option<&MessageCapabilityBroker>,
+        broker: Option<&MessageGrantBroker>,
     ) -> GenerationExit {
         let process = match PluginProcess::start(self.config.plugin.clone()).await {
             Ok(process) => process,
@@ -483,9 +483,9 @@ impl<'store> ContinuousHarnessWorker<'store> {
             }
             let opened_turn = OpenedTurn {
                 session: opened,
-                capabilities: context
+                grants: context
                     .broker
-                    .map(MessageCapabilityBroker::turn_capability)
+                    .map(MessageGrantBroker::turn_grant)
                     .into_iter()
                     .collect(),
             };
@@ -589,7 +589,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
                     session_ref: opened.session.session_ref,
                     prompt: prepared.prompt,
                     policy: self.config.turn_policy.clone(),
-                    capabilities: opened.capabilities,
+                    grants: opened.grants,
                     result_kind: prepared.result_kind,
                     result_capture: prepared.result_capture,
                     result_context: prepared.result_context,
@@ -724,7 +724,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 mcp_grants: self.config.mcp_grants.clone(),
                 resolved_mcp_grants: context
                     .broker
-                    .map(MessageCapabilityBroker::resolved_grant)
+                    .map(MessageGrantBroker::resolved_grant)
                     .into_iter()
                     .collect(),
                 profile_digest: context.identity.profile_digest.clone(),
@@ -789,7 +789,7 @@ struct OpenedSession {
 
 struct OpenedTurn {
     session: OpenedSession,
-    capabilities: Vec<Arc<dyn ManagedTurnCapability>>,
+    grants: Vec<Arc<dyn ManagedTurnGrant>>,
 }
 
 struct GenerationIdentity {
@@ -800,7 +800,7 @@ struct GenerationIdentity {
 
 struct GenerationContext<'a> {
     identity: &'a GenerationIdentity,
-    broker: Option<&'a MessageCapabilityBroker>,
+    broker: Option<&'a MessageGrantBroker>,
 }
 
 enum GenerationExit {

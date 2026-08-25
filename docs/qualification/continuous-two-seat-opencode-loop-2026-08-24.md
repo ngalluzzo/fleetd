@@ -2,7 +2,7 @@
 
 ## Scope
 
-This checkpoint reruns the A -> B -> A message-capability exchange with A and B
+This checkpoint reruns the A -> B -> A message-grant exchange with A and B
 started concurrently as unbounded continuous workers before the seed exists.
 It qualifies inbound acceptance v1 against real OpenCode turns and proves that
 cross-addressed completion envelopes do not become accidental work.
@@ -14,7 +14,7 @@ only `loop.start` and `loop.reply`; B accepted only `loop.delegate`.
 ## Exchange
 
 Upstream seed `8e4976a5-cfb7-4d53-87e1-a0d8eef1337c` produced these
-capability-authored hops:
+grant-authorized hops:
 
 | Sequence | Message | Sender -> recipient | Kind | Correlation | Causation |
 | --- | --- | --- | --- | --- | --- |
@@ -53,6 +53,6 @@ block a later match and that changing the acceptance set rotates session
 compatibility.
 
 This checkpoint qualifies one exact-kind selector and one harness
-implementation. It does not stabilize the message capability under the
+implementation. It does not stabilize the message grant under the
 two-implementation rule or establish payload-, sender-, or lineage-based
 selection.

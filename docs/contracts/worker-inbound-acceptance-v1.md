@@ -50,7 +50,7 @@ A non-matching delivery is skipped. It remains pending, receives no lease or
 invocation, and its attempt count does not change. A later matching delivery
 may therefore be selected without mutating an earlier non-match. Matching the
 kind establishes eligibility only. The envelope adapter preserves the payload
-without inferring semantics; a capability package that interprets it remains
+without inferring semantics; an external adapter that interprets it remains
 responsible for validating its exact contract.
 
 The public unfiltered inbox claim and invocation-reservation APIs retain their

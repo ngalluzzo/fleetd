@@ -5,7 +5,7 @@
 
 ## Context
 
-The first two-seat message-capability run showed that outbound authority and
+The first two-seat message-grant run showed that outbound authority and
 lineage were correct, but the semantic-neutral envelope worker reserved every
 addressed delivery. Managed completion publishes a result to the input sender,
 so two unbounded seats could mistake generic completion envelopes for fresh
@@ -48,7 +48,7 @@ compatibility, so a changed input policy rotates the binding generation.
   configured adapter or the unfiltered kernel API.
 - Output kinds do not become inputs implicitly; cycles must be declared.
 - Existing schema-1 worker files must be migrated intentionally.
-- V1 cannot express sender, channel, payload, lineage, or capability predicates.
+- V1 cannot express sender, channel, payload, lineage, or semantic predicates.
   Richer selectors require another version and evidence from real workloads.
 
 See the

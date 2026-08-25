@@ -34,7 +34,7 @@ raw usage evidence.
 
 The DSH adapter script digest was
 `sha256:5ba26ceb1816bf4ecae17084a162db06b457e2c77efbd6a0f4f564f2694d4a42`.
-Initialization returned the expected identity and capabilities. Session
+Initialization returned the expected identity and runtime features. Session
 creation failed closed with the adapter's authentication-required error. No raw
 credential was read, copied, logged, or added to the profile to bypass that
 boundary. DSH session, prompt, cancellation, and resume cases therefore remain
@@ -42,7 +42,7 @@ unqualified.
 
 ## Automated evidence
 
-- The typed host test covers exact capability negotiation, create/turn/close,
+- The typed host test covers exact operational-interface negotiation, create/turn/close,
   unknown-extension preservation, stale-fence rejection, local effect-boundary
   validation, and notification-overflow failure.
 - The driver integration test exercises the official SDK against a real ACP
@@ -81,5 +81,5 @@ Neither adapter has yet passed restart/resume, tool-active cancellation,
 pre-write and post-acceptance crash injection, generation replacement, or the
 complete credential-leak suite through this driver. DSH must additionally pass
 session creation and a real turn through an operator-approved credential or
-gateway profile. Until then, capability version `1` is negotiable for
+gateway profile. Until then, interface version `1` is negotiable for
 experimentation but not stable.

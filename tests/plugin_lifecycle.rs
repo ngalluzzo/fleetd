@@ -5,7 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use fleetd::{ExactIdentity, PluginError, PluginProcess, PluginSpec, ShutdownOutcome};
+use fleetd::{PluginError, PluginInterface, PluginProcess, PluginSpec, ShutdownOutcome};
+use semver::Version;
 use serde_json::json;
 
 fn fixture_spec(mode: &str) -> PluginSpec {
@@ -13,7 +14,10 @@ fn fixture_spec(mode: &str) -> PluginSpec {
         .with_arg(fixture_path())
         .with_arg(mode)
         .with_config(json!({ "secret": "must-not-appear-in-debug" }))
-        .require(ExactIdentity::new("dev.fleetd.test", "echo", "1.0.0"))
+        .require_interface(PluginInterface::new(
+            "fleetd.test.echo",
+            Version::new(1, 0, 0),
+        ))
         .with_initialize_timeout(Duration::from_millis(250))
         .with_request_timeout(Duration::from_millis(250))
         .with_shutdown_timeout(Duration::from_millis(100))
@@ -34,7 +38,7 @@ async fn start_error(spec: PluginSpec, message: &str) -> PluginError {
 }
 
 #[tokio::test]
-async fn healthy_plugin_negotiates_capabilities_notifications_and_shutdown() {
+async fn healthy_plugin_negotiates_interfaces_notifications_and_shutdown() {
     let spec = fixture_spec("healthy");
     assert!(!format!("{spec:?}").contains("must-not-appear-in-debug"));
     let mut plugin = PluginProcess::start(spec).await.expect("start plugin");
@@ -52,20 +56,20 @@ async fn healthy_plugin_negotiates_capabilities_notifications_and_shutdown() {
 }
 
 #[tokio::test]
-async fn identity_and_capability_mismatches_fail_closed() {
+async fn identity_and_interface_mismatches_fail_closed() {
     let identity = start_error(fixture_spec("wrong-id"), "wrong identity must fail").await;
     assert!(matches!(identity, PluginError::IdentityMismatch { .. }));
 
-    let capability = start_error(
-        fixture_spec("missing-capability"),
-        "missing capability must fail",
+    let interface = start_error(
+        fixture_spec("missing-interface"),
+        "missing interface must fail",
     )
     .await;
-    assert!(matches!(capability, PluginError::MissingCapability { .. }));
+    assert!(matches!(interface, PluginError::MissingInterface { .. }));
 
     let duplicate = start_error(
-        fixture_spec("duplicate-capability"),
-        "duplicate capability must fail",
+        fixture_spec("duplicate-interface"),
+        "duplicate interface must fail",
     )
     .await;
     assert!(matches!(duplicate, PluginError::InvalidManifest(_)));

@@ -4,47 +4,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::{PluginError, PluginManifest, PluginProcess};
-use crate::gooir::{
-    CAPABILITY_OFFERS_PROTOCOL, CapabilityOffer, CapabilityOfferSet, ExactIdentity,
-};
+use super::{PluginError, PluginInterface, PluginManifest, PluginProcess};
 
-const AGENT_SESSION_PACKAGE: &str = "org.gooi.capability.agent_session";
-const CAPABILITY_VERSION: &str = "1.0.0";
+pub const HARNESS_ACP_INTERFACE_ID: &str = "fleetd.harness-acp";
 const MAX_FLEET_ID_BYTES: usize = 256;
 const MAX_SESSION_REF_BYTES: usize = 4_096;
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
 const MAX_CAPTURE_BYTES: usize = 512 * 1024;
 
-/// The exact semantic capabilities composed by the ACP harness client.
+/// The exact operational interface implemented by an ACP harness plugin.
 #[must_use]
-pub fn capabilities() -> Vec<ExactIdentity> {
-    ["open", "turn_execute", "permission_resolve", "close"]
-        .into_iter()
-        .map(|name| ExactIdentity::new(AGENT_SESSION_PACKAGE, name, CAPABILITY_VERSION))
-        .collect()
-}
-
-/// Builds the GOOIR offer set for one exact harness plugin implementation.
-#[must_use]
-pub fn offer_set(
-    plugin_id: &str,
-    version: &str,
-    implementation_digest: &str,
-) -> CapabilityOfferSet {
-    CapabilityOfferSet {
-        protocol: CAPABILITY_OFFERS_PROTOCOL.to_owned(),
-        package: ExactIdentity::new(plugin_id, "package", version),
-        offers: capabilities()
-            .into_iter()
-            .map(|capability| CapabilityOffer {
-                implementation: ExactIdentity::new(plugin_id, capability.name.clone(), version),
-                capability,
-                implementation_digest: implementation_digest.to_owned(),
-            })
-            .collect(),
-        extensions: BTreeMap::new(),
-    }
+pub fn interface() -> PluginInterface {
+    PluginInterface::new(HARNESS_ACP_INTERFACE_ID, semver::Version::new(0, 1, 0))
 }
 
 /// Fleet-owned identity for one logical session lane.
@@ -106,7 +77,7 @@ pub struct OpenSession {
     pub additional_directories: Vec<String>,
     #[serde(default)]
     pub mcp_grants: Vec<String>,
-    /// Controller-resolved, capability-scoped endpoints for the requested
+    /// Controller-resolved, invocation-scoped endpoints for the requested
     /// grant names. These are trusted controller-to-driver data, never worker
     /// configuration supplied as arbitrary child commands.
     #[serde(default)]
@@ -114,7 +85,7 @@ pub struct OpenSession {
     pub profile_digest: String,
 }
 
-/// One controller-approved MCP endpoint resolving an exact semantic grant.
+/// One controller-approved MCP endpoint resolving an exact runtime grant.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ResolvedMcpGrant {
     pub name: String,
@@ -351,12 +322,11 @@ pub struct HarnessAcpClient {
 
 impl HarnessAcpClient {
     pub(crate) fn new(process: PluginProcess) -> Result<Self, PluginError> {
-        for required in capabilities() {
-            if !process.manifest().capability_offers.offers(&required) {
-                return Err(PluginError::MissingCapability {
-                    capability: required.to_string(),
-                });
-            }
+        let required = interface();
+        if !process.manifest().interfaces.contains(&required) {
+            return Err(PluginError::MissingInterface {
+                interface: required.to_string(),
+            });
         }
         Ok(Self {
             process,

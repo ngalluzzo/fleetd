@@ -5,7 +5,7 @@ use std::{path::PathBuf, time::Duration};
 use fleetd::{
     Binding, ExecutionFence, HarnessAcpClient, HarnessAcpNotification, HarnessExecutionCertainty,
     OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock, StartTurn, ToolBudget,
-    TurnPolicy, TurnSource, harness_acp_capabilities,
+    TurnPolicy, TurnSource, harness_acp_interface,
 };
 use serde_json::json;
 
@@ -29,7 +29,7 @@ fn driver_spec() -> PluginSpec {
             "environment": {}
         }
     }))
-    .require_all(harness_acp_capabilities())
+    .require_interface(harness_acp_interface())
     .with_initialize_timeout(Duration::from_secs(5))
     .with_request_timeout(Duration::from_secs(5))
 }
