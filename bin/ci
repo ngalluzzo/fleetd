@@ -25,6 +25,13 @@ git diff --exit-code -- clients/typescript/src/generated
 )
 git diff --exit-code -- web/conversation/conversation.js
 
+(
+    cd apps/conversation-desktop
+    npm ci
+    npm run typecheck
+    npm test
+)
+
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features

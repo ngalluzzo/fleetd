@@ -176,6 +176,14 @@ the owner epoch, and the human accumulated no leased inbox work. See the
 [qualification record](docs/qualification/live-human-agent-conversation-2026-08-25.md)
 and [exact machine evidence](docs/qualification/live-human-agent-conversation-2026-08-25.json).
 
+Fleetd also serves a usable same-origin presentation at `/conversation/`. It
+uses the shared headless TypeScript session, the public browser stream, and no
+polling fallback. Open it in an ordinary browser and connect explicitly, or
+build the [Electrobun desktop host](apps/conversation-desktop/README.md), which
+loads the same page in a native system webview and sources its two authorities
+from separate owner-only files. Neither target adds conversation semantics to
+the daemon.
+
 ## Semantic boundary
 
 Fleetd message kinds and JSON payloads are opaque transport data. Fleetd does

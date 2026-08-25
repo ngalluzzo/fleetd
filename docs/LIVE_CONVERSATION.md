@@ -229,3 +229,26 @@ retains an opaque fallback for every other message. It may display connection
 state because that is locally observed transport evidence. It may not label an
 agent as working, synthesize typing messages, or expose live tool activity
 until the separate operator-event subscription exists.
+
+## Visible desktop host
+
+`apps/conversation-desktop` is a replaceable Electrobun 2.0.1 window around the
+same served page. Electrobun supplies the native system webview; it does not
+supply a second conversation client. The main process uses Bun, loads only an
+exact loopback `/conversation/` URL, and restricts subsequent navigation to
+that URL.
+
+The desktop profile names the origin, human participant, optional initial
+channel, application request/result kinds, and absolute paths to separate
+operator and participant credential files. The profile and both credential
+files must be regular, current-user-owned files with no group or other
+permissions. The host rejects links, relative paths, non-loopback origins,
+expanded fields, and whitespace-bearing bearer values. It hands the two
+credentials to the presentation once after DOM readiness, then clears its
+copies. No credential is placed in the page URL, generated bundle, profile,
+log, cookie, or persistent browser storage.
+
+The desktop host is not qualification authority for browser behavior. Bun's
+real WebKit `WebView` remains the deterministic acceptance runtime for the
+presentation, while the Electrobun build and visible-window smoke test prove
+only the native packaging boundary.

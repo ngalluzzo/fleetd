@@ -55,6 +55,13 @@ of truth. The same page remains directly usable in an ordinary browser, and a
 future TUI can implement `ConversationTransport` with the public bearer-
 authenticated native WebSocket without importing browser or desktop code.
 
+The first visible host uses Electrobun 2.0.1 with a Bun main process and the
+platform-native renderer. Its strict profile refers to separate owner-only
+credential files rather than embedding bearer values. It loads only the exact
+configured loopback conversation URL and performs one fire-and-forget handoff
+to the page's public bootstrap object. Electrobun remains replaceable because
+no transport or session operation crosses into the host.
+
 ## State and race rules
 
 - SQLite and the immutable Fleetd message log remain the only conversation

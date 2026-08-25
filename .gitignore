@@ -5,3 +5,8 @@ node_modules/
 /fleetd.db-wal
 /.fleetd/
 .DS_Store
+/apps/conversation-desktop/.hutch/
+/apps/conversation-desktop/.cottontail-tmp/
+/apps/conversation-desktop/artifacts/
+/apps/conversation-desktop/build/
+/apps/conversation-desktop/dist/
