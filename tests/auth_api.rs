@@ -396,6 +396,27 @@ async fn sender_attribution_and_inbox_access_are_bound_to_the_agent_credential()
         .expect("spoof response");
     assert_eq!(spoof.status(), reqwest::StatusCode::UNPROCESSABLE_ENTITY);
 
+    let envelope_extension = server
+        .post(
+            &format!("/v1/channels/{}/messages", channel.id),
+            Some(&alice.credential.token),
+        )
+        .json(&json!({
+            "recipient_id": bob.agent.id,
+            "kind": "future-contract/v7",
+            "payload": { "opaque_extension": [1, true, null] },
+            "correlation_id": null,
+            "causation_id": null,
+            "future_envelope_extension": { "must_not_be_discarded": true }
+        }))
+        .send()
+        .await
+        .expect("unknown envelope field response");
+    assert_eq!(
+        envelope_extension.status(),
+        reqwest::StatusCode::UNPROCESSABLE_ENTITY
+    );
+
     let sent = send_message(&server, &channel.id, &alice, &bob.agent.id).await;
     assert_eq!(sent.sender_id, alice.agent.id);
     let operator_send = server

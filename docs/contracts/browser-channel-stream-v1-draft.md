@@ -170,10 +170,14 @@ Every replayed or live message uses:
 }
 ```
 
-Messages are ordered by ascending `seq` and preserve the exact immutable
-envelope. Replay emits every principal-visible message with `seq > after` in
-bounded pages. The live receiver then continues from the last emitted cursor.
-Broadcast lag returns to durable replay rather than skipping records.
+Messages are ordered by ascending `seq` and preserve every field of the exact
+immutable Fleetd envelope. The envelope itself is closed: Fleetd rejects
+unknown top-level message fields instead of silently discarding or assigning
+semantics to them. Ecosystem contracts extend messages through the versioned
+`kind` and opaque `payload`; Fleetd stores and forwards both unchanged. Replay
+emits every principal-visible message with `seq > after` in bounded pages. The
+live receiver then continues from the last emitted cursor. Broadcast lag
+returns to durable replay rather than skipping records.
 
 Client application messages after redemption are unsupported. Close frames
 are honored; other data closes with `4400 invalid_handshake`. Protocol ping and
@@ -233,7 +237,8 @@ The protocol is not complete until automated tests prove:
 10. broadcast lag and send backpressure close or replay without a silent gap;
 11. reconnect from every prior cursor is ordered and duplicate-tolerant;
 12. direct messages never leak across another member's browser stream;
-13. unknown kinds, payloads, and envelope extension data survive unchanged;
+13. unknown kinds and opaque payloads survive unchanged, while unknown
+    top-level envelope fields fail closed;
 14. daemon restart invalidates unused grants without affecting durable replay;
 15. native bearer and browser-grant streams produce equivalent visible message
     sequences for the same principal and cursor; and
