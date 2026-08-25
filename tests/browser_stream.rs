@@ -201,6 +201,9 @@ impl Drop for BrowserDaemon {
 }
 
 type BrowserSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+const PER_CREDENTIAL_BROWSER_STREAM_CAPACITY: usize = 16;
+const APPLICATION_SEND_DEADLINE: Duration = Duration::from_secs(10);
+const CAPACITY_OBSERVATION_DEADLINE: Duration = Duration::from_secs(20);
 
 #[tokio::test]
 async fn browser_stream_replays_filters_continues_and_reconnects() {
@@ -561,6 +564,115 @@ async fn slow_browser_disconnect_replays_broadcast_lag_from_last_accepted_cursor
             &author.credential.token,
             None,
             "backpressure.live/v1",
+            json!({"after_replay": true}),
+        )
+        .await;
+    assert_message(next_server_frame(&mut replay).await, &live);
+}
+
+#[tokio::test]
+async fn browser_send_deadline_releases_capacity_before_cursor_replay() {
+    let daemon = BrowserDaemon::start().await;
+    let author = daemon.register("send-deadline-author").await;
+    let watcher = daemon.register("send-deadline-watcher").await;
+    let channel = daemon
+        .channel(
+            "browser-send-deadline",
+            vec![author.agent.id.clone(), watcher.agent.id.clone()],
+        )
+        .await;
+    let checkpoint = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "send-deadline.checkpoint/v1",
+            json!({"accepted": true}),
+        )
+        .await;
+
+    let stalled_sockets = saturate_browser_stream_credential(
+        &daemon,
+        &channel.id,
+        &watcher.credential.token,
+        &checkpoint,
+    )
+    .await;
+
+    assert!(
+        redeem_capacity_probe(
+            &daemon,
+            &channel.id,
+            &watcher.credential.token,
+            checkpoint.seq,
+        )
+        .await
+        .is_none(),
+        "the public edge did not expose the production per-credential bound"
+    );
+
+    // Every slow client has accepted exactly the checkpoint and now stops
+    // reading. A one-MiB text frame cannot drain through its 1-KiB receive
+    // buffer, so the ordinary production WebSocket send path becomes the only
+    // way any credential-scoped active slot can be released before the
+    // 30-second idle credential revalidation interval.
+    let send_started = tokio::time::Instant::now();
+    let first_blocking = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "send-deadline.blocking/v1",
+            json!({"part": 1, "opaque": "x".repeat(1_048_576)}),
+        )
+        .await;
+    let second_blocking = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "send-deadline.blocking/v1",
+            json!({"part": 2, "opaque": "y".repeat(1_048_576)}),
+        )
+        .await;
+    let queued_tail = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "send-deadline.queued/v1",
+            json!({"after_blocked_send": true}),
+        )
+        .await;
+
+    let (mut replay, ready) = wait_for_browser_stream_capacity(
+        &daemon,
+        &channel.id,
+        &watcher.credential.token,
+        checkpoint.seq,
+    )
+    .await;
+    let capacity_released_after = send_started.elapsed();
+    assert!(
+        capacity_released_after >= APPLICATION_SEND_DEADLINE,
+        "browser capacity was released before the fixed application send deadline: {capacity_released_after:?}"
+    );
+    assert_eq!(
+        stalled_sockets.len(),
+        PER_CREDENTIAL_BROWSER_STREAM_CAPACITY
+    );
+
+    assert_ready(ready, &channel.id, checkpoint.seq);
+    for expected in [&first_blocking, &second_blocking, &queued_tail] {
+        assert_message(next_server_frame(&mut replay).await, expected);
+    }
+
+    let live = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "send-deadline.live/v1",
             json!({"after_replay": true}),
         )
         .await;
@@ -1012,6 +1124,76 @@ async fn connect_browser_with_receive_buffer(
         MaybeTlsStream::Plain(stream),
     )
     .await
+}
+
+async fn saturate_browser_stream_credential(
+    daemon: &BrowserDaemon,
+    channel_id: &str,
+    token: &str,
+    checkpoint: &Message,
+) -> Vec<BrowserSocket> {
+    let mut sockets = Vec::with_capacity(PER_CREDENTIAL_BROWSER_STREAM_CAPACITY);
+    for _ in 0..PER_CREDENTIAL_BROWSER_STREAM_CAPACITY {
+        let grant = daemon.issue(channel_id, token, 0).await;
+        let (mut socket, _) = connect_browser_with_receive_buffer(daemon, 1_024)
+            .await
+            .expect("slow browser upgrade");
+        redeem(&mut socket, grant).await;
+        assert_ready(next_server_frame(&mut socket).await, channel_id, 0);
+        assert_message(next_server_frame(&mut socket).await, checkpoint);
+        sockets.push(socket);
+    }
+    sockets
+}
+
+async fn redeem_capacity_probe(
+    daemon: &BrowserDaemon,
+    channel_id: &str,
+    token: &str,
+    after: i64,
+) -> Option<(BrowserSocket, BrowserStreamServerFrame)> {
+    let issued = daemon.issue(channel_id, token, after).await;
+    let (mut socket, _) = connect_browser(daemon, None, None)
+        .await
+        .expect("capacity probe upgrade");
+    redeem(&mut socket, issued).await;
+    let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+        .await
+        .expect("capacity probe response timeout")
+        .expect("capacity probe response")
+        .expect("valid capacity probe response");
+    match frame {
+        WebSocketMessage::Text(text) => Some((
+            socket,
+            serde_json::from_str(&text).expect("capacity probe server frame"),
+        )),
+        WebSocketMessage::Close(Some(close)) => {
+            assert_eq!(u16::from(close.code), 4_401);
+            assert_eq!(close.reason, "grant_rejected");
+            None
+        }
+        other => panic!("unexpected capacity probe response: {other:?}"),
+    }
+}
+
+async fn wait_for_browser_stream_capacity(
+    daemon: &BrowserDaemon,
+    channel_id: &str,
+    token: &str,
+    after: i64,
+) -> (BrowserSocket, BrowserStreamServerFrame) {
+    tokio::time::timeout(CAPACITY_OBSERVATION_DEADLINE, async {
+        let mut probes = tokio::time::interval(Duration::from_millis(250));
+        probes.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            probes.tick().await;
+            if let Some(ready) = redeem_capacity_probe(daemon, channel_id, token, after).await {
+                break ready;
+            }
+        }
+    })
+    .await
+    .expect("production send deadline did not release browser stream capacity")
 }
 
 async fn connect_native(
