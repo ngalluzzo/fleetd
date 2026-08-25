@@ -8,11 +8,13 @@
     "node": ">=22.13.0"
   },
   "exports": {
-    ".": "./src/generated/index.ts",
+    ".": "./src/index.ts",
+    "./browser-channel-stream": "./src/browser-channel-stream.ts",
     "./client": "./src/generated/client.gen.ts"
   },
   "scripts": {
     "generate": "openapi-ts",
+    "test": "node --experimental-strip-types --test test/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
