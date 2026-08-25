@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun build src/main.ts --target browser --format=iife --outfile=../../web/conversation/conversation.js",
+    "build": "bun run build:application && bun run build:styles",
+    "build:application": "bun build src/main.ts --target browser --format=iife --outfile=../../web/conversation/conversation.js",
+    "build:styles": "bun build src/styles/index.css --target browser --outfile=../../web/conversation/conversation.css",
     "test": "bun test",
     "typecheck": "../../clients/typescript/node_modules/.bin/tsc --noEmit -p tsconfig.json"
   }

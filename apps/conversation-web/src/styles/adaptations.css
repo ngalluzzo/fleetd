@@ -1,0 +1,243 @@
+@layer adaptations {
+  @media (max-width: 56rem) {
+    .connect-panel {
+      grid-template-columns: minmax(0, 1fr) minmax(21rem, 25rem);
+      gap: var(--fd-space-10);
+    }
+
+    .conversation-app {
+      grid-template-columns: 14rem minmax(0, 1fr);
+    }
+
+    .brand-row {
+      display: block;
+    }
+
+    .brand-row .connection-status {
+      margin-top: var(--fd-space-3);
+    }
+
+    .conversation-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem);
+      gap: var(--fd-space-5);
+    }
+
+    .target-control {
+      min-width: 0;
+    }
+
+    .message > header code {
+      display: none;
+    }
+  }
+
+  @media (max-width: 44rem) {
+    .connect-panel {
+      width: min(100% - var(--fd-space-8), 32rem);
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--fd-space-10);
+      padding-block: var(--fd-space-10);
+    }
+
+    .connect-copy h1 {
+      font-size: clamp(3.25rem, 17vw, 5.25rem);
+    }
+
+    .contract-fields {
+      grid-template-columns: 1fr;
+    }
+
+    .conversation-app {
+      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .sidebar {
+      display: grid;
+      min-height: 0;
+      grid-template-rows: auto;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      border-right: 0;
+      border-bottom: 1px solid var(--fd-color-border-subtle);
+    }
+
+    .brand-row {
+      display: block;
+      min-height: 0;
+      border-bottom: 0;
+      padding: var(--fd-space-3) var(--fd-space-4);
+    }
+
+    .brand-row .eyebrow,
+    .connection-status,
+    .sidebar-footer p {
+      display: none;
+    }
+
+    .brand-row h1 {
+      margin: 0;
+      font-size: var(--fd-text-sm);
+    }
+
+    .channel-list {
+      min-width: 0;
+      flex-direction: row;
+      gap: var(--fd-space-1);
+      overflow-x: auto;
+      padding: var(--fd-space-2) 0;
+      scrollbar-width: none;
+    }
+
+    .channel-navigation {
+      display: block;
+      min-width: 0;
+    }
+
+    .navigation-heading {
+      display: none;
+    }
+
+    .channel-list::-webkit-scrollbar {
+      display: none;
+    }
+
+    .channel-list:empty::before {
+      display: none;
+    }
+
+    .channel-button {
+      width: auto;
+      max-width: min(15rem, 52vw);
+      flex: 0 0 auto;
+      padding-inline: var(--fd-space-3);
+    }
+
+    .sidebar-footer {
+      border-top: 0;
+      padding: var(--fd-space-2) var(--fd-space-3);
+    }
+
+    .sidebar-footer .quiet-button {
+      width: auto;
+      min-height: var(--fd-control-sm);
+      padding-inline: var(--fd-space-2);
+      white-space: nowrap;
+    }
+
+    .conversation-header {
+      min-height: 0;
+      align-items: stretch;
+      grid-template-columns: minmax(0, 1fr);
+      gap: var(--fd-space-3);
+      padding: var(--fd-space-3) var(--fd-space-4);
+    }
+
+    .target-control {
+      min-width: 0;
+    }
+
+    .message-list {
+      padding: var(--fd-space-5) var(--fd-space-4);
+    }
+
+    .message {
+      width: 96%;
+    }
+
+    .message details pre {
+      width: min(30rem, 74vw);
+    }
+
+    .composer {
+      width: calc(100% - (var(--fd-space-3) * 2));
+      margin-bottom: var(--fd-space-3);
+    }
+
+    .composer-footer > span {
+      display: none;
+    }
+
+    .composer-footer {
+      justify-content: flex-end;
+      padding-left: var(--fd-space-2);
+    }
+  }
+
+  @media (max-width: 28rem) {
+    .brand-row {
+      display: none;
+    }
+
+    .connect-panel {
+      width: calc(100% - var(--fd-space-6));
+      padding-block: var(--fd-space-6);
+    }
+
+    .connect-form {
+      padding: var(--fd-space-5);
+    }
+
+    .message-list {
+      padding-inline: var(--fd-space-3);
+    }
+
+    .message {
+      width: 100%;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+  }
+
+  @media (prefers-contrast: more) {
+    :root {
+      --fd-color-text-secondary: #c8d0d9;
+      --fd-color-text-tertiary: #a6b0bb;
+      --fd-color-border-subtle: rgba(240, 244, 248, 0.18);
+      --fd-color-border: rgba(240, 244, 248, 0.28);
+      --fd-color-border-strong: rgba(240, 244, 248, 0.48);
+    }
+  }
+
+  @media (forced-colors: active) {
+    :root {
+      --fd-shadow-focus: none;
+    }
+
+    body,
+    .connect-form,
+    .conversation-app,
+    .sidebar,
+    .conversation-pane,
+    .message-region {
+      background: Canvas;
+    }
+
+    .primary-button,
+    .send-button,
+    .channel-button[aria-pressed="true"] {
+      border: 1px solid ButtonText;
+    }
+
+    .connection-status::before,
+    .invariant-mark {
+      background: currentColor;
+      forced-color-adjust: none;
+    }
+
+    :focus-visible {
+      outline: 3px solid Highlight;
+      outline-offset: 3px;
+    }
+  }
+}

@@ -1,0 +1,54 @@
+@layer reset {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    min-height: 100%;
+    hanging-punctuation: first last;
+    text-size-adjust: none;
+  }
+
+  body {
+    min-height: 100%;
+    margin: 0;
+  }
+
+  h1,
+  h2,
+  h3,
+  p {
+    overflow-wrap: break-word;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    margin: 0;
+    border: 0;
+    font: inherit;
+  }
+
+  button,
+  select {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    cursor: not-allowed;
+  }
+
+  textarea:not([rows]) {
+    min-height: 10em;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+}

@@ -1,0 +1,236 @@
+@layer components {
+  .button,
+  .primary-button,
+  .send-button,
+  .quiet-button {
+    display: inline-flex;
+    min-height: var(--fd-control-md);
+    align-items: center;
+    justify-content: center;
+    gap: var(--fd-space-2);
+    border: 1px solid transparent;
+    border-radius: var(--fd-radius-md);
+    padding: var(--fd-space-2) var(--fd-space-3);
+    font-size: var(--fd-text-sm);
+    font-weight: var(--fd-font-weight-semibold);
+    line-height: 1;
+    text-align: center;
+    user-select: none;
+    transition:
+      border-color var(--fd-duration-fast) var(--fd-ease-standard),
+      background-color var(--fd-duration-fast) var(--fd-ease-standard),
+      color var(--fd-duration-fast) var(--fd-ease-standard),
+      opacity var(--fd-duration-fast) var(--fd-ease-standard),
+      transform var(--fd-duration-fast) var(--fd-ease-standard);
+  }
+
+  .button:hover:not(:disabled),
+  .primary-button:hover:not(:disabled),
+  .send-button:hover:not(:disabled),
+  .quiet-button:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .button:active:not(:disabled),
+  .primary-button:active:not(:disabled),
+  .send-button:active:not(:disabled),
+  .quiet-button:active:not(:disabled) {
+    transform: translateY(0);
+  }
+
+  .button:disabled,
+  .primary-button:disabled,
+  .send-button:disabled,
+  .quiet-button:disabled {
+    color: var(--fd-color-text-disabled);
+    opacity: 0.54;
+  }
+
+  .primary-button,
+  .send-button {
+    background: var(--fd-color-accent);
+    color: var(--fd-color-text-on-accent);
+    box-shadow: var(--fd-shadow-xs);
+  }
+
+  .primary-button > *,
+  .send-button > * {
+    pointer-events: none;
+  }
+
+  .primary-button:hover:not(:disabled),
+  .send-button:hover:not(:disabled) {
+    background: var(--fd-color-accent-hover);
+  }
+
+  .primary-button:active:not(:disabled),
+  .send-button:active:not(:disabled) {
+    background: var(--fd-color-accent-active);
+  }
+
+  .primary-button {
+    min-height: var(--fd-control-lg);
+  }
+
+  .quiet-button {
+    min-height: var(--fd-control-sm);
+    justify-content: flex-start;
+    border-color: var(--fd-color-border-subtle);
+    background: transparent;
+    color: var(--fd-color-text-secondary);
+    font-weight: var(--fd-font-weight-medium);
+  }
+
+  .quiet-button:hover:not(:disabled) {
+    border-color: rgba(223, 146, 146, 0.24);
+    background: var(--fd-color-danger-soft);
+    color: var(--fd-color-danger-hover);
+  }
+
+  .form-error {
+    border-left: 2px solid var(--fd-color-danger);
+    margin: var(--fd-space-2) 0 0;
+    padding: var(--fd-space-2) var(--fd-space-3);
+    border-radius: 0 var(--fd-radius-sm) var(--fd-radius-sm) 0;
+    background: var(--fd-color-danger-soft);
+    color: var(--fd-color-danger) !important;
+    font-size: var(--fd-text-xs);
+    line-height: var(--fd-leading-body);
+  }
+
+  .field {
+    display: grid;
+    gap: var(--fd-space-2);
+  }
+
+  .field label {
+    color: var(--fd-color-text-secondary);
+    font-size: var(--fd-text-xs);
+    font-weight: var(--fd-font-weight-medium);
+    line-height: 1.25;
+  }
+
+  .field-hint,
+  .target-description,
+  .composer-hint {
+    margin: 0;
+    color: var(--fd-color-text-tertiary);
+    font-size: var(--fd-text-2xs);
+    line-height: var(--fd-leading-body);
+  }
+
+  .advanced-settings {
+    border: 1px solid var(--fd-color-border-subtle);
+    border-radius: var(--fd-radius-lg);
+    background: var(--fd-color-surface-inset);
+  }
+
+  .advanced-summary {
+    display: flex;
+    min-height: var(--fd-control-md);
+    align-items: center;
+    gap: var(--fd-space-2);
+    padding: var(--fd-space-2) var(--fd-space-3);
+    color: var(--fd-color-text-secondary);
+    cursor: pointer;
+    font-size: var(--fd-text-xs);
+    font-weight: var(--fd-font-weight-medium);
+    list-style: none;
+  }
+
+  .advanced-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .advanced-summary::before {
+    color: var(--fd-color-text-tertiary);
+    content: "+";
+    font-family: var(--fd-font-mono);
+    transition: transform var(--fd-duration-fast) var(--fd-ease-standard);
+  }
+
+  .advanced-settings[open] .advanced-summary::before {
+    transform: rotate(45deg);
+  }
+
+  .advanced-settings > .field-hint {
+    padding: 0 var(--fd-space-3);
+  }
+
+  .advanced-settings .contract-fields {
+    padding: var(--fd-space-3);
+  }
+
+  .connection-status {
+    display: inline-flex;
+    min-height: 1.5rem;
+    align-items: center;
+    gap: var(--fd-space-2);
+    color: var(--fd-color-text-tertiary);
+    font-family: var(--fd-font-mono);
+    font-size: var(--fd-text-2xs);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .connection-status::before {
+    width: 0.4375rem;
+    height: 0.4375rem;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 0 3px transparent;
+    content: "";
+    transition:
+      background-color var(--fd-duration-base) var(--fd-ease-standard),
+      box-shadow var(--fd-duration-base) var(--fd-ease-standard);
+  }
+
+  .connection-status[data-phase="connecting"],
+  .connection-status[data-phase="reconnecting"],
+  .connection-status[data-phase="loading_channels"] {
+    color: var(--fd-color-warning);
+  }
+
+  .connection-status[data-phase="connecting"]::before,
+  .connection-status[data-phase="reconnecting"]::before,
+  .connection-status[data-phase="loading_channels"]::before {
+    animation: fd-status-pulse 1.4s ease-in-out infinite;
+    box-shadow: 0 0 0 3px var(--fd-color-warning-soft);
+  }
+
+  .connection-status[data-phase="live"] {
+    color: var(--fd-color-success);
+  }
+
+  .connection-status[data-activity="busy"][data-phase="live"] {
+    color: var(--fd-color-accent);
+  }
+
+  .connection-status[data-activity="busy"][data-phase="live"]::before {
+    animation: fd-status-pulse 1.1s ease-in-out infinite;
+    box-shadow: 0 0 0 3px var(--fd-color-accent-soft);
+  }
+
+  .connection-status[data-phase="live"]::before {
+    box-shadow: 0 0 0 3px var(--fd-color-success-soft);
+  }
+
+  .connection-status[data-phase="failed"] {
+    color: var(--fd-color-danger);
+  }
+
+  .connection-status[data-phase="failed"]::before {
+    box-shadow: 0 0 0 3px var(--fd-color-danger-soft);
+  }
+
+  @keyframes fd-status-pulse {
+    0%,
+    100% {
+      opacity: 0.48;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}

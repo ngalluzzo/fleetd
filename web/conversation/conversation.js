@@ -949,6 +949,55 @@
     return value;
   }
 
+  // src/ui/composer.ts
+  function composerAvailability(input) {
+    const channelReady = input.phase === "live" && input.selectedChannelId !== null;
+    const targetReady = channelReady && input.targetId !== "";
+    const sending = input.sending || input.pendingSends > 0;
+    return {
+      textareaDisabled: !targetReady,
+      targetDisabled: !channelReady,
+      sendDisabled: !targetReady || input.draft.trim() === "" || sending,
+      sending
+    };
+  }
+  function isComposerSendShortcut(event) {
+    return event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing;
+  }
+  function resizeComposer(textarea) {
+    textarea.style.height = "auto";
+    const maximum = Number.parseFloat(getComputedStyle(textarea).maxHeight);
+    const nextHeight = Number.isFinite(maximum) ? Math.min(textarea.scrollHeight, maximum) : textarea.scrollHeight;
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > nextHeight ? "auto" : "hidden";
+  }
+  function applyComposerAvailability(availability, elements) {
+    elements.textarea.disabled = availability.textareaDisabled;
+    elements.target.disabled = availability.targetDisabled;
+    elements.send.disabled = availability.sendDisabled;
+    elements.form.setAttribute("aria-busy", String(availability.sending));
+    elements.send.setAttribute("aria-busy", String(availability.sending));
+    elements.send.setAttribute("aria-label", availability.sending ? "Sending message" : "Send message");
+    const label = elements.send.querySelector(".send-button-label") ?? sendLabel();
+    const icon = elements.send.querySelector(".ui-icon-send") ?? arrowIcon();
+    label.textContent = availability.sending ? "Sending…" : "Send";
+    if (label.parentElement !== elements.send || icon.parentElement !== elements.send) {
+      elements.send.replaceChildren(label, icon);
+    }
+  }
+  function sendLabel() {
+    const label = document.createElement("span");
+    label.className = "send-button-label";
+    return label;
+  }
+  function arrowIcon() {
+    const icon = document.createElement("span");
+    icon.className = "ui-icon ui-icon-send";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = "↗";
+    return icon;
+  }
+
   // src/presentation-contract.ts
   var renderers = [
     {
@@ -1010,6 +1059,383 @@
     return typeof value === "object" && value !== null && !Array.isArray(value) ? value : undefined;
   }
 
+  // src/ui/view-models.ts
+  var PHASE_STATUS = {
+    idle: {
+      label: "offline",
+      description: "No conversation is connected."
+    },
+    loading_channels: {
+      label: "loading",
+      description: "Finding conversations on this machine."
+    },
+    ready: {
+      label: "ready",
+      description: "Choose a conversation to begin."
+    },
+    connecting: {
+      label: "connecting",
+      description: "Opening the selected conversation."
+    },
+    live: {
+      label: "live",
+      description: "Connected and up to date."
+    },
+    reconnecting: {
+      label: "reconnecting",
+      description: "Restoring the selected conversation."
+    },
+    failed: {
+      label: "needs attention",
+      description: "This conversation needs attention before it can continue."
+    },
+    closed: {
+      label: "closed",
+      description: "The local conversation session is closed."
+    }
+  };
+  function connectionStatusView(input) {
+    if (input.sending || input.pendingSends > 0) {
+      return {
+        label: "sending message",
+        description: "Your message is being sent.",
+        busy: true
+      };
+    }
+    const status = PHASE_STATUS[input.phase];
+    return {
+      ...status,
+      description: input.errorMessage ?? status.description,
+      busy: ["loading_channels", "connecting", "reconnecting"].includes(input.phase)
+    };
+  }
+  function emptyConversationView(input) {
+    if (input.messageCount > 0) {
+      return {
+        hidden: true,
+        title: "",
+        copy: "",
+        state: "hidden"
+      };
+    }
+    if (!input.selected) {
+      if (input.phase === "loading_channels") {
+        return {
+          hidden: false,
+          title: "Loading conversations",
+          copy: "Finding the conversations available on this machine.",
+          state: "loading"
+        };
+      }
+      if (input.phase === "failed") {
+        return {
+          hidden: false,
+          title: "Conversations unavailable",
+          copy: input.errorMessage ?? "Reconnect to try channel discovery again.",
+          state: "error"
+        };
+      }
+      return {
+        hidden: false,
+        title: "Choose a channel",
+        copy: "Choose a channel to see its saved history and new replies.",
+        state: "unselected"
+      };
+    }
+    if (input.phase === "failed" || input.phase === "closed") {
+      return {
+        hidden: false,
+        title: "Conversation unavailable",
+        copy: input.errorMessage ?? "Choose the channel again to reconnect.",
+        state: "error"
+      };
+    }
+    if (input.phase !== "live") {
+      return {
+        hidden: false,
+        title: input.phase === "reconnecting" ? "Reconnecting conversation" : "Opening conversation",
+        copy: "Restoring saved history and checking for new replies.",
+        state: "loading"
+      };
+    }
+    return {
+      hidden: false,
+      title: "Start the conversation",
+      copy: "Send the first message to an agent.",
+      state: "empty"
+    };
+  }
+  function memberOptionView(member) {
+    return {
+      id: member.agent_id,
+      label: member.agent_name,
+      description: `${member.agent_name} (${shortId(member.agent_id)})`,
+      preferred: member.delivery_mode === "inbox"
+    };
+  }
+  function senderLabel(message, participantId, names) {
+    return message.sender_id === participantId ? "you" : names.get(message.sender_id) ?? shortId(message.sender_id);
+  }
+  function recipientLabel(message, participantId, names) {
+    if (message.recipient_id == null)
+      return "channel";
+    if (message.recipient_id === participantId)
+      return "you";
+    return names.get(message.recipient_id) ?? shortId(message.recipient_id);
+  }
+  function shortId(value) {
+    return value.length > 12 ? `${value.slice(0, 8)}…` : value;
+  }
+
+  // src/ui/components.ts
+  function renderConnectionStatus(element, snapshot, sending) {
+    const status = connectionStatusView({
+      phase: snapshot.phase,
+      pendingSends: snapshot.pendingSends,
+      errorMessage: snapshot.error?.message,
+      sending
+    });
+    element.textContent = status.label;
+    element.dataset.phase = snapshot.phase;
+    element.dataset.activity = status.busy ? "busy" : "settled";
+    element.title = status.description;
+    element.setAttribute("aria-live", snapshot.phase === "failed" ? "assertive" : "polite");
+    element.setAttribute("aria-atomic", "true");
+    element.setAttribute("aria-busy", String(status.busy));
+  }
+  function renderChannelList(container, channels, selectedChannelId, snapshot) {
+    container.setAttribute("aria-busy", String(snapshot.phase === "loading_channels"));
+    if (channels.length === 0) {
+      const state = document.createElement("p");
+      state.className = `channel-state channel-state-${snapshot.phase}`;
+      state.setAttribute("role", "status");
+      state.textContent = snapshot.phase === "loading_channels" ? "Loading conversations…" : snapshot.phase === "failed" ? snapshot.error?.message ?? "Conversations unavailable" : "No conversations available";
+      container.replaceChildren(state);
+      return;
+    }
+    const existing = new Map;
+    for (const button of container.querySelectorAll("button[data-channel-id]")) {
+      if (button.dataset.channelId) {
+        existing.set(button.dataset.channelId, button);
+      }
+    }
+    const rows = channels.map((channel) => {
+      const selected = channel.id === selectedChannelId;
+      const row = existing.get(channel.id) ?? channelRow(channel, selected);
+      updateChannelRow(row, channel, selected);
+      return row;
+    });
+    reconcileChildren(container, rows);
+  }
+  function channelRow(channel, selected) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "channel-button";
+    button.dataset.channelId = channel.id;
+    const label = document.createElement("span");
+    label.className = "channel-label";
+    label.textContent = channel.name;
+    button.append(icon("channel", "#", "channel-marker"), label);
+    updateChannelRow(button, channel, selected);
+    return button;
+  }
+  function updateChannelRow(button, channel, selected) {
+    button.title = selected ? `${channel.name}, current channel` : channel.name;
+    const label = button.querySelector(".channel-label");
+    if (label)
+      label.textContent = channel.name;
+    button.setAttribute("aria-pressed", String(selected));
+    if (selected) {
+      button.setAttribute("aria-current", "page");
+    } else {
+      button.removeAttribute("aria-current");
+    }
+  }
+  function renderChannelHeader(snapshot, elements) {
+    const channel = snapshot.channels.find((candidate) => candidate.id === snapshot.selectedChannelId);
+    elements.title.textContent = channel?.name ?? "Select a channel";
+    elements.meta.textContent = channel ? `${snapshot.members.length} participants · ${snapshot.messages.length} messages` : snapshot.phase === "loading_channels" ? "Finding conversations…" : "Choose a conversation to begin.";
+  }
+  function renderMemberTargets(select, members, participantId) {
+    const prior = select.value;
+    const candidates = members.filter((member) => member.agent_id !== participantId).map(memberOptionView);
+    if (candidates.length === 0) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "No other participants";
+      option.disabled = true;
+      select.replaceChildren(option);
+      select.value = "";
+      select.title = "This channel has no other message recipient.";
+      return "";
+    }
+    const existing = new Map(Array.from(select.options).map((option) => [option.value, option]));
+    const options = candidates.map((candidate) => {
+      const option = existing.get(candidate.id) ?? document.createElement("option");
+      option.value = candidate.id;
+      option.textContent = candidate.label;
+      option.title = candidate.description;
+      return option;
+    });
+    reconcileChildren(select, options);
+    const selected = candidates.some((candidate) => candidate.id === prior) ? prior : candidates.find((candidate) => candidate.preferred)?.id ?? candidates[0]?.id ?? "";
+    select.value = selected;
+    select.title = candidates.find((candidate) => candidate.id === selected)?.description ?? "Message recipient";
+    return selected;
+  }
+  function renderEmptyConversation(snapshot, elements) {
+    const state = emptyConversationView({
+      selected: snapshot.selectedChannelId !== null,
+      phase: snapshot.phase,
+      messageCount: snapshot.messages.length,
+      errorMessage: snapshot.error?.message
+    });
+    elements.root.hidden = state.hidden;
+    elements.root.dataset.state = state.state;
+    elements.root.setAttribute("aria-busy", String(state.state === "loading"));
+    elements.title.textContent = state.title;
+    elements.copy.textContent = state.copy;
+  }
+
+  class MessageListView {
+    #container;
+    #channelId = null;
+    constructor(container) {
+      this.#container = container;
+    }
+    clear() {
+      this.#container.replaceChildren();
+      this.#channelId = null;
+    }
+    render(snapshot, contract) {
+      const changedChannel = this.#channelId !== snapshot.selectedChannelId;
+      const nearBottom = isNearBottom(this.#container);
+      const anchor = !changedChannel && !nearBottom ? visibleAnchor(this.#container) : undefined;
+      const names = new Map(snapshot.members.map((member) => [member.agent_id, member.agent_name]));
+      const existing = new Map;
+      for (const child of Array.from(this.#container.children)) {
+        if (!(child instanceof HTMLElement))
+          continue;
+        const messageId = child.dataset.messageId;
+        if (messageId)
+          existing.set(messageId, child);
+      }
+      const nodes = snapshot.messages.map((message) => {
+        const current = existing.get(message.id);
+        if (current?.dataset.messageSeq === String(message.seq)) {
+          updateMessageLabels(current, message, snapshot.participantId, names);
+          return current;
+        }
+        return messageCard(message, snapshot.participantId, names, contract);
+      });
+      reconcileChildren(this.#container, nodes);
+      this.#container.setAttribute("aria-busy", String(snapshot.phase === "connecting" || snapshot.phase === "reconnecting"));
+      this.#channelId = snapshot.selectedChannelId;
+      if (changedChannel || nearBottom) {
+        this.#container.scrollTop = this.#container.scrollHeight;
+      } else if (anchor) {
+        restoreAnchor(this.#container, anchor);
+      }
+    }
+  }
+  function messageCard(message, participantId, names, contract) {
+    const article = document.createElement("article");
+    article.className = message.sender_id === participantId ? "message message-self" : "message";
+    article.dataset.messageId = message.id;
+    article.dataset.messageSeq = String(message.seq);
+    const header = document.createElement("header");
+    const sender = document.createElement("strong");
+    sender.className = "message-sender";
+    const kind = document.createElement("code");
+    kind.textContent = message.kind;
+    kind.title = message.kind;
+    const time = document.createElement("time");
+    const created = new Date(message.created_at_ms);
+    time.dateTime = created.toISOString();
+    time.textContent = created.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+    time.title = created.toLocaleString();
+    header.append(sender, kind, time);
+    const rendered = renderMessageBody(message, contract);
+    const body = document.createElement(rendered.format === "json" ? "pre" : "p");
+    body.className = rendered.format === "json" ? "message-json" : "message-text";
+    body.textContent = rendered.text;
+    const footer = document.createElement("footer");
+    if (rendered.status) {
+      const status = document.createElement("span");
+      status.className = "result-status";
+      status.textContent = rendered.status;
+      footer.append(status);
+    }
+    const recipient = document.createElement("span");
+    recipient.className = "message-recipient";
+    footer.append(recipient);
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.append(icon("envelope", "◇"), text(`Details · message ${message.seq}`));
+    const envelope = document.createElement("pre");
+    envelope.textContent = JSON.stringify(message, null, 2);
+    details.append(summary, envelope);
+    footer.append(details);
+    article.append(header, body, footer);
+    updateMessageLabels(article, message, participantId, names);
+    return article;
+  }
+  function updateMessageLabels(article, message, participantId, names) {
+    const sender = senderLabel(message, participantId, names);
+    const recipient = recipientLabel(message, participantId, names);
+    const senderElement = article.querySelector(".message-sender");
+    const recipientElement = article.querySelector(".message-recipient");
+    if (senderElement)
+      senderElement.textContent = sender;
+    if (recipientElement)
+      recipientElement.textContent = `to ${recipient}`;
+    article.setAttribute("aria-label", `Message from ${sender} to ${recipient}`);
+  }
+  function icon(name, glyph, extraClass = "") {
+    const element = document.createElement("span");
+    element.className = ["ui-icon", `ui-icon-${name}`, extraClass].filter(Boolean).join(" ");
+    element.setAttribute("aria-hidden", "true");
+    element.textContent = glyph;
+    return element;
+  }
+  function text(value) {
+    return document.createTextNode(value);
+  }
+  function isNearBottom(container) {
+    return container.scrollHeight - container.scrollTop - container.clientHeight < 96;
+  }
+  function visibleAnchor(container) {
+    const containerTop = container.getBoundingClientRect().top;
+    for (const child of Array.from(container.children)) {
+      if (!(child instanceof HTMLElement) || !child.dataset.messageId)
+        continue;
+      const top = child.getBoundingClientRect().top;
+      if (child.getBoundingClientRect().bottom >= containerTop) {
+        return { messageId: child.dataset.messageId, top };
+      }
+    }
+    return;
+  }
+  function restoreAnchor(container, anchor) {
+    const element = Array.from(container.children).find((child) => child instanceof HTMLElement && child.dataset.messageId === anchor.messageId);
+    if (!(element instanceof HTMLElement))
+      return;
+    container.scrollTop += element.getBoundingClientRect().top - anchor.top;
+  }
+  function reconcileChildren(container, desired) {
+    for (const [index, element] of desired.entries()) {
+      const current = container.children.item(index);
+      if (current !== element)
+        container.insertBefore(element, current);
+    }
+    while (container.children.length > desired.length) {
+      container.lastElementChild?.remove();
+    }
+  }
+
   // src/main.ts
   var elements = {
     connectPanel: required("connect-panel"),
@@ -1034,11 +1460,18 @@
     send: required("send-message"),
     disconnect: required("disconnect")
   };
+  var connectSubmit = requiredDescendant(elements.connectForm, 'button[type="submit"]');
+  var connectSubmitLabel = requiredDescendant(connectSubmit, ".button-label");
+  var connectSubmitIcon = requiredDescendant(connectSubmit, ".button-icon");
   var session;
   var unsubscribe;
   var contract;
   var latestSnapshot;
   var renderFrame;
+  var sendInFlight = false;
+  var connectInFlight = false;
+  var appGeneration = 0;
+  var messageList = new MessageListView(elements.messages);
   var publicApp = {
     connect,
     disconnect,
@@ -1068,6 +1501,8 @@
   document.documentElement.dataset.fleetdConversationReady = "true";
   elements.connectForm.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (connectInFlight)
+      return;
     const profile = {
       participantId: elements.participantId.value,
       operatorCredential: elements.operatorCredential.value,
@@ -1077,8 +1512,13 @@
     };
     elements.operatorCredential.value = "";
     elements.participantCredential.value = "";
+    connectInFlight = true;
+    setConnectBusy(true);
     connect(profile).catch(() => {
       showConnectError("Could not connect with the supplied Fleetd authorities.");
+    }).finally(() => {
+      connectInFlight = false;
+      setConnectBusy(false);
     });
   });
   elements.disconnect.addEventListener("click", disconnect);
@@ -1089,52 +1529,80 @@
     const button = target.closest("button[data-channel-id]");
     if (!button?.dataset.channelId || !session)
       return;
-    session.selectChannel(button.dataset.channelId).catch(() => {});
+    session.selectChannel(button.dataset.channelId).catch(() => {
+      if (session)
+        scheduleRender(session.snapshot);
+    });
   });
   elements.composer.addEventListener("submit", (event) => {
     event.preventDefault();
     sendComposerMessage();
   });
+  elements.composerText.addEventListener("input", () => {
+    resizeComposer(elements.composerText);
+    renderComposerAvailability();
+  });
   elements.composerText.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing)
+    if (!isComposerSendShortcut(event))
       return;
     event.preventDefault();
     elements.composer.requestSubmit();
   });
+  elements.target.addEventListener("change", () => {
+    renderComposerAvailability();
+    const selected = elements.target.selectedOptions[0];
+    if (selected?.title)
+      elements.target.title = selected.title;
+  });
+  resizeComposer(elements.composerText);
   async function connect(profileInput) {
     disconnect();
-    const profile = validateProfile(profileInput);
+    const generation = appGeneration;
+    let profile;
+    try {
+      profile = { ...validateProfile(profileInput) };
+    } finally {
+      clearProfileCredentials(profileInput);
+    }
     required("connect-error").hidden = true;
     contract = {
       requestKind: profile.requestKind,
       resultKind: profile.resultKind
     };
-    const transport = createBrowserConversationTransport({
-      origin: window.location.origin,
-      participantId: profile.participantId,
-      operatorCredential: profile.operatorCredential,
-      participantCredential: profile.participantCredential
-    });
-    try {
-      profileInput.operatorCredential = "";
-      profileInput.participantCredential = "";
-    } catch {}
-    session = new ConversationSession(transport);
-    unsubscribe = session.subscribe(scheduleRender);
+    const transport = (() => {
+      try {
+        return createBrowserConversationTransport({
+          origin: window.location.origin,
+          participantId: profile.participantId,
+          operatorCredential: profile.operatorCredential,
+          participantCredential: profile.participantCredential
+        });
+      } finally {
+        clearProfileCredentials(profile);
+      }
+    })();
+    const activeSession = new ConversationSession(transport);
+    session = activeSession;
+    unsubscribe = activeSession.subscribe(scheduleRender);
     elements.connectPanel.hidden = true;
     elements.app.hidden = false;
     try {
-      await session.start();
+      await activeSession.start();
+      if (generation !== appGeneration || session !== activeSession) {
+        throw new Error("Fleetd conversation connection was superseded");
+      }
       const channelId = profile.channelId;
       if (channelId)
-        await session.selectChannel(channelId);
+        await activeSession.selectChannel(channelId);
     } catch {
-      if (session.snapshot.phase !== "failed")
+      if (generation === appGeneration && session === activeSession)
         disconnect();
       throw new Error("Fleetd conversation connection failed");
     }
   }
   function disconnect() {
+    appGeneration += 1;
+    sendInFlight = false;
     unsubscribe?.();
     unsubscribe = undefined;
     session?.close();
@@ -1146,9 +1614,12 @@
     renderFrame = undefined;
     elements.app.hidden = true;
     elements.connectPanel.hidden = false;
-    elements.messages.replaceChildren();
+    messageList.clear();
     elements.channels.replaceChildren();
     elements.target.replaceChildren();
+    elements.composerText.value = "";
+    resizeComposer(elements.composerText);
+    renderComposerAvailability();
   }
   function scheduleRender(snapshot) {
     latestSnapshot = snapshot;
@@ -1161,139 +1632,77 @@
     });
   }
   function render(snapshot) {
-    renderStatus(snapshot);
-    renderChannels(snapshot.channels, snapshot.selectedChannelId);
-    renderMembers(snapshot);
-    renderMessages(snapshot);
-    const selectedTarget = elements.target.value;
-    const canSend = snapshot.selectedChannelId !== null && selectedTarget !== "" && snapshot.phase !== "failed" && snapshot.phase !== "closed";
-    elements.composerText.disabled = !canSend;
-    elements.send.disabled = !canSend || snapshot.pendingSends > 0;
-  }
-  function renderStatus(snapshot) {
-    const labels = {
-      idle: "not connected",
-      loading_channels: "loading channels",
-      ready: "choose a channel",
-      connecting: "connecting stream",
-      live: "live",
-      reconnecting: "reconnecting",
-      failed: "connection failed",
-      closed: "closed"
-    };
-    elements.status.textContent = labels[snapshot.phase] ?? snapshot.phase;
-    elements.status.dataset.phase = snapshot.phase;
-    elements.status.title = snapshot.error?.message ?? "Local transport state";
-  }
-  function renderChannels(channels, selectedChannelId) {
-    const nodes = channels.map((channel) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "channel-button";
-      button.dataset.channelId = channel.id;
-      button.setAttribute("aria-pressed", String(channel.id === selectedChannelId));
-      const marker = document.createElement("span");
-      marker.className = "channel-marker";
-      marker.textContent = "#";
-      const label = document.createElement("span");
-      label.textContent = channel.name;
-      button.append(marker, label);
-      return button;
+    renderConnectionStatus(elements.status, snapshot, sendInFlight);
+    renderChannelList(elements.channels, snapshot.channels, snapshot.selectedChannelId, snapshot);
+    renderChannelHeader(snapshot, {
+      title: elements.channelTitle,
+      meta: elements.channelMeta
     });
-    elements.channels.replaceChildren(...nodes);
-  }
-  function renderMembers(snapshot) {
-    const channel = snapshot.channels.find((candidate) => candidate.id === snapshot.selectedChannelId);
-    elements.channelTitle.textContent = channel?.name ?? "Select a channel";
-    elements.channelMeta.textContent = channel ? `${snapshot.members.length} participants · cursor ${snapshot.cursor}` : "Durable human-to-agent conversations";
-    const prior = elements.target.value;
-    const candidates = snapshot.members.filter((member) => member.agent_id !== snapshot.participantId);
-    const options = candidates.map((member) => {
-      const option = document.createElement("option");
-      option.value = member.agent_id;
-      option.textContent = `${member.agent_name} · ${member.delivery_mode}`;
-      return option;
+    renderMemberTargets(elements.target, snapshot.members, snapshot.participantId);
+    messageList.render(snapshot, requiredContract());
+    renderEmptyConversation(snapshot, {
+      root: elements.empty,
+      title: elements.emptyTitle,
+      copy: elements.emptyCopy
     });
-    elements.target.replaceChildren(...options);
-    if (candidates.some((member) => member.agent_id === prior)) {
-      elements.target.value = prior;
-    } else {
-      const inbox = candidates.find((member) => member.delivery_mode === "inbox");
-      elements.target.value = inbox?.agent_id ?? candidates[0]?.agent_id ?? "";
-    }
-  }
-  function renderMessages(snapshot) {
-    const wasNearBottom = elements.messages.scrollHeight - elements.messages.scrollTop - elements.messages.clientHeight < 96;
-    const names = new Map(snapshot.members.map((member) => [member.agent_id, member.agent_name]));
-    const nodes = snapshot.messages.map((message) => messageNode(message, snapshot.participantId, names));
-    elements.messages.replaceChildren(...nodes);
-    elements.empty.hidden = snapshot.messages.length !== 0;
-    const selected = snapshot.selectedChannelId !== null;
-    elements.emptyTitle.textContent = selected ? "Start the conversation" : "Choose a channel";
-    elements.emptyCopy.textContent = selected ? "Send the first durable message to an agent." : "History and new replies will arrive through one live cursor.";
-    if (wasNearBottom)
-      elements.messages.scrollTop = elements.messages.scrollHeight;
-  }
-  function messageNode(message, participantId, names) {
-    const article = document.createElement("article");
-    article.className = message.sender_id === participantId ? "message message-self" : "message";
-    article.dataset.messageId = message.id;
-    const header = document.createElement("header");
-    const sender = document.createElement("strong");
-    sender.textContent = message.sender_id === participantId ? "you" : names.get(message.sender_id) ?? shortId(message.sender_id);
-    const kind = document.createElement("code");
-    kind.textContent = message.kind;
-    const time = document.createElement("time");
-    time.dateTime = new Date(message.created_at_ms).toISOString();
-    time.textContent = new Date(message.created_at_ms).toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit"
-    });
-    header.append(sender, kind, time);
-    const rendered = renderMessageBody(message, requiredContract());
-    const body = document.createElement(rendered.format === "json" ? "pre" : "p");
-    body.className = rendered.format === "json" ? "message-json" : "message-text";
-    body.textContent = rendered.text;
-    const footer = document.createElement("footer");
-    if (rendered.status) {
-      const status = document.createElement("span");
-      status.className = "result-status";
-      status.textContent = rendered.status;
-      footer.append(status);
-    }
-    const details = document.createElement("details");
-    const summary = document.createElement("summary");
-    summary.textContent = `envelope · seq ${message.seq}`;
-    const envelope = document.createElement("pre");
-    envelope.textContent = JSON.stringify(message, null, 2);
-    details.append(summary, envelope);
-    footer.append(details);
-    article.append(header, body, footer);
-    return article;
+    renderComposerAvailability();
   }
   async function sendComposerMessage() {
     const activeSession = session;
-    if (!activeSession || !contract)
+    if (!activeSession || !contract || sendInFlight)
       return;
-    const text = elements.composerText.value.trim();
+    const draft = elements.composerText.value;
+    const text2 = draft.trim();
     const recipientId = elements.target.value;
-    if (!text || !recipientId)
+    if (!text2 || !recipientId)
       return;
     const turnId = crypto.randomUUID();
+    const generation = appGeneration;
+    sendInFlight = true;
+    renderConnectionStatus(elements.status, activeSession.snapshot, true);
+    renderComposerAvailability();
     try {
       await activeSession.send({
         idempotency_key: `fleetd-conversation/${turnId}`,
         recipient_id: recipientId,
         kind: contract.requestKind,
-        payload: { text },
+        payload: { text: text2 },
         correlation_id: turnId,
         causation_id: null
       });
-      elements.composerText.value = "";
-      elements.composerText.focus();
+      if (generation === appGeneration && session === activeSession && elements.composerText.value === draft) {
+        elements.composerText.value = "";
+        resizeComposer(elements.composerText);
+      }
     } catch {
-      elements.status.title = "The message was not accepted by Fleetd";
+      if (generation === appGeneration && session === activeSession) {
+        elements.composerText.focus();
+      }
+    } finally {
+      if (generation === appGeneration && session === activeSession) {
+        sendInFlight = false;
+        scheduleRender(activeSession.snapshot);
+        renderComposerAvailability();
+        elements.composerText.focus();
+      }
     }
+  }
+  function renderComposerAvailability() {
+    const snapshot = latestSnapshot;
+    const availability = composerAvailability({
+      phase: snapshot?.phase ?? "closed",
+      selectedChannelId: snapshot?.selectedChannelId ?? null,
+      targetId: elements.target.value,
+      draft: elements.composerText.value,
+      pendingSends: snapshot?.pendingSends ?? 0,
+      sending: sendInFlight
+    });
+    applyComposerAvailability(availability, {
+      form: elements.composer,
+      textarea: elements.composerText,
+      target: elements.target,
+      send: elements.send
+    });
   }
   function validateProfile(value) {
     if (!value || typeof value !== "object")
@@ -1313,23 +1722,38 @@
       throw new Error(`invalid conversation profile field: ${name}`);
     }
   }
+  function clearProfileCredentials(profile) {
+    try {
+      profile.operatorCredential = "";
+      profile.participantCredential = "";
+    } catch {}
+  }
   function showConnectError(message) {
     const output = required("connect-error");
     output.textContent = message;
     output.hidden = false;
+  }
+  function setConnectBusy(busy) {
+    elements.connectForm.setAttribute("aria-busy", String(busy));
+    connectSubmit.disabled = busy;
+    connectSubmitLabel.textContent = busy ? "Connecting…" : "Open conversations";
+    connectSubmitIcon.textContent = busy ? "…" : "→";
   }
   function requiredContract() {
     if (!contract)
       throw new Error("conversation presentation is disconnected");
     return contract;
   }
-  function shortId(value) {
-    return value.length > 12 ? `${value.slice(0, 8)}…` : value;
-  }
   function required(id) {
     const element = document.getElementById(id);
     if (!element)
       throw new Error(`missing conversation element: ${id}`);
+    return element;
+  }
+  function requiredDescendant(parent, selector) {
+    const element = parent.querySelector(selector);
+    if (!element)
+      throw new Error(`missing conversation element: ${selector}`);
     return element;
   }
 })();

@@ -1,0 +1,17 @@
+/*
+ * Fleetd interface foundation.
+ *
+ * The layer order is part of the design-system contract: product composition
+ * can override components without raising selector specificity, while
+ * accessibility adaptations always win.
+ */
+@layer reset, tokens, base, primitives, components, composition, utilities, adaptations;
+
+@import "./tokens.css";
+@import "./reset.css";
+@import "./base.css";
+@import "./primitives.css";
+@import "./components.css";
+@import "./conversation.css";
+@import "./utilities.css";
+@import "./adaptations.css";

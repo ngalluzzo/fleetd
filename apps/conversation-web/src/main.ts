@@ -3,15 +3,21 @@ import {
   type ConversationSnapshot,
 } from "../../../clients/typescript/src/conversation-session.ts";
 import { createBrowserConversationTransport } from "../../../clients/typescript/src/conversation-transport.ts";
-import type {
-  Channel,
-  ChannelMember,
-  Message,
-} from "../../../clients/typescript/src/generated/types.gen.ts";
+import type { ConversationPresentationContract } from "./presentation-contract.ts";
 import {
-  renderMessageBody,
-  type ConversationPresentationContract,
-} from "./presentation-contract.ts";
+  applyComposerAvailability,
+  composerAvailability,
+  isComposerSendShortcut,
+  resizeComposer,
+} from "./ui/composer.ts";
+import {
+  MessageListView,
+  renderChannelHeader,
+  renderChannelList,
+  renderConnectionStatus,
+  renderEmptyConversation,
+  renderMemberTargets,
+} from "./ui/components.ts";
 
 interface ConnectionProfile {
   participantId: string;
@@ -57,12 +63,28 @@ const elements = {
   send: required<HTMLButtonElement>("send-message"),
   disconnect: required<HTMLButtonElement>("disconnect"),
 };
+const connectSubmit = requiredDescendant<HTMLButtonElement>(
+  elements.connectForm,
+  'button[type="submit"]',
+);
+const connectSubmitLabel = requiredDescendant<HTMLElement>(
+  connectSubmit,
+  ".button-label",
+);
+const connectSubmitIcon = requiredDescendant<HTMLElement>(
+  connectSubmit,
+  ".button-icon",
+);
 
 let session: ConversationSession | undefined;
 let unsubscribe: (() => void) | undefined;
 let contract: ConversationPresentationContract | undefined;
 let latestSnapshot: ConversationSnapshot | undefined;
 let renderFrame: number | undefined;
+let sendInFlight = false;
+let connectInFlight = false;
+let appGeneration = 0;
+const messageList = new MessageListView(elements.messages);
 
 const publicApp: PublicConversationApp = {
   connect,
@@ -95,6 +117,7 @@ document.documentElement.dataset.fleetdConversationReady = "true";
 
 elements.connectForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  if (connectInFlight) return;
   const profile: ConnectionProfile = {
     participantId: elements.participantId.value,
     operatorCredential: elements.operatorCredential.value,
@@ -104,9 +127,18 @@ elements.connectForm.addEventListener("submit", (event) => {
   };
   elements.operatorCredential.value = "";
   elements.participantCredential.value = "";
-  void connect(profile).catch(() => {
-    showConnectError("Could not connect with the supplied Fleetd authorities.");
-  });
+  connectInFlight = true;
+  setConnectBusy(true);
+  void connect(profile)
+    .catch(() => {
+      showConnectError(
+        "Could not connect with the supplied Fleetd authorities.",
+      );
+    })
+    .finally(() => {
+      connectInFlight = false;
+      setConnectBusy(false);
+    });
 });
 
 elements.disconnect.addEventListener("click", disconnect);
@@ -115,53 +147,77 @@ elements.channels.addEventListener("click", (event) => {
   if (!(target instanceof Element)) return;
   const button = target.closest<HTMLButtonElement>("button[data-channel-id]");
   if (!button?.dataset.channelId || !session) return;
-  void session.selectChannel(button.dataset.channelId).catch(() => {});
+  void session.selectChannel(button.dataset.channelId).catch(() => {
+    if (session) scheduleRender(session.snapshot);
+  });
 });
 elements.composer.addEventListener("submit", (event) => {
   event.preventDefault();
   void sendComposerMessage();
 });
+elements.composerText.addEventListener("input", () => {
+  resizeComposer(elements.composerText);
+  renderComposerAvailability();
+});
 elements.composerText.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+  if (!isComposerSendShortcut(event)) return;
   event.preventDefault();
   elements.composer.requestSubmit();
 });
+elements.target.addEventListener("change", () => {
+  renderComposerAvailability();
+  const selected = elements.target.selectedOptions[0];
+  if (selected?.title) elements.target.title = selected.title;
+});
+resizeComposer(elements.composerText);
 
 async function connect(profileInput: ConnectionProfile): Promise<void> {
   disconnect();
-  const profile = validateProfile(profileInput);
+  const generation = appGeneration;
+  let profile: ConnectionProfile;
+  try {
+    profile = { ...validateProfile(profileInput) };
+  } finally {
+    clearProfileCredentials(profileInput);
+  }
   required<HTMLElement>("connect-error").hidden = true;
   contract = {
     requestKind: profile.requestKind,
     resultKind: profile.resultKind,
   };
-  const transport = createBrowserConversationTransport({
-    origin: window.location.origin,
-    participantId: profile.participantId,
-    operatorCredential: profile.operatorCredential,
-    participantCredential: profile.participantCredential,
-  });
-  try {
-    profileInput.operatorCredential = "";
-    profileInput.participantCredential = "";
-  } catch {
-    // A frozen native-host input may not be mutable; transport owns its copy.
-  }
-  session = new ConversationSession(transport);
-  unsubscribe = session.subscribe(scheduleRender);
+  const transport = (() => {
+    try {
+      return createBrowserConversationTransport({
+        origin: window.location.origin,
+        participantId: profile.participantId,
+        operatorCredential: profile.operatorCredential,
+        participantCredential: profile.participantCredential,
+      });
+    } finally {
+      clearProfileCredentials(profile);
+    }
+  })();
+  const activeSession = new ConversationSession(transport);
+  session = activeSession;
+  unsubscribe = activeSession.subscribe(scheduleRender);
   elements.connectPanel.hidden = true;
   elements.app.hidden = false;
   try {
-    await session.start();
+    await activeSession.start();
+    if (generation !== appGeneration || session !== activeSession) {
+      throw new Error("Fleetd conversation connection was superseded");
+    }
     const channelId = profile.channelId;
-    if (channelId) await session.selectChannel(channelId);
+    if (channelId) await activeSession.selectChannel(channelId);
   } catch {
-    if (session.snapshot.phase !== "failed") disconnect();
+    if (generation === appGeneration && session === activeSession) disconnect();
     throw new Error("Fleetd conversation connection failed");
   }
 }
 
 function disconnect(): void {
+  appGeneration += 1;
+  sendInFlight = false;
   unsubscribe?.();
   unsubscribe = undefined;
   session?.close();
@@ -172,9 +228,12 @@ function disconnect(): void {
   renderFrame = undefined;
   elements.app.hidden = true;
   elements.connectPanel.hidden = false;
-  elements.messages.replaceChildren();
+  messageList.clear();
   elements.channels.replaceChildren();
   elements.target.replaceChildren();
+  elements.composerText.value = "";
+  resizeComposer(elements.composerText);
+  renderComposerAvailability();
 }
 
 function scheduleRender(snapshot: ConversationSnapshot): void {
@@ -187,169 +246,39 @@ function scheduleRender(snapshot: ConversationSnapshot): void {
 }
 
 function render(snapshot: ConversationSnapshot): void {
-  renderStatus(snapshot);
-  renderChannels(snapshot.channels, snapshot.selectedChannelId);
-  renderMembers(snapshot);
-  renderMessages(snapshot);
-  const selectedTarget = elements.target.value;
-  const canSend =
-    snapshot.selectedChannelId !== null &&
-    selectedTarget !== "" &&
-    snapshot.phase !== "failed" &&
-    snapshot.phase !== "closed";
-  elements.composerText.disabled = !canSend;
-  elements.send.disabled = !canSend || snapshot.pendingSends > 0;
-}
-
-function renderStatus(snapshot: ConversationSnapshot): void {
-  const labels: Record<string, string> = {
-    idle: "not connected",
-    loading_channels: "loading channels",
-    ready: "choose a channel",
-    connecting: "connecting stream",
-    live: "live",
-    reconnecting: "reconnecting",
-    failed: "connection failed",
-    closed: "closed",
-  };
-  elements.status.textContent = labels[snapshot.phase] ?? snapshot.phase;
-  elements.status.dataset.phase = snapshot.phase;
-  elements.status.title = snapshot.error?.message ?? "Local transport state";
-}
-
-function renderChannels(
-  channels: readonly Channel[],
-  selectedChannelId: string | null,
-): void {
-  const nodes = channels.map((channel) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "channel-button";
-    button.dataset.channelId = channel.id;
-    button.setAttribute(
-      "aria-pressed",
-      String(channel.id === selectedChannelId),
-    );
-    const marker = document.createElement("span");
-    marker.className = "channel-marker";
-    marker.textContent = "#";
-    const label = document.createElement("span");
-    label.textContent = channel.name;
-    button.append(marker, label);
-    return button;
+  renderConnectionStatus(elements.status, snapshot, sendInFlight);
+  renderChannelList(
+    elements.channels,
+    snapshot.channels,
+    snapshot.selectedChannelId,
+    snapshot,
+  );
+  renderChannelHeader(snapshot, {
+    title: elements.channelTitle,
+    meta: elements.channelMeta,
   });
-  elements.channels.replaceChildren(...nodes);
-}
-
-function renderMembers(snapshot: ConversationSnapshot): void {
-  const channel = snapshot.channels.find(
-    (candidate) => candidate.id === snapshot.selectedChannelId,
-  );
-  elements.channelTitle.textContent = channel?.name ?? "Select a channel";
-  elements.channelMeta.textContent = channel
-    ? `${snapshot.members.length} participants · cursor ${snapshot.cursor}`
-    : "Durable human-to-agent conversations";
-
-  const prior = elements.target.value;
-  const candidates = snapshot.members.filter(
-    (member) => member.agent_id !== snapshot.participantId,
-  );
-  const options = candidates.map((member) => {
-    const option = document.createElement("option");
-    option.value = member.agent_id;
-    option.textContent = `${member.agent_name} · ${member.delivery_mode}`;
-    return option;
+  renderMemberTargets(elements.target, snapshot.members, snapshot.participantId);
+  messageList.render(snapshot, requiredContract());
+  renderEmptyConversation(snapshot, {
+    root: elements.empty,
+    title: elements.emptyTitle,
+    copy: elements.emptyCopy,
   });
-  elements.target.replaceChildren(...options);
-  if (candidates.some((member) => member.agent_id === prior)) {
-    elements.target.value = prior;
-  } else {
-    const inbox = candidates.find((member) => member.delivery_mode === "inbox");
-    elements.target.value = inbox?.agent_id ?? candidates[0]?.agent_id ?? "";
-  }
-}
-
-function renderMessages(snapshot: ConversationSnapshot): void {
-  const wasNearBottom =
-    elements.messages.scrollHeight -
-      elements.messages.scrollTop -
-      elements.messages.clientHeight <
-    96;
-  const names = new Map(
-    snapshot.members.map((member) => [member.agent_id, member.agent_name]),
-  );
-  const nodes = snapshot.messages.map((message) =>
-    messageNode(message, snapshot.participantId, names),
-  );
-  elements.messages.replaceChildren(...nodes);
-  elements.empty.hidden = snapshot.messages.length !== 0;
-  const selected = snapshot.selectedChannelId !== null;
-  elements.emptyTitle.textContent = selected
-    ? "Start the conversation"
-    : "Choose a channel";
-  elements.emptyCopy.textContent = selected
-    ? "Send the first durable message to an agent."
-    : "History and new replies will arrive through one live cursor.";
-  if (wasNearBottom)
-    elements.messages.scrollTop = elements.messages.scrollHeight;
-}
-
-function messageNode(
-  message: Message,
-  participantId: string,
-  names: ReadonlyMap<string, string>,
-): HTMLElement {
-  const article = document.createElement("article");
-  article.className =
-    message.sender_id === participantId ? "message message-self" : "message";
-  article.dataset.messageId = message.id;
-
-  const header = document.createElement("header");
-  const sender = document.createElement("strong");
-  sender.textContent =
-    message.sender_id === participantId
-      ? "you"
-      : (names.get(message.sender_id) ?? shortId(message.sender_id));
-  const kind = document.createElement("code");
-  kind.textContent = message.kind;
-  const time = document.createElement("time");
-  time.dateTime = new Date(message.created_at_ms).toISOString();
-  time.textContent = new Date(message.created_at_ms).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  header.append(sender, kind, time);
-
-  const rendered = renderMessageBody(message, requiredContract());
-  const body = document.createElement(rendered.format === "json" ? "pre" : "p");
-  body.className = rendered.format === "json" ? "message-json" : "message-text";
-  body.textContent = rendered.text;
-
-  const footer = document.createElement("footer");
-  if (rendered.status) {
-    const status = document.createElement("span");
-    status.className = "result-status";
-    status.textContent = rendered.status;
-    footer.append(status);
-  }
-  const details = document.createElement("details");
-  const summary = document.createElement("summary");
-  summary.textContent = `envelope · seq ${message.seq}`;
-  const envelope = document.createElement("pre");
-  envelope.textContent = JSON.stringify(message, null, 2);
-  details.append(summary, envelope);
-  footer.append(details);
-  article.append(header, body, footer);
-  return article;
+  renderComposerAvailability();
 }
 
 async function sendComposerMessage(): Promise<void> {
   const activeSession = session;
-  if (!activeSession || !contract) return;
-  const text = elements.composerText.value.trim();
+  if (!activeSession || !contract || sendInFlight) return;
+  const draft = elements.composerText.value;
+  const text = draft.trim();
   const recipientId = elements.target.value;
   if (!text || !recipientId) return;
   const turnId = crypto.randomUUID();
+  const generation = appGeneration;
+  sendInFlight = true;
+  renderConnectionStatus(elements.status, activeSession.snapshot, true);
+  renderComposerAvailability();
   try {
     await activeSession.send({
       idempotency_key: `fleetd-conversation/${turnId}`,
@@ -359,11 +288,44 @@ async function sendComposerMessage(): Promise<void> {
       correlation_id: turnId,
       causation_id: null,
     });
-    elements.composerText.value = "";
-    elements.composerText.focus();
+    if (
+      generation === appGeneration &&
+      session === activeSession &&
+      elements.composerText.value === draft
+    ) {
+      elements.composerText.value = "";
+      resizeComposer(elements.composerText);
+    }
   } catch {
-    elements.status.title = "The message was not accepted by Fleetd";
+    if (generation === appGeneration && session === activeSession) {
+      elements.composerText.focus();
+    }
+  } finally {
+    if (generation === appGeneration && session === activeSession) {
+      sendInFlight = false;
+      scheduleRender(activeSession.snapshot);
+      renderComposerAvailability();
+      elements.composerText.focus();
+    }
   }
+}
+
+function renderComposerAvailability(): void {
+  const snapshot = latestSnapshot;
+  const availability = composerAvailability({
+    phase: snapshot?.phase ?? "closed",
+    selectedChannelId: snapshot?.selectedChannelId ?? null,
+    targetId: elements.target.value,
+    draft: elements.composerText.value,
+    pendingSends: snapshot?.pendingSends ?? 0,
+    sending: sendInFlight,
+  });
+  applyComposerAvailability(availability, {
+    form: elements.composer,
+    textarea: elements.composerText,
+    target: elements.target,
+    send: elements.send,
+  });
 }
 
 function validateProfile(value: ConnectionProfile): ConnectionProfile {
@@ -402,10 +364,26 @@ function boundedProfileField(
   }
 }
 
+function clearProfileCredentials(profile: ConnectionProfile): void {
+  try {
+    profile.operatorCredential = "";
+    profile.participantCredential = "";
+  } catch {
+    // A frozen native-host input cannot be scrubbed; it remains caller-owned.
+  }
+}
+
 function showConnectError(message: string): void {
   const output = required<HTMLElement>("connect-error");
   output.textContent = message;
   output.hidden = false;
+}
+
+function setConnectBusy(busy: boolean): void {
+  elements.connectForm.setAttribute("aria-busy", String(busy));
+  connectSubmit.disabled = busy;
+  connectSubmitLabel.textContent = busy ? "Connecting…" : "Open conversations";
+  connectSubmitIcon.textContent = busy ? "…" : "→";
 }
 
 function requiredContract(): ConversationPresentationContract {
@@ -413,12 +391,17 @@ function requiredContract(): ConversationPresentationContract {
   return contract;
 }
 
-function shortId(value: string): string {
-  return value.length > 12 ? `${value.slice(0, 8)}…` : value;
-}
-
 function required<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
   if (!element) throw new Error(`missing conversation element: ${id}`);
+  return element as T;
+}
+
+function requiredDescendant<T extends HTMLElement>(
+  parent: ParentNode,
+  selector: string,
+): T {
+  const element = parent.querySelector(selector);
+  if (!element) throw new Error(`missing conversation element: ${selector}`);
   return element as T;
 }

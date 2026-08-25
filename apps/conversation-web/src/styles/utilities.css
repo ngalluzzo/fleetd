@@ -1,0 +1,40 @@
+@layer utilities {
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .skip-link {
+    position: fixed;
+    z-index: 100;
+    top: var(--fd-space-3);
+    left: var(--fd-space-3);
+    transform: translateY(calc(-100% - var(--fd-space-8)));
+    border-radius: var(--fd-radius-md);
+    padding: var(--fd-space-2) var(--fd-space-3);
+    background: var(--fd-color-accent);
+    color: var(--fd-color-text-on-accent);
+    font-size: var(--fd-text-sm);
+    font-weight: var(--fd-font-weight-semibold);
+    transition: transform var(--fd-duration-fast) var(--fd-ease-standard);
+  }
+
+  .skip-link:focus {
+    transform: translateY(0);
+  }
+}

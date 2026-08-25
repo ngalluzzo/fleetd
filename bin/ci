@@ -24,6 +24,7 @@ git diff --exit-code -- clients/typescript/src/generated
     bun run build
 )
 git diff --exit-code -- web/conversation/conversation.js
+git diff --exit-code -- web/conversation/conversation.css
 bun build tools/qualify-live-conversation.ts --target bun \
     --outfile target/qualify-live-conversation-check.js
 
