@@ -3,70 +3,123 @@
 ## Scope
 
 This run qualifies the presentation-agnostic browser channel-stream client at
-Fleetd revision `2575a12`. The checked-in
-`tools/qualify-browser-channel-stream.ts` probe bundles the exported client,
-loads it into Bun's native WebKit-backed `WebView`, and exercises its real
-grant-to-ready path with a page-side `WebSocket` constructor.
+Fleetd revision `ddfc343`. The checked-in
+`tools/qualify-browser-channel-stream.ts` runner creates a dedicated agent and
+channel through public Fleetd operations, commits one replay fixture, bundles
+the exported client, and loads it into Bun's native WebKit-backed `WebView`.
 
-The client mints a single-use grant with an in-memory operator credential,
-opens the fixed browser stream path with the fixed subprotocol, redeems the
-grant, validates the exact `ready` linkage, and closes. The probe records only
-operation method/path metadata; it never records headers, request bodies, the
-credential, or the grant.
+The canonical Fleetd page accepts the replay fixture and one message committed
+after `ready`. Separate WebViews then prove that a page loaded through the
+`localhost` hostname alias and a page served from another loopback port receive
+no application data. Fixture creation and live-message stimulus run outside the
+page, so the adapter's recorded operation list remains an exact account of its
+own network surface.
 
 ## Environment
 
 - macOS 26.5.2 on arm64;
 - Bun 1.4.0;
-- `Bun.WebView` with the explicit `webkit` backend and ephemeral storage; and
-- Fleetd bound to `127.0.0.1:17429` over plaintext loopback HTTP.
+- `Bun.WebView` with the explicit `webkit` backend and a fresh ephemeral data
+  store for each origin;
+- Fleetd revision `ddfc343`; and
+- Fleetd bound to `127.0.0.1:17449` over plaintext loopback HTTP.
 
 ## Command
 
-With the exact Fleetd revision running on the bound address and the values kept
-only in the command environment:
+With that exact Fleetd revision running on the bound address, the operator
+credential is supplied only through the process environment:
 
 ```sh
-FLEETD_BROWSER_QUALIFICATION_ORIGIN=http://127.0.0.1:17429 \
+FLEETD_BROWSER_QUALIFICATION_ORIGIN=http://127.0.0.1:17449 \
 FLEETD_BROWSER_QUALIFICATION_CREDENTIAL='<redacted>' \
-FLEETD_BROWSER_QUALIFICATION_CHANNEL_ID='<redacted>' \
   bun tools/qualify-browser-channel-stream.ts
 ```
 
-Observed result, with the non-secret channel identifier redacted from the
-checked-in artifact:
+Observed result:
 
 ```json
-{"bun_version":"1.4.0","backend":"webkit","outcome":"ready","protocol":"fleetd.channel-stream.browser.v1","url":"ws://127.0.0.1:17429/v1/browser/channel-stream","firstApplicationFrameType":"ready","acceptedMessages":0,"operations":[{"kind":"fetch","method":"POST","path":"/v1/channels/<channel-id>/stream-grants"},{"kind":"websocket","path":"/v1/browser/channel-stream","protocol":"fleetd.channel-stream.browser.v1"}]}
+{"bun_version":"1.4.0","backend":"webkit","fixture":{"fresh_channel":true,"replay_messages_accepted":1,"live_messages_accepted":1},"csp":{"exact_policy":true,"same_origin_connect_succeeded":true,"set_cookie_headers":0},"same_origin":{"outcome":"complete","protocol":"fleetd.channel-stream.browser.v1","first_frames":["ready","message","message"],"operations":[{"kind":"fetch","method":"POST","path":"/v1/channels/<channel-id>/stream-grants"},{"kind":"websocket","path":"/v1/browser/channel-stream","protocol":"fleetd.channel-stream.browser.v1"}],"audit":{"no_secret_detected":true,"history_entry_enumeration_authoritative":false,"cookie_setter_instrumented":true,"indexed_db":{"available":true,"authoritative":true,"databases":0},"cache_api":{"available":true,"authoritative":true,"caches":0},"service_workers":{"available":true,"authoritative":true,"registrations":0},"console_calls":0,"page_errors":0,"unhandled_rejections":0}},"hostname_alias":{"page_origin":"http://localhost:17449","socket_opened":false,"application_frames":0},"foreign_origin":{"page_origin":"http://127.0.0.1:60948","adapter_application_frames":0,"direct_socket_opened":false,"direct_application_frames":0}}
 ```
 
-## Finding
+## Findings
 
-The actual exported adapter completed the authenticated grant → exact browser
-WebSocket → redemption → `ready` sequence in WebKit. Its observed network
-surface contained exactly one grant `POST` and one WebSocket construction. It
-made no channel-history request and therefore did not substitute HTTP polling
-for failed or missing grant linkage.
+### Actual adapter replay and live continuation
 
-The negotiated URL contained neither credential nor grant. The first server
-application frame was `ready`, the exact constant subprotocol was selected, and
-no conversation message was presented to the consumer during this empty-log
-run. The bootstrap's raw WebView evaluation errors are deliberately suppressed
-because the evaluated source carries the in-memory credential.
+The canonical page was served with Fleetd's exact policy:
+
+```text
+default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+```
+
+Under that CSP, the actual exported adapter performed exactly one authenticated
+grant `POST` and one construction of the fixed browser WebSocket. It emitted no
+history request or polling fallback. WebKit selected the exact
+`fleetd.channel-stream.browser.v1` subprotocol, then delivered `ready`, the
+already-committed replay message, and the post-ready live message in that
+order. The consumer accepted each message once.
+
+### Origin rejection
+
+The hostname-alias view successfully loaded Fleetd's operator page from
+`http://localhost:17449`, minted a grant, and constructed the browser socket.
+The socket never opened and delivered zero application frames because the
+server requires its canonical `127.0.0.1` origin and authority.
+
+The genuinely foreign view loaded from a second `127.0.0.1` port. Its actual
+adapter attempted grant linkage but did not fall back to history or construct a
+socket after the cross-origin Fetch failed. In parallel, that page used a real
+browser `WebSocket` with a valid host-minted grant; the foreign Origin was
+rejected before the socket opened or any application frame arrived.
+
+### Secret surfaces
+
+Each view held its exact credential and grant only in JavaScript memory. The
+runner emits only booleans, counts, fixed paths, and protocol names. It never
+prints request headers, bodies, evaluation source, credentials, or grants, and
+raw WebView evaluation causes are deliberately suppressed because bootstrap
+source contains the in-memory values.
+
+Before starting the client, the page instrumented six console methods, both
+History mutation methods, all three Storage mutation methods, the cookie
+setter, IndexedDB open/delete, Cache API open/match/delete, service-worker
+registration, `error`, and `unhandledrejection`. After acceptance it compared
+the exact credential and observed grant against:
+
+- current location, referrer, History state, and every observed History
+  mutation argument;
+- current cookies and every observed cookie write;
+- all final local/session Storage keys and values plus mutation arguments;
+- enumerated IndexedDB databases;
+- every Cache API request URL/header and cached response header/body;
+- every service-worker registration scope and script URL;
+- requested and selected WebSocket subprotocols and the socket URL; and
+- captured console arguments, page errors, and rejection reasons.
+
+No exact secret was found. The fresh ephemeral stores contained zero IndexedDB
+databases, caches, or service-worker registrations. The runner also observed no
+`Set-Cookie` header on its exact Fleetd HTTP responses, no console calls, no
+page errors, and no unhandled rejections.
 
 ## Limits
 
 - Bun marks `WebView` experimental, so the exact Bun version is evidence.
 - This run exercises macOS WebKit, not Chromium or another browser engine.
-- This run proves the real adapter's grant-to-ready linkage and absence of a
-  polling fallback. It does not prove replay/live message acceptance in WebKit
-  because the qualified channel contained no messages.
-- Deterministic adapter tests separately prove serialized consumer acceptance,
-  cursor advancement after acceptance, every prior reconnect cursor, stable
-  duplicate tolerance, conflict rejection, bounded ready/reconnect behavior,
-  and queue-overflow replay.
-- Rust integration tests separately prove server-side replay/live parity,
-  principal visibility, revocation, restart, and failure boundaries.
-- This remains an explicit qualification command rather than a mandatory
-  `bin/ci` dependency because Bun and macOS WebKit are not universal Rust build
-  inputs.
+- WebKit exposes the current location and History state but no API for
+  enumerating complete back/forward entry URLs. The runner therefore proves an
+  unchanged location, no History mutation calls, and no secret in current
+  state, but reports complete history-entry enumeration as non-authoritative.
+- Browser JavaScript cannot read `HttpOnly` cookies or `Set-Cookie` response
+  headers. Cookie setter/current-cookie inspection is paired with host-side
+  verification that the exact Fleetd fixture, page, and grant responses set no
+  cookie.
+- Because the ephemeral IndexedDB catalog was empty, authoritative database
+  enumeration was sufficient; the runner does not claim a general-purpose scan
+  of arbitrary pre-existing IndexedDB values.
+- Deterministic adapter tests separately cover every prior reconnect cursor,
+  stable duplicate tolerance and conflicts, serialized consumer acceptance,
+  cursor advancement after acceptance, ready/reconnect bounds, queue-overflow
+  replay, and terminal grant-linkage failure without polling.
+- Rust integration tests remain the authority for cross-principal visibility,
+  revocation, daemon restart, global capacity, and server send deadlines.
+- This is an explicit qualification rather than a mandatory `bin/ci` step
+  because Bun and macOS WebKit are not universal Rust build inputs.
