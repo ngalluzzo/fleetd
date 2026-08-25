@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use fleetd::{
     AppState, AuthService, BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse,
@@ -7,12 +11,19 @@ use fleetd::{
 };
 use futures_util::{SinkExt, StreamExt, future::join_all};
 use serde_json::{Value, json};
+use sqlx::{
+    Row,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
     tungstenite::{
         Error as WebSocketError, Message as WebSocketMessage,
         client::IntoClientRequest,
-        http::{HeaderValue, Request, header::ORIGIN, header::SEC_WEBSOCKET_PROTOCOL},
+        http::{
+            HeaderMap, HeaderValue, Request,
+            header::{AUTHORIZATION, ORIGIN, SEC_WEBSOCKET_PROTOCOL},
+        },
     },
 };
 
@@ -20,6 +31,7 @@ struct BrowserDaemon {
     directory: tempfile::TempDir,
     auth: AuthService,
     operator_token: String,
+    database_path: PathBuf,
     address: SocketAddr,
     server: tokio::task::JoinHandle<()>,
 }
@@ -27,9 +39,8 @@ struct BrowserDaemon {
 impl BrowserDaemon {
     async fn start() -> Self {
         let directory = tempfile::tempdir().expect("temporary directory");
-        let store = Store::open(directory.path().join("fleetd.db"))
-            .await
-            .expect("open store");
+        let database_path = directory.path().join("fleetd.db");
+        let store = Store::open(&database_path).await.expect("open store");
         let auth = AuthService::new(store.clone());
         let operator_path = directory.path().join("operator.token");
         auth.ensure_operator_credential(&operator_path)
@@ -59,6 +70,7 @@ impl BrowserDaemon {
             directory,
             auth,
             operator_token,
+            database_path,
             address,
             server,
         }
@@ -617,6 +629,154 @@ async fn daemon_restart_invalidates_unused_grants_and_retains_durable_replay() {
 }
 
 #[tokio::test]
+async fn browser_transport_debug_and_sqlite_surfaces_do_not_expand_secret_exposure() {
+    let daemon = BrowserDaemon::start().await;
+    let member = daemon.register("secret-surface-member").await;
+    let bearer = member.credential.token.clone();
+    let channel = daemon
+        .channel("secret-surfaces", vec![member.agent.id.clone()])
+        .await;
+    let issued = issue_qualified_grant(&daemon, &channel.id, &bearer).await;
+    let grant = issued.grant.expose_secret().to_owned();
+    let secrets = [&bearer[..], &grant[..]];
+    assert_surface_omits("registration Debug", &format!("{member:?}"), &secrets);
+    assert_surface_omits("grant response Debug", &format!("{issued:?}"), &secrets);
+    assert_surface_omits(
+        "auth service Debug",
+        &format!("{:?}", daemon.auth),
+        &secrets,
+    );
+
+    let (mut socket, upgrade_response) = connect_qualified_browser(&daemon, &secrets).await;
+    assert_headers_omit(
+        "browser upgrade response headers",
+        upgrade_response.headers(),
+        &secrets,
+    );
+
+    let redemption = BrowserStreamRedemptionRequest {
+        message_type: BrowserStreamRedemptionMessageType::Redeem,
+        grant: issued.grant,
+    };
+    assert_surface_omits("redemption Debug", &format!("{redemption:?}"), &secrets);
+    let redemption_frame = serde_json::to_string(&redemption).expect("serialize redemption");
+    assert!(redemption_frame.contains(&grant));
+    assert!(!redemption_frame.contains(&bearer));
+    socket
+        .send(WebSocketMessage::Text(redemption_frame.into()))
+        .await
+        .expect("send redemption");
+    let ready = next_server_frame(&mut socket).await;
+    assert_ready(ready.clone(), &channel.id, 0);
+    assert_surface_omits("ready frame Debug", &format!("{ready:?}"), &secrets);
+
+    let database_values = sqlite_quoted_values(&daemon.database_path).await;
+    for secret in [
+        daemon.operator_token.as_str(),
+        bearer.as_str(),
+        grant.as_str(),
+    ] {
+        assert_sqlite_values_omit(&database_values, secret);
+    }
+}
+
+async fn issue_qualified_grant(
+    daemon: &BrowserDaemon,
+    channel_id: &str,
+    bearer: &str,
+) -> BrowserStreamGrantIssueResponse {
+    let client = reqwest::Client::new();
+    let issue_url = format!(
+        "http://{}/v1/channels/{channel_id}/stream-grants",
+        daemon.address
+    );
+    let issue_request = client
+        .post(&issue_url)
+        .bearer_auth(bearer)
+        .json(&json!({
+            "after": 0,
+            "protocol": BROWSER_STREAM_PROTOCOL
+        }))
+        .build()
+        .expect("build issuance request");
+    assert_surface_omits("issuance URL", issue_request.url().as_str(), &[bearer]);
+    let authorization = issue_request
+        .headers()
+        .get(AUTHORIZATION)
+        .expect("issuance authorization")
+        .to_str()
+        .expect("text authorization");
+    assert!(
+        authorization.strip_prefix("Bearer ") == Some(bearer),
+        "issuance request did not carry the expected bearer"
+    );
+
+    let issue_response = client
+        .execute(issue_request)
+        .await
+        .expect("issue grant request");
+    assert_eq!(issue_response.status(), reqwest::StatusCode::CREATED);
+    assert_eq!(
+        issue_response.headers().get(reqwest::header::CACHE_CONTROL),
+        Some(&HeaderValue::from_static("no-store"))
+    );
+    let response_url = issue_response.url().to_string();
+    let response_headers = issue_response.headers().clone();
+    let issued: BrowserStreamGrantIssueResponse =
+        issue_response.json().await.expect("grant response");
+    let secrets = [bearer, issued.grant.expose_secret()];
+    assert_surface_omits("issuance response URL", &response_url, &secrets);
+    assert_headers_omit("issuance response headers", &response_headers, &secrets);
+    issued
+}
+
+async fn connect_qualified_browser(
+    daemon: &BrowserDaemon,
+    secrets: &[&str],
+) -> (
+    BrowserSocket,
+    tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
+) {
+    let upgrade_request = browser_request(
+        daemon.address,
+        &format!("http://{}", daemon.address),
+        BROWSER_STREAM_PROTOCOL,
+    );
+    assert_eq!(upgrade_request.uri().path(), "/v1/browser/channel-stream");
+    assert!(upgrade_request.uri().query().is_none());
+    assert!(upgrade_request.headers().get(AUTHORIZATION).is_none());
+    assert_eq!(
+        upgrade_request
+            .headers()
+            .get(SEC_WEBSOCKET_PROTOCOL)
+            .expect("browser subprotocol"),
+        BROWSER_STREAM_PROTOCOL
+    );
+    assert_surface_omits(
+        "browser upgrade URL",
+        &upgrade_request.uri().to_string(),
+        secrets,
+    );
+    assert_headers_omit(
+        "browser upgrade headers",
+        upgrade_request.headers(),
+        secrets,
+    );
+
+    let (socket, upgrade_response) = connect_async(upgrade_request)
+        .await
+        .expect("browser upgrade");
+    assert_eq!(
+        upgrade_response
+            .headers()
+            .get(SEC_WEBSOCKET_PROTOCOL)
+            .expect("selected protocol"),
+        BROWSER_STREAM_PROTOCOL
+    );
+    (socket, upgrade_response)
+}
+
+#[tokio::test]
 async fn browser_edge_fails_closed_before_and_after_upgrade() {
     let daemon = BrowserDaemon::start().await;
     let member = daemon.register("edge-member").await;
@@ -882,5 +1042,85 @@ fn assert_http_error(error: WebSocketError, status: u16) {
     match error {
         WebSocketError::Http(response) => assert_eq!(response.status().as_u16(), status),
         other => panic!("expected HTTP rejection, got {other}"),
+    }
+}
+
+fn assert_surface_omits(surface: &str, value: &str, secrets: &[&str]) {
+    for secret in secrets {
+        assert!(!value.contains(secret), "{surface} exposed a raw secret");
+    }
+}
+
+fn assert_headers_omit(surface: &str, headers: &HeaderMap, secrets: &[&str]) {
+    for (name, value) in headers {
+        assert_surface_omits(surface, name.as_str(), secrets);
+        for secret in secrets {
+            assert!(
+                !value
+                    .as_bytes()
+                    .windows(secret.len())
+                    .any(|window| window == secret.as_bytes()),
+                "{surface} exposed a raw secret in {name}"
+            );
+        }
+    }
+}
+
+async fn sqlite_quoted_values(database_path: &Path) -> Vec<String> {
+    let options = SqliteConnectOptions::new()
+        .filename(database_path)
+        .read_only(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .expect("open qualification database");
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("list SQLite tables");
+    let mut values = Vec::new();
+    for table in tables {
+        let table = sqlite_identifier(&table);
+        let columns = sqlx::query(&format!("PRAGMA table_info({table})"))
+            .fetch_all(&pool)
+            .await
+            .expect("list SQLite columns");
+        for column in columns {
+            let column_name: String = column.try_get("name").expect("column name");
+            let column = sqlite_identifier(&column_name);
+            let query = format!("SELECT quote({column}) FROM {table}");
+            let mut column_values: Vec<String> = sqlx::query_scalar(&query)
+                .fetch_all(&pool)
+                .await
+                .expect("read quoted SQLite values");
+            values.append(&mut column_values);
+        }
+    }
+    pool.close().await;
+    values
+}
+
+fn sqlite_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn assert_sqlite_values_omit(values: &[String], secret: &str) {
+    let encoded = secret
+        .as_bytes()
+        .iter()
+        .fold(String::new(), |mut encoded, byte| {
+            use std::fmt::Write as _;
+            write!(encoded, "{byte:02X}").expect("write hex");
+            encoded
+        });
+    for value in values {
+        assert!(!value.contains(secret), "SQLite stored a raw secret value");
+        assert!(
+            !value.to_ascii_uppercase().contains(&encoded),
+            "SQLite stored raw secret bytes"
+        );
     }
 }

@@ -46,6 +46,16 @@ async fn operator_assets_are_public_exact_and_browser_hardened() {
             response.headers().get(header::X_CONTENT_TYPE_OPTIONS),
             Some(&header::HeaderValue::from_static("nosniff"))
         );
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&header::HeaderValue::from_static("no-store")),
+            "{path}"
+        );
+        assert_eq!(
+            response.headers().get(header::REFERRER_POLICY),
+            Some(&header::HeaderValue::from_static("no-referrer")),
+            "{path}"
+        );
     }
 
     let contract = body(app.clone(), "/operator/contract.json").await;

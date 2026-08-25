@@ -4,6 +4,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use fleetd::{AppState, Store, openapi_document, router};
 use serde_json::Value;
 use tower::ServiceExt;
@@ -108,6 +109,45 @@ fn websocket_upgrade_declares_its_frame_contract() {
     );
 }
 
+#[test]
+fn browser_contract_has_no_raw_secret_fixture_or_secret_bearing_upgrade_field() {
+    let generated = generated_contract();
+    let committed: Value =
+        serde_json::from_str(COMMITTED_CONTRACT).expect("parse committed OpenAPI");
+    let embedded_fixture = format!(
+        "Bearer fl_ag_{} trailing-metadata",
+        URL_SAFE_NO_PAD.encode([0_u8; 32])
+    );
+    assert!(
+        contains_raw_secret(&embedded_fixture),
+        "the contract scanner must detect an embedded token-shaped fixture"
+    );
+    assert!(
+        !contains_raw_secret("fl_ag_<redacted>"),
+        "the contract scanner must permit an explicit redaction marker"
+    );
+    assert_no_raw_secret_fixture(&generated, "generated OpenAPI");
+    assert_no_raw_secret_fixture(&committed, "committed OpenAPI");
+
+    let browser = &generated["paths"]["/v1/browser/channel-stream"]["get"];
+    assert!(browser.get("security").is_none());
+    assert!(browser.get("parameters").is_none());
+    assert_eq!(
+        browser["x-fleetd-websocket"]["subprotocol"],
+        "fleetd.channel-stream.browser.v1"
+    );
+    let response_headers = browser["responses"]["101"]["headers"]
+        .as_object()
+        .expect("upgrade response headers");
+    assert_eq!(response_headers.len(), 1);
+    assert!(response_headers.contains_key("Sec-WebSocket-Protocol"));
+
+    let grant_schema = &generated["components"]["schemas"]["BrowserStreamGrant"];
+    assert!(grant_schema.get("example").is_none());
+    assert!(grant_schema.get("default").is_none());
+    assert!(grant_schema.get("enum").is_none());
+}
+
 #[tokio::test]
 async fn daemon_serves_the_generated_contract() {
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -129,4 +169,44 @@ async fn daemon_serves_the_generated_contract() {
         .expect("read contract response");
     let served: Value = serde_json::from_slice(&body).expect("parse served OpenAPI");
     assert_eq!(served, generated_contract());
+}
+
+fn assert_no_raw_secret_fixture(value: &Value, surface: &str) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                assert_no_raw_secret_fixture(value, surface);
+            }
+        }
+        Value::Object(values) => {
+            for (key, value) in values {
+                assert!(
+                    !contains_raw_secret(key),
+                    "{surface} contains raw secret key"
+                );
+                assert_no_raw_secret_fixture(value, surface);
+            }
+        }
+        Value::String(value) => {
+            assert!(
+                !contains_raw_secret(value),
+                "{surface} contains a raw credential or stream-grant fixture"
+            );
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn contains_raw_secret(value: &str) -> bool {
+    ["fl_ag_", "fl_op_", "fl_sg_"].into_iter().any(|prefix| {
+        value.match_indices(prefix).any(|(index, _)| {
+            let encoded_start = index + prefix.len();
+            let Some(encoded) = value.get(encoded_start..encoded_start + 43) else {
+                return false;
+            };
+            URL_SAFE_NO_PAD
+                .decode(encoded)
+                .is_ok_and(|decoded| decoded.len() == 32)
+        })
+    })
 }
