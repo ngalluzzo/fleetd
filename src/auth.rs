@@ -48,6 +48,14 @@ impl Principal {
             Self::Agent { agent_id, .. } => Some(agent_id),
         }
     }
+
+    /// Returns the exact credential that authenticated this principal.
+    #[must_use]
+    pub(crate) fn credential_id(&self) -> &str {
+        match self {
+            Self::Operator { credential_id } | Self::Agent { credential_id, .. } => credential_id,
+        }
+    }
 }
 
 /// Result of reconciling the operator token file with credential storage.

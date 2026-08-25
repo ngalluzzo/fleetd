@@ -1,9 +1,6 @@
 use axum::{
     Extension, Json, Router,
-    extract::{
-        Path, Query, Request, State, WebSocketUpgrade,
-        ws::{Message as WebSocketMessage, WebSocket},
-    },
+    extract::{Path, Query, Request, State, WebSocketUpgrade},
     http::{StatusCode, header::AUTHORIZATION},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -15,6 +12,7 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::{AuthService, Principal},
+    channel_stream::{AuthorizedChannelStream, run_native_channel_stream},
     error::{ErrorResponse, FleetError},
     model::{
         AckDelivery, AddMember, ArmInvocation, BlockDelivery, ClaimDeliveries, CompleteInvocation,
@@ -980,17 +978,12 @@ async fn stream(
         .list_messages(&channel_id, principal.agent_id(), query.after, 1)
         .await?;
     let receiver = state.messages.subscribe();
-    let viewer = principal.agent_id().map(str::to_owned);
+    let authorization =
+        AuthorizedChannelStream::from_principal(channel_id, query.after, &principal);
+    debug_assert_eq!(authorization.credential_id(), principal.credential_id());
     Ok(upgrade
         .on_upgrade(move |socket| {
-            stream_messages(
-                socket,
-                state.store,
-                receiver,
-                channel_id,
-                viewer,
-                query.after,
-            )
+            run_native_channel_stream(socket, state.store, receiver, authorization)
         })
         .into_response())
 }
@@ -1034,110 +1027,4 @@ async fn require_channel_access(
     Err(FleetError::Forbidden(
         "agent is not a member of this channel".to_owned(),
     ))
-}
-
-async fn stream_messages(
-    mut socket: WebSocket,
-    store: Store,
-    mut receiver: broadcast::Receiver<Message>,
-    channel_id: String,
-    viewer: Option<String>,
-    mut cursor: i64,
-) {
-    if replay(
-        &mut socket,
-        &store,
-        &channel_id,
-        viewer.as_deref(),
-        &mut cursor,
-    )
-    .await
-    .is_err()
-    {
-        return;
-    }
-    loop {
-        tokio::select! {
-            incoming = socket.recv() => {
-                match incoming {
-                    Some(Ok(WebSocketMessage::Close(_)) | Err(_)) | None => return,
-                    Some(Ok(_)) => {}
-                }
-            }
-            message = receiver.recv() => {
-                match message {
-                    Ok(message)
-                        if message.channel_id == channel_id
-                            && message.seq > cursor
-                            && message_visible_to(viewer.as_deref(), &message) =>
-                    {
-                        cursor = message.seq;
-                        if send_message(&mut socket, &message).await.is_err() {
-                            return;
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        if replay(
-                            &mut socket,
-                            &store,
-                            &channel_id,
-                            viewer.as_deref(),
-                            &mut cursor,
-                        )
-                        .await
-                        .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Closed) => return,
-                }
-            }
-        }
-    }
-}
-
-/// Applies read visibility: operators see everything, while a member sees
-/// broadcasts plus direct messages they sent or received.
-fn message_visible_to(viewer_agent_id: Option<&str>, message: &Message) -> bool {
-    let Some(agent_id) = viewer_agent_id else {
-        return true;
-    };
-    message
-        .recipient_id
-        .as_deref()
-        .is_none_or(|recipient| recipient == agent_id)
-        || message.sender_id == agent_id
-}
-
-async fn replay(
-    socket: &mut WebSocket,
-    store: &Store,
-    channel_id: &str,
-    viewer_agent_id: Option<&str>,
-    cursor: &mut i64,
-) -> Result<(), ()> {
-    loop {
-        let page = store
-            .list_messages(channel_id, viewer_agent_id, *cursor, 500)
-            .await
-            .map_err(|_| ())?;
-        let count = page.messages.len();
-        for message in page.messages {
-            *cursor = message.seq;
-            send_message(socket, &message).await?;
-        }
-        if count < 500 {
-            return Ok(());
-        }
-    }
-}
-
-async fn send_message(socket: &mut WebSocket, message: &Message) -> Result<(), ()> {
-    let serialized = serde_json::to_string(message).map_err(|_| ())?;
-    socket
-        .send(WebSocketMessage::Text(serialized.into()))
-        .await
-        .map_err(|_| ())
 }

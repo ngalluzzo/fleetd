@@ -286,5 +286,13 @@ where
         .expect("message delivery timeout")
         .expect("stream is open")
         .expect("valid websocket frame");
-    serde_json::from_str(frame.to_text().expect("text frame")).expect("message envelope")
+    let text = frame.to_text().expect("text frame");
+    let value: serde_json::Value = serde_json::from_str(text).expect("JSON frame");
+    let message: Message = serde_json::from_value(value.clone()).expect("message envelope");
+    assert_eq!(
+        value,
+        serde_json::to_value(&message).expect("serialize message"),
+        "native streams must retain the raw Message frame without a wrapper"
+    );
+    message
 }

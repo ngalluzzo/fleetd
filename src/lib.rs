@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod auth;
+mod channel_stream;
 pub mod controller;
 mod delivery;
 pub mod error;
