@@ -67,6 +67,44 @@ pub struct CreateChannel {
     pub member_ids: Vec<String>,
 }
 
+/// Whether one channel membership receives leased inbox work.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MembershipDeliveryMode {
+    /// Snapshot addressed and broadcast messages into the durable inbox.
+    #[default]
+    Inbox,
+    /// Retain history and live visibility without creating inbox work.
+    StreamOnly,
+}
+
+impl MembershipDeliveryMode {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inbox => "inbox",
+            Self::StreamOnly => "stream_only",
+        }
+    }
+}
+
+/// Exact initial membership used by the durable store.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+pub struct CreateChannelMember {
+    pub agent_id: String,
+    pub delivery_mode: MembershipDeliveryMode,
+}
+
+/// Bounded public membership projection without opaque agent metadata.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+pub struct ChannelMember {
+    pub channel_id: String,
+    pub agent_id: String,
+    pub agent_name: String,
+    pub joined_at_ms: i64,
+    pub delivery_mode: MembershipDeliveryMode,
+}
+
 /// Input for adding one agent to a channel.
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct AddMember {

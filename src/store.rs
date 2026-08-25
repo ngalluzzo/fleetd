@@ -10,7 +10,10 @@ use uuid::Uuid;
 
 use crate::{
     error::FleetError,
-    model::{Agent, Channel, CreateAgent, CreateChannel, CreateMessage, Message, MessagePage},
+    model::{
+        Agent, Channel, ChannelMember, CreateAgent, CreateChannel, CreateChannelMember,
+        CreateMessage, MembershipDeliveryMode, Message, MessagePage,
+    },
 };
 
 const MAX_IDEMPOTENCY_KEY_LENGTH: usize = 256;
@@ -100,16 +103,51 @@ impl Store {
     ///
     /// Returns an error for invalid input, unknown members, or a persistence failure.
     pub async fn create_channel(&self, input: CreateChannel) -> Result<Channel, FleetError> {
-        validate_name("channel", &input.name)?;
-        let member_ids: HashSet<_> = input.member_ids.into_iter().collect();
+        let members = input
+            .member_ids
+            .into_iter()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .map(|agent_id| CreateChannelMember {
+                agent_id,
+                delivery_mode: MembershipDeliveryMode::Inbox,
+            })
+            .collect();
+        self.create_channel_with_members(input.name, input.metadata, members)
+            .await
+    }
+
+    /// Creates a channel with exact immutable delivery modes for every initial
+    /// membership.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid input, duplicate or unknown members, or a
+    /// persistence failure.
+    pub async fn create_channel_with_members(
+        &self,
+        name: String,
+        metadata: Value,
+        members: Vec<CreateChannelMember>,
+    ) -> Result<Channel, FleetError> {
+        validate_name("channel", &name)?;
+        let mut seen = HashSet::new();
+        for member in &members {
+            if !seen.insert(&member.agent_id) {
+                return Err(FleetError::Invalid(format!(
+                    "duplicate initial channel member: {}",
+                    member.agent_id
+                )));
+            }
+        }
         let mut transaction = self.pool.begin().await?;
-        for agent_id in &member_ids {
-            ensure_exists(&mut transaction, "agents", "agent", agent_id).await?;
+        for member in &members {
+            ensure_exists(&mut transaction, "agents", "agent", &member.agent_id).await?;
         }
         let channel = Channel {
             id: Uuid::new_v4().to_string(),
-            name: input.name,
-            metadata: input.metadata,
+            name,
+            metadata,
             created_at_ms: now_ms(),
         };
         let metadata_json = serde_json::to_string(&channel.metadata)?;
@@ -123,13 +161,18 @@ impl Store {
         .execute(&mut *transaction)
         .await;
         map_unique_conflict(result, "channel name")?;
-        for agent_id in member_ids {
+        for member in members {
             sqlx::query(
-                "INSERT INTO channel_members (channel_id, agent_id, joined_at_ms) VALUES (?, ?, ?)",
+                r"
+                INSERT INTO channel_members (
+                    channel_id, agent_id, joined_at_ms, delivery_mode
+                ) VALUES (?, ?, ?, ?)
+                ",
             )
             .bind(&channel.id)
-            .bind(agent_id)
+            .bind(member.agent_id)
             .bind(channel.created_at_ms)
+            .bind(member.delivery_mode.as_str())
             .execute(&mut *transaction)
             .await?;
         }
@@ -157,19 +200,92 @@ impl Store {
     ///
     /// Returns an error when the channel or agent is unknown or persistence fails.
     pub async fn add_member(&self, channel_id: &str, agent_id: &str) -> Result<(), FleetError> {
-        let mut transaction = self.pool.begin().await?;
+        self.add_member_with_mode(channel_id, agent_id, MembershipDeliveryMode::Inbox)
+            .await
+    }
+
+    /// Adds one membership with an exact immutable delivery mode. Repeating
+    /// the same membership is idempotent; changing its mode conflicts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the channel or agent is unknown, the existing
+    /// membership uses another mode, or persistence fails.
+    pub async fn add_member_with_mode(
+        &self,
+        channel_id: &str,
+        agent_id: &str,
+        delivery_mode: MembershipDeliveryMode,
+    ) -> Result<(), FleetError> {
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         ensure_exists(&mut transaction, "channels", "channel", channel_id).await?;
         ensure_exists(&mut transaction, "agents", "agent", agent_id).await?;
+        let existing: Option<String> = sqlx::query_scalar(
+            "SELECT delivery_mode FROM channel_members WHERE channel_id = ? AND agent_id = ?",
+        )
+        .bind(channel_id)
+        .bind(agent_id)
+        .fetch_optional(&mut *transaction)
+        .await?;
+        if let Some(existing) = existing {
+            if existing != delivery_mode.as_str() {
+                return Err(FleetError::Conflict(format!(
+                    "channel membership delivery mode is immutable: {channel_id}/{agent_id}"
+                )));
+            }
+            transaction.commit().await?;
+            return Ok(());
+        }
         sqlx::query(
-            "INSERT OR IGNORE INTO channel_members (channel_id, agent_id, joined_at_ms) VALUES (?, ?, ?)",
+            r"
+            INSERT INTO channel_members (
+                channel_id, agent_id, joined_at_ms, delivery_mode
+            ) VALUES (?, ?, ?, ?)
+            ",
         )
         .bind(channel_id)
         .bind(agent_id)
         .bind(now_ms())
+        .bind(delivery_mode.as_str())
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    /// Lists the exact immutable memberships for one channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown channel or an undecodable stored mode.
+    pub async fn list_channel_members(
+        &self,
+        channel_id: &str,
+    ) -> Result<Vec<ChannelMember>, FleetError> {
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM channels WHERE id = ?")
+            .bind(channel_id)
+            .fetch_one(&self.pool)
+            .await?;
+        if exists == 0 {
+            return Err(FleetError::NotFound {
+                entity: "channel",
+                id: channel_id.to_owned(),
+            });
+        }
+        let rows = sqlx::query(
+            r"
+            SELECT cm.channel_id, cm.agent_id, a.name AS agent_name,
+                   cm.joined_at_ms, cm.delivery_mode
+            FROM channel_members cm
+            JOIN agents a ON a.id = cm.agent_id
+            WHERE cm.channel_id = ?
+            ORDER BY cm.joined_at_ms, cm.agent_id
+            ",
+        )
+        .bind(channel_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(channel_member_from_row).collect()
     }
 
     /// Returns whether an agent is currently a member of a channel.
@@ -444,13 +560,18 @@ async fn insert_delivery_snapshot(
             r"
             INSERT INTO agent_deliveries (
                 message_seq, agent_id, available_at_ms, created_at_ms
-            ) VALUES (?, ?, ?, ?)
+            )
+            SELECT ?, ?, ?, ?
+            FROM channel_members
+            WHERE channel_id = ? AND agent_id = ? AND delivery_mode = 'inbox'
             ",
         )
         .bind(message_seq)
         .bind(recipient_id)
         .bind(created_at_ms)
         .bind(created_at_ms)
+        .bind(channel_id)
+        .bind(recipient_id)
         .execute(&mut **transaction)
         .await?;
     } else {
@@ -461,7 +582,7 @@ async fn insert_delivery_snapshot(
             )
             SELECT ?, agent_id, ?, ?
             FROM channel_members
-            WHERE channel_id = ? AND agent_id != ?
+            WHERE channel_id = ? AND agent_id != ? AND delivery_mode = 'inbox'
             ",
         )
         .bind(message_seq)
@@ -553,6 +674,25 @@ fn channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Channel, FleetError
         name: row.try_get("name")?,
         metadata: parse_json(&row.try_get::<String, _>("metadata_json")?)?,
         created_at_ms: row.try_get("created_at_ms")?,
+    })
+}
+
+fn channel_member_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<ChannelMember, FleetError> {
+    let delivery_mode = match row.try_get::<String, _>("delivery_mode")?.as_str() {
+        "inbox" => MembershipDeliveryMode::Inbox,
+        "stream_only" => MembershipDeliveryMode::StreamOnly,
+        value => {
+            return Err(FleetError::Invalid(format!(
+                "stored channel membership has unknown delivery mode: {value}"
+            )));
+        }
+    };
+    Ok(ChannelMember {
+        channel_id: row.try_get("channel_id")?,
+        agent_id: row.try_get("agent_id")?,
+        agent_name: row.try_get("agent_name")?,
+        joined_at_ms: row.try_get("joined_at_ms")?,
+        delivery_mode,
     })
 }
 

@@ -27,9 +27,10 @@ pub use message_grant_broker::{
 };
 pub use model::{
     AckDelivery, AddMember, Agent, ArmInvocation, BlockDelivery, BlockResolution, BlockedDelivery,
-    Channel, ClaimBatch, ClaimDeliveries, CompleteInvocation, CreateAgent, CreateChannel,
-    CreateMessage, Delivery, ExecutionCertainty, Invocation, InvocationBatch, InvocationCompletion,
-    InvocationState, IssuedCredential, Message, MessagePage, RegisteredAgent, ResolveDeliveryBlock,
+    Channel, ChannelMember, ClaimBatch, ClaimDeliveries, CompleteInvocation, CreateAgent,
+    CreateChannel, CreateChannelMember, CreateMessage, Delivery, ExecutionCertainty, Invocation,
+    InvocationBatch, InvocationCompletion, InvocationState, IssuedCredential,
+    MembershipDeliveryMode, Message, MessagePage, RegisteredAgent, ResolveDeliveryBlock,
     RetryDelivery, SendMessage,
 };
 pub use operations::{

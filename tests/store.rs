@@ -1,4 +1,7 @@
-use fleetd::{CreateAgent, CreateChannel, CreateMessage, FleetError, Store};
+use fleetd::{
+    ClaimDeliveries, CreateAgent, CreateChannel, CreateChannelMember, CreateMessage, FleetError,
+    MembershipDeliveryMode, Store,
+};
 use serde_json::json;
 
 async fn test_store() -> (tempfile::TempDir, Store) {
@@ -7,6 +10,159 @@ async fn test_store() -> (tempfile::TempDir, Store) {
         .await
         .expect("open store");
     (directory, store)
+}
+
+#[tokio::test]
+async fn membership_delivery_modes_control_only_the_delivery_snapshot() {
+    let (_directory, store) = test_store().await;
+    let sender = agent(&store, "mode-sender").await;
+    let worker = agent(&store, "mode-worker").await;
+    let human = agent(&store, "mode-human").await;
+    let channel = store
+        .create_channel_with_members(
+            "mixed-membership".to_owned(),
+            json!({}),
+            vec![
+                exact_member(&sender.id, MembershipDeliveryMode::Inbox),
+                exact_member(&worker.id, MembershipDeliveryMode::Inbox),
+                exact_member(&human.id, MembershipDeliveryMode::StreamOnly),
+            ],
+        )
+        .await
+        .expect("create mixed channel");
+
+    let memberships = store
+        .list_channel_members(&channel.id)
+        .await
+        .expect("list exact memberships");
+    assert_eq!(memberships.len(), 3);
+    assert_eq!(
+        memberships
+            .iter()
+            .find(|membership| membership.agent_id == human.id)
+            .expect("human membership")
+            .delivery_mode,
+        MembershipDeliveryMode::StreamOnly
+    );
+
+    let direct_to_human = store
+        .append_message_idempotent(
+            &channel.id,
+            CreateMessage {
+                sender_id: sender.id.clone(),
+                idempotency_key: Some("direct/human".to_owned()),
+                recipient_id: Some(human.id.clone()),
+                kind: "unknown.result/v7".to_owned(),
+                payload: json!({ "nested": { "preserved": true }, "extension": [1, 2, 3] }),
+                correlation_id: None,
+                causation_id: None,
+            },
+        )
+        .await
+        .expect("send direct to stream member");
+    let replay = store
+        .append_message_idempotent(
+            &channel.id,
+            CreateMessage {
+                sender_id: sender.id.clone(),
+                idempotency_key: Some("direct/human".to_owned()),
+                recipient_id: Some(human.id.clone()),
+                kind: "unknown.result/v7".to_owned(),
+                payload: json!({ "nested": { "preserved": true }, "extension": [1, 2, 3] }),
+                correlation_id: None,
+                causation_id: None,
+            },
+        )
+        .await
+        .expect("replay direct to stream member");
+    assert!(!replay.created);
+    assert_eq!(replay.message, direct_to_human.message);
+    assert!(claim_all(&store, &human.id).await.deliveries.is_empty());
+    let human_history = store
+        .list_messages(&channel.id, Some(&human.id), 0, 100)
+        .await
+        .expect("stream member history");
+    assert_eq!(human_history.messages, vec![direct_to_human.message]);
+
+    let direct_to_worker = append_text(
+        &store,
+        &channel.id,
+        &sender.id,
+        Some(&worker.id),
+        "worker direct",
+    )
+    .await;
+    let worker_direct = claim_all(&store, &worker.id).await;
+    assert_eq!(worker_direct.deliveries.len(), 1);
+    assert_eq!(worker_direct.deliveries[0].message, direct_to_worker);
+    store
+        .acknowledge_delivery(&worker.id, &direct_to_worker.id, &worker_direct.lease_token)
+        .await
+        .expect("ack direct worker delivery");
+
+    let broadcast = append_text(&store, &channel.id, &sender.id, None, "mixed broadcast").await;
+    assert!(claim_all(&store, &human.id).await.deliveries.is_empty());
+    let worker_broadcast = claim_all(&store, &worker.id).await;
+    assert_eq!(worker_broadcast.deliveries.len(), 1);
+    assert_eq!(worker_broadcast.deliveries[0].message, broadcast);
+
+    store
+        .add_member_with_mode(&channel.id, &human.id, MembershipDeliveryMode::StreamOnly)
+        .await
+        .expect("exact membership replay");
+    let conflict = store
+        .add_member_with_mode(&channel.id, &human.id, MembershipDeliveryMode::Inbox)
+        .await
+        .expect_err("delivery mode mutation must conflict");
+    assert!(matches!(conflict, FleetError::Conflict(_)));
+}
+
+#[tokio::test]
+async fn concurrent_member_add_and_append_use_one_committed_snapshot() {
+    let (_directory, store) = test_store().await;
+    let sender = agent(&store, "concurrent-sender").await;
+    let late = agent(&store, "concurrent-late").await;
+    let channel = store
+        .create_channel(CreateChannel {
+            name: "concurrent-membership-snapshot".to_owned(),
+            metadata: json!({}),
+            member_ids: vec![sender.id.clone()],
+        })
+        .await
+        .expect("create initial channel");
+    let input = CreateMessage {
+        sender_id: sender.id.clone(),
+        idempotency_key: Some("concurrent/broadcast".to_owned()),
+        recipient_id: None,
+        kind: "unknown.concurrent/v1".to_owned(),
+        payload: json!({ "opaque": { "value": 42 } }),
+        correlation_id: None,
+        causation_id: None,
+    };
+
+    let (added, appended) = tokio::join!(
+        store.add_member_with_mode(&channel.id, &late.id, MembershipDeliveryMode::Inbox),
+        store.append_message_idempotent(&channel.id, input.clone())
+    );
+    added.expect("concurrent membership commits");
+    let appended = appended.expect("concurrent message commits");
+    let first_claim = claim_all(&store, &late.id).await;
+    assert!(first_claim.deliveries.len() <= 1);
+    if let Some(delivery) = first_claim.deliveries.first() {
+        assert_eq!(delivery.message, appended.message);
+    }
+
+    let replay = store
+        .append_message_idempotent(&channel.id, input)
+        .await
+        .expect("idempotent replay after membership commit");
+    assert!(!replay.created);
+    assert_eq!(replay.message, appended.message);
+    let second_claim = claim_all(&store, &late.id).await;
+    assert!(
+        second_claim.deliveries.is_empty(),
+        "replay must not recompute the delivery snapshot"
+    );
 }
 
 #[tokio::test]
@@ -314,6 +470,26 @@ async fn append_text(
         )
         .await
         .expect("append message")
+}
+
+fn exact_member(agent_id: &str, delivery_mode: MembershipDeliveryMode) -> CreateChannelMember {
+    CreateChannelMember {
+        agent_id: agent_id.to_owned(),
+        delivery_mode,
+    }
+}
+
+async fn claim_all(store: &Store, agent_id: &str) -> fleetd::ClaimBatch {
+    store
+        .claim_deliveries(
+            agent_id,
+            ClaimDeliveries {
+                limit: 100,
+                lease_duration_ms: 10_000,
+            },
+        )
+        .await
+        .expect("claim deliveries")
 }
 
 #[tokio::test]
