@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "fleetd_executable": "/absolute/path/to/fleetd/target/debug/fleetd",
+  "fleetd_revision": "replace-with-exact-40-character-git-revision",
+  "request_kind": "conversation.prompt/example-v1",
+  "result_kind": "conversation.result/example-v1",
+  "turn_timeout_ms": 600000,
+  "worker": {
+    "working_directory": "/absolute/path/to/workspace",
+    "additional_directories": [],
+    "mcp_grants": [],
+    "plugin": {
+      "id": "fleetd.harness.opencode",
+      "executable": "/absolute/path/to/fleetd/target/debug/fleetd-harness-opencode",
+      "args": [],
+      "config": {
+        "executable": "/absolute/path/to/opencode",
+        "expected_version": "replace-with-exact-opencode-version",
+        "model": "fleet-local//absolute/path/to/model",
+        "home": "/absolute/path/to/empty-qualification-home",
+        "path": "/explicit/non-secret/path",
+        "term": "xterm-256color",
+        "tmpdir": "/absolute/private/tmp/path",
+        "openai_compatible": {
+          "provider_id": "fleet-local",
+          "provider_name": "Fleet local inference",
+          "base_url": "http://127.0.0.1:18082/v1",
+          "model_id": "/absolute/path/to/model",
+          "model_name": "Local model"
+        }
+      },
+      "initialize_timeout_ms": 30000,
+      "request_timeout_ms": 30000,
+      "shutdown_timeout_ms": 5000
+    },
+    "lease_duration_ms": 900000,
+    "poll_interval_ms": 200,
+    "restart_backoff_ms": 1000,
+    "pre_arm_retry_delay_ms": 1000,
+    "turn": {
+      "idle_timeout_ms": 120000,
+      "wall_timeout_ms": 600000,
+      "cancel_drain_timeout_ms": 15000,
+      "max_captured_output_bytes": 524288,
+      "tool_budget": 64
+    }
+  }
+}

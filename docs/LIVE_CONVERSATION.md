@@ -166,3 +166,44 @@ browser-stream contracts; the product-loop slices remain open:
 
 Live execution telemetry is a later, separately qualified slice and is not a
 pretext for weakening the conversation stream.
+
+## Product-loop qualification runner
+
+`tools/qualify-live-conversation.ts` is the presentation-free Phase C runner.
+It starts a fresh daemon and continuous worker against one temporary database,
+provisions the human `stream_only` and worker `inbox` participants through the
+public API, and loads the exported browser-stream client into Bun's native
+WebKit-backed `WebView`. The runner sends every request with the human agent
+credential; the operator credential is used only for administration and exact
+operational read models.
+
+One run performs four causal turns: initial connection, fresh browser
+connection, daemon replacement, and worker plus harness-plugin replacement. It
+requires the replacement generation to adopt the same native session reference
+at the next owner epoch. It then compares every browser-accepted opaque
+envelope with public durable history, correlates the fixed-size invocation
+observations, and opens SQLite read-only to prove the human accumulated zero
+leased delivery rows.
+
+The checked-in schema-1 example profile owns the exact operational composition:
+Fleetd revision and executable, opaque plugin identity/configuration, worker
+bounds, and external request/result kinds. The runner knows no OpenCode, model,
+provider, or application semantics. A profile must contain no credentials; the
+selected plugin's strict schema remains responsible for its own launch policy.
+The model server, when any, is supervised outside the runner and recorded as an
+external dependency rather than silently started.
+
+Run from a clean built Fleetd revision:
+
+```sh
+cp tools/live-conversation-profile.example.json target/live-conversation-profile.json
+# Fill every exact path, version, revision, model route, and bound.
+bun run tools/qualify-live-conversation.ts \
+  target/live-conversation-profile.json > target/live-conversation-evidence.json
+```
+
+The credential-free JSON artifact includes the declared Git revision, profile
+and executable digests, exact participant/message identities, browser cursors,
+generation shutdown evidence, session adoption, event-chain digests, and
+runner-owned process cleanup. The runner deletes its temporary database,
+credentials, and generated worker desired state on both success and failure.
