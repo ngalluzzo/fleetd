@@ -114,10 +114,17 @@ bounds are validated before a process starts.
 - Plugin generations restart with bounded backoff. Their in-memory session
   cache is discarded; compatible ready bindings are reacquired under a higher
   owner epoch and natively resumed.
+- A generation that reaches readiness is durably identified before it can
+  receive work, heartbeats while owned, and records its stop and process-group
+  shutdown outcome. Arming a turn atomically creates one fixed-size
+  observation; ordered updates fold into counters, byte totals, and a chain
+  digest rather than a second transcript store.
 - `Ctrl-C` is observed between turns. An armed turn is allowed to finish or
   block before the child process group is shut down.
 
 The final JSON report includes generations, restarts, reservations,
 completions, blocks, safe pre-arm retries, and idle polls. Inspect durable
 ambiguity with `fleetd inbox blocked`; only an operator can requeue or abandon
-it.
+it. Operator credentials can inspect generation, session, and invocation
+evidence at `/v1/plugin-generations`, `/v1/session-bindings`, and
+`/v1/invocation-observations`.

@@ -38,7 +38,8 @@ const BEARER_AUTH: &str = "bearerAuth";
         (name = "agents", description = "Agent identity and credential administration"),
         (name = "channels", description = "Channel membership and durable messaging"),
         (name = "deliveries", description = "Leased agent inbox delivery"),
-        (name = "invocations", description = "Crash-safe managed invocation fencing")
+        (name = "invocations", description = "Crash-safe managed invocation fencing"),
+        (name = "operations", description = "Operator-visible worker and harness evidence")
     ),
     modifiers(&SecurityAddon)
 )]
@@ -128,6 +129,9 @@ fn protected_contract() -> OpenApiRouter<AppState> {
         .routes(routes!(arm_invocation))
         .routes(routes!(complete_invocation))
         .routes(routes!(list_invocations))
+        .routes(routes!(list_plugin_generations))
+        .routes(routes!(list_invocation_observations))
+        .routes(routes!(list_session_bindings))
 }
 
 #[utoipa::path(
@@ -705,6 +709,96 @@ async fn list_invocations(
     require_operator(&principal)?;
     Ok(Json(
         state.store.list_invocations(query.agent.as_deref()).await?,
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/plugin-generations",
+    operation_id = "listPluginGenerations",
+    tag = "operations",
+    summary = "List durable plugin generation evidence",
+    description = "Operator-only. Reports exact ready-generation identity, liveness, profile, runtime, and shutdown evidence.",
+    security(("bearerAuth" = [])),
+    params(InvocationQuery),
+    responses(
+        (status = 200, description = "Plugin generation evidence", body = [crate::operations::PluginGeneration]),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn list_plugin_generations(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<InvocationQuery>,
+) -> Result<Json<Vec<crate::operations::PluginGeneration>>, FleetError> {
+    require_operator(&principal)?;
+    Ok(Json(
+        state
+            .store
+            .list_plugin_generations(query.agent.as_deref())
+            .await?,
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/invocation-observations",
+    operation_id = "listInvocationObservations",
+    tag = "operations",
+    summary = "List bounded managed-turn observations",
+    description = "Operator-only. Reports event counts, chain digests, terminal state, and usage without duplicating raw transcripts.",
+    security(("bearerAuth" = [])),
+    params(InvocationQuery),
+    responses(
+        (status = 200, description = "Bounded invocation observations", body = [crate::operations::InvocationObservation]),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn list_invocation_observations(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<InvocationQuery>,
+) -> Result<Json<Vec<crate::operations::InvocationObservation>>, FleetError> {
+    require_operator(&principal)?;
+    Ok(Json(
+        state
+            .store
+            .list_invocation_observations(query.agent.as_deref())
+            .await?,
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/session-bindings",
+    operation_id = "listSessionBindings",
+    tag = "operations",
+    summary = "List durable native-session ownership",
+    description = "Operator-only. Reports exact binding generations, owner epochs, active invocations, persistence, and uncertainty.",
+    security(("bearerAuth" = [])),
+    params(InvocationQuery),
+    responses(
+        (status = 200, description = "Durable session binding records", body = [crate::session_binding::SessionBinding]),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn list_session_bindings(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<InvocationQuery>,
+) -> Result<Json<Vec<crate::session_binding::SessionBinding>>, FleetError> {
+    require_operator(&principal)?;
+    Ok(Json(
+        state
+            .store
+            .list_session_bindings(query.agent.as_deref())
+            .await?,
     ))
 }
 

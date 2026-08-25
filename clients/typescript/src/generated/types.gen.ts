@@ -37,6 +37,15 @@ export type ArmInvocation = {
 };
 
 /**
+ * Fleet-owned identity for one logical session lane.
+ */
+export type Binding = {
+    binding_generation: number;
+    binding_id: string;
+    owner_epoch: number;
+};
+
+/**
  * Input for parking an ambiguously executed delivery under its active lease.
  */
 export type BlockDelivery = {
@@ -177,6 +186,51 @@ export type InvocationCompletion = {
 };
 
 /**
+ * Fixed-size event counters retained for one managed invocation.
+ */
+export type InvocationEventCounts = {
+    assistant: number;
+    metadata: number;
+    permission: number;
+    plan: number;
+    reasoning: number;
+    tool: number;
+    unknown: number;
+    usage: number;
+};
+
+/**
+ * Bounded operational evidence for one managed invocation.
+ *
+ * Raw update streams are represented by exact byte counts and a chain digest;
+ * the bounded result message remains the transcript authority.
+ */
+export type InvocationObservation = {
+    agent_id: string;
+    binding_generation: number;
+    binding_id: string;
+    counts: InvocationEventCounts;
+    event_chain_digest?: string | null;
+    event_count: number;
+    execution_certainty?: null | ExecutionCertainty;
+    first_event_at_ms?: number | null;
+    generation_id: string;
+    invocation_id: string;
+    last_event_at_ms?: number | null;
+    last_event_seq: number;
+    observed_payload_bytes: number;
+    owner_epoch: number;
+    runtime_stop_reason?: string | null;
+    session_persistence?: null | SessionPersistence;
+    session_quiescent?: boolean | null;
+    started_at_ms: number;
+    stop_reason?: string | null;
+    terminal_at_ms?: number | null;
+    updated_at_ms: number;
+    usage?: unknown;
+};
+
+/**
  * Durable lifecycle state for one managed delivery attempt.
  */
 export type InvocationState = 'reserved' | 'dispatch_armed' | 'terminal';
@@ -216,6 +270,69 @@ export type MessagePage = {
 };
 
 /**
+ * One exact operational interface observed on a plugin generation.
+ */
+export type ObservedPluginInterface = {
+    id: string;
+    version: string;
+};
+
+/**
+ * Durable operator read model for one ready plugin generation.
+ */
+export type PluginGeneration = {
+    acp_protocol_version: number;
+    acp_sdk_version: string;
+    agent_capabilities: unknown;
+    agent_id: string;
+    compatibility_digest: string;
+    driver_version: string;
+    health: PluginGenerationHealth;
+    heartbeat_interval_ms: number;
+    id: string;
+    interfaces: Array<ObservedPluginInterface>;
+    last_heartbeat_at_ms: number;
+    max_concurrent_turns: number;
+    max_frame_bytes: number;
+    plugin_id: string;
+    plugin_name: string;
+    plugin_version: string;
+    process_id?: number | null;
+    profile_digest: string;
+    raw_initialize_result: unknown;
+    runtime_executable_digest: string;
+    runtime_name: string;
+    runtime_version: string;
+    shutdown_exit_code?: number | null;
+    shutdown_outcome?: null | PluginShutdownOutcome;
+    started_at_ms: number;
+    state: PluginGenerationState;
+    stop_disposition?: null | PluginGenerationDisposition;
+    stop_reason?: string | null;
+    stopped_at_ms?: number | null;
+};
+
+/**
+ * Why a worker stopped routing work through one plugin generation.
+ */
+export type PluginGenerationDisposition = 'stopped' | 'restart' | 'fatal';
+
+/**
+ * Operator-facing liveness derived from persisted state and heartbeat age.
+ */
+export type PluginGenerationHealth = 'active' | 'stale' | 'stopped';
+
+/**
+ * Persisted lifecycle state of one ready plugin generation.
+ */
+export type PluginGenerationState = 'active' | 'stopped';
+
+/**
+ * What Fleetd observed while terminating a plugin process group.
+ */
+export type PluginShutdownOutcome = 'graceful' | 'forced' | 'failed';
+
+/**
  * An agent registration and its one-time credential response.
  */
 export type RegisteredAgent = {
@@ -253,6 +370,39 @@ export type SendMessage = {
     payload: unknown;
     recipient_id?: string | null;
 };
+
+/**
+ * One durable native-session generation and its current owner fence.
+ */
+export type SessionBinding = {
+    active_invocation_id?: string | null;
+    additional_directories: Array<string>;
+    agent_id: string;
+    binding: Binding;
+    compatibility_digest: string;
+    created_at_ms: number;
+    lane_key: string;
+    lane_policy: string;
+    last_quiescent_invocation_id?: string | null;
+    opened_at_ms?: number | null;
+    owner_instance_id: string;
+    profile_digest: string;
+    retired_at_ms?: number | null;
+    retired_reason?: string | null;
+    session_persistence?: null | SessionPersistence;
+    session_ref?: string | null;
+    state: SessionBindingState;
+    uncertain_reason?: string | null;
+    updated_at_ms: number;
+    working_directory: string;
+};
+
+/**
+ * Durable lifecycle state for one native harness session generation.
+ */
+export type SessionBindingState = 'opening' | 'ready' | 'active' | 'uncertain' | 'retired';
+
+export type SessionPersistence = 'confirmed' | 'runtime_claimed' | 'unknown';
 
 export type GetHealthData = {
     body?: never;
@@ -1087,6 +1237,44 @@ export type ResolveDeliveryBlockResponses = {
 
 export type ResolveDeliveryBlockResponse = ResolveDeliveryBlockResponses[keyof ResolveDeliveryBlockResponses];
 
+export type ListInvocationObservationsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Limit results to one agent ID.
+         */
+        agent?: string;
+    };
+    url: '/v1/invocation-observations';
+};
+
+export type ListInvocationObservationsErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ListInvocationObservationsError = ListInvocationObservationsErrors[keyof ListInvocationObservationsErrors];
+
+export type ListInvocationObservationsResponses = {
+    /**
+     * Bounded invocation observations
+     */
+    200: Array<InvocationObservation>;
+};
+
+export type ListInvocationObservationsResponse = ListInvocationObservationsResponses[keyof ListInvocationObservationsResponses];
+
 export type ListInvocationsData = {
     body?: never;
     path?: never;
@@ -1124,3 +1312,79 @@ export type ListInvocationsResponses = {
 };
 
 export type ListInvocationsResponse = ListInvocationsResponses[keyof ListInvocationsResponses];
+
+export type ListPluginGenerationsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Limit results to one agent ID.
+         */
+        agent?: string;
+    };
+    url: '/v1/plugin-generations';
+};
+
+export type ListPluginGenerationsErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ListPluginGenerationsError = ListPluginGenerationsErrors[keyof ListPluginGenerationsErrors];
+
+export type ListPluginGenerationsResponses = {
+    /**
+     * Plugin generation evidence
+     */
+    200: Array<PluginGeneration>;
+};
+
+export type ListPluginGenerationsResponse = ListPluginGenerationsResponses[keyof ListPluginGenerationsResponses];
+
+export type ListSessionBindingsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Limit results to one agent ID.
+         */
+        agent?: string;
+    };
+    url: '/v1/session-bindings';
+};
+
+export type ListSessionBindingsErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ListSessionBindingsError = ListSessionBindingsErrors[keyof ListSessionBindingsErrors];
+
+export type ListSessionBindingsResponses = {
+    /**
+     * Durable session binding records
+     */
+    200: Array<SessionBinding>;
+};
+
+export type ListSessionBindingsResponse = ListSessionBindingsResponses[keyof ListSessionBindingsResponses];

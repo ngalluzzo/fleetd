@@ -17,6 +17,8 @@ use crate::{
 /// durably bound native harness session.
 pub struct ManagedTurn {
     pub invocation: Invocation,
+    /// Exact ready plugin generation that will execute this turn.
+    pub generation_id: String,
     pub binding: Binding,
     pub session_ref: String,
     pub prompt: Vec<PromptBlock>,
@@ -110,6 +112,7 @@ impl<'store> ManagedHarnessController<'store> {
 
         let ManagedTurn {
             invocation,
+            generation_id,
             binding,
             session_ref,
             prompt,
@@ -125,6 +128,7 @@ impl<'store> ManagedHarnessController<'store> {
                 &invocation.id,
                 &binding,
                 &session_ref,
+                &generation_id,
                 ArmInvocation {
                     lease_token: invocation.lease_token.clone(),
                     fence_token: invocation.fence_token.clone(),
@@ -174,7 +178,14 @@ impl<'store> ManagedHarnessController<'store> {
         }
 
         let terminal_result = self
-            .await_terminal(harness, &invocation, &binding, &fence, &policy)
+            .await_terminal(
+                harness,
+                &invocation,
+                &generation_id,
+                &binding,
+                &fence,
+                &policy,
+            )
             .await;
         revoke_grants(&grants, &invocation.id).await;
         let terminal = match terminal_result? {
@@ -196,13 +207,14 @@ impl<'store> ManagedHarnessController<'store> {
         &self,
         harness: &mut HarnessAcpClient,
         invocation: &Invocation,
+        generation_id: &str,
         binding: &Binding,
         fence: &crate::ExecutionFence,
         policy: &TurnPolicy,
     ) -> Result<TerminalDrain, ManagedTurnError> {
         match tokio::time::timeout(
             Duration::from_millis(policy.wall_timeout_ms),
-            drain_turn(harness, fence),
+            drain_turn(self.store, generation_id, harness, fence),
         )
         .await
         {
@@ -230,7 +242,7 @@ impl<'store> ManagedHarnessController<'store> {
                 }
                 match tokio::time::timeout(
                     Duration::from_millis(policy.cancel_drain_timeout_ms),
-                    drain_turn(harness, fence),
+                    drain_turn(self.store, generation_id, harness, fence),
                 )
                 .await
                 {
@@ -525,13 +537,37 @@ enum TerminalDrain {
 }
 
 async fn drain_turn(
+    store: &Store,
+    generation_id: &str,
     harness: &mut HarnessAcpClient,
     fence: &crate::ExecutionFence,
-) -> Result<crate::TurnTerminal, crate::PluginError> {
+) -> Result<crate::TurnTerminal, TurnDrainError> {
     loop {
         match harness.next_notification().await? {
-            HarnessAcpNotification::TurnEvent(_) => {}
+            HarnessAcpNotification::TurnEvent(event) => {
+                store
+                    .record_invocation_event(
+                        generation_id,
+                        &fence.invocation_id,
+                        event.event_seq,
+                        event.observed_at_ms,
+                        &event.classification,
+                        &event.raw_update,
+                    )
+                    .await?;
+            }
             HarnessAcpNotification::PermissionRequested(permission) => {
+                let raw = serde_json::to_value(&permission)?;
+                store
+                    .record_invocation_event(
+                        generation_id,
+                        &fence.invocation_id,
+                        permission.event_seq,
+                        crate::store::now_ms(),
+                        "permission_request",
+                        &raw,
+                    )
+                    .await?;
                 harness
                     .resolve_permission(&PermissionResolution {
                         fence: fence.clone(),
@@ -540,15 +576,35 @@ async fn drain_turn(
                     })
                     .await?;
             }
-            HarnessAcpNotification::TurnTerminal(terminal) => return Ok(terminal),
+            HarnessAcpNotification::TurnTerminal(terminal) => {
+                store
+                    .record_invocation_terminal(generation_id, &terminal)
+                    .await?;
+                return Ok(terminal);
+            }
         }
     }
+}
+
+#[derive(Debug, Error)]
+enum TurnDrainError {
+    #[error("harness protocol failed: {0}")]
+    Plugin(#[from] crate::PluginError),
+    #[error("durable invocation evidence failed: {0}")]
+    Evidence(#[from] FleetError),
+    #[error("invocation evidence serialization failed: {0}")]
+    Serialization(#[from] serde_json::Error),
 }
 
 fn validate_turn(turn: &ManagedTurn) -> Result<(), ManagedTurnError> {
     if turn.invocation.state != InvocationState::Reserved {
         return Err(ManagedTurnError::Invalid(
             "invocation must be reserved before managed dispatch".to_owned(),
+        ));
+    }
+    if turn.generation_id.trim().is_empty() {
+        return Err(ManagedTurnError::Invalid(
+            "plugin generation ID must not be empty".to_owned(),
         ));
     }
     if turn.invocation.agent_id == turn.invocation.message.sender_id {

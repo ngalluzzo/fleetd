@@ -159,11 +159,12 @@ default is rotation.
 
 These are controller records in the authoritative node SQLite database, kept
 outside the messaging kernel module. The write-ahead invocation reservation is
-implemented by [ADR 0008](adr/0008-write-ahead-invocation-fence.md), and durable
+implemented by [ADR 0008](adr/0008-write-ahead-invocation-fence.md), durable
 session ownership by
-[ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md). Profiles,
-plugin generations, persisted runtime events, and the richer execution ledger
-remain logical targets rather than migrations.
+[ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md), and bounded
+generation and invocation evidence by
+[ADR 0020](adr/0020-bounded-operational-observations.md). Immutable profile
+catalogs and a richer qualified execution ledger remain future work.
 
 ### `harness_profiles`
 
@@ -187,11 +188,15 @@ as sensitive.
 
 One supervised launch attempt:
 
-- plugin generation and instance ID;
+- generation ID, plugin identity, interface versions, and process ID;
 - profile digest;
 - observed plugin interfaces and ACP features;
-- start, ready, drain, exit, and forced-kill evidence;
-- desired versus effective configuration drift.
+- ready time, heartbeat, stop disposition, and shutdown evidence.
+
+These records are implemented for every generation that reaches a described,
+ready state. A launch that fails before readiness remains supervisor error
+evidence rather than a routable generation. Desired-versus-effective profile
+diffs still belong in a later immutable profile catalog.
 
 ### `session_bindings` and `session_binding_turns`
 
@@ -240,20 +245,24 @@ separate fence token, timestamps, terminal certainty, and terminal reason.
 controller and do not weaken that ordering. Atomic completion also stores the
 committed result message reference while acknowledging the input delivery.
 
-### `invocation_events`
+### `invocation_observations`
 
-Bounded, ordered evidence:
+One fixed-size durable record per managed invocation contains:
 
-- `(invocation_id, event_seq)` primary identity;
-- fence and plugin instance ID;
-- raw ACP update or a content-addressed artifact reference;
-- normalized semantic classification;
-- observed time, source, reliability, and redaction class.
+- the exact plugin generation and session owner fence;
+- first and last event time, event count, and observed byte count;
+- typed counts for assistant, reasoning, tool, plan, usage, metadata,
+  permission, and unknown updates;
+- the latest event digest and a chain digest over the complete ordered stream;
+- terminal stop, certainty, quiescence, persistence, and usage evidence.
 
-Large prompts, tool output, and reasoning do not belong inline in the primary
-control database. The harness transcript remains authoritative for the raw
-trajectory. fleetd stores bounded evidence, hashes, and references sufficient
-to explain control decisions.
+The controller accepts only contiguous event sequences. Exact replay of the
+latest event is idempotent; changed or out-of-order evidence conflicts. Raw
+prompts, tool output, reasoning, and update JSON are deliberately not copied
+into a row-per-event SQLite log. The harness transcript remains authoritative
+for the raw trajectory, while the bounded Fleetd result remains authoritative
+for transported output. A future content-addressed artifact sink can retain
+selected raw evidence without changing this control-store shape.
 
 ## The agent-to-agent loop
 
@@ -598,12 +607,14 @@ The first vertical slice now implements:
    generic JSON-RPC call remains crate-private.
 3. **Explicit backpressure.** The host provides a blocking notification drain;
    buffer overflow becomes a protocol failure rather than deadlock or silent
-   loss. The shared host emits bounded ordered updates. Persistent event storage and
-   safe fragment coalescing remain pending.
+   loss. The shared host emits bounded ordered updates. The controller now
+   folds each update into durable fixed-size counters and a chain digest before
+   accepting the next notification. A raw artifact sink remains pending.
 4. **Observed instance evidence.** `describe` reports the profile digest,
    adapter digest, exact runtime identity, ACP SDK/protocol version, effective
-   ACP features, and bounded raw initialize response. Persisting those facts
-   with lifecycle generation and exit evidence remains pending.
+   ACP features, and bounded raw initialize response. Every ready generation
+   persists those facts before routing work, advances a liveness heartbeat,
+   and records stop disposition plus graceful, forced, or failed shutdown.
 5. **Bounded capture.** Frames are capped at one MiB and turn capture at 512
    KiB. Oversized JSON becomes an explicit byte-count and SHA-256 truncation
    record. A content-addressed artifact sink remains pending.
@@ -634,12 +645,12 @@ The first vertical slice now implements:
 
 The inner turn controller deliberately requires an already-reserved invocation
 and a session acquired through the durable binding API. The continuous worker
-owns reservation, native create/resume, and opaque-reference recording before
-it invokes that controller. Invocation-event storage and persistent
-runtime-generation evidence are not implemented yet. The first message-grant
-broker slice implements durable outbound peer messages only; inbox reads,
-dependency waiting, reviews, approvals, and other domain operations remain
-outside the Fleetd runtime.
+owns reservation, native create/resume, opaque-reference recording, and
+generation lifecycle. Arming creates the bounded invocation observation in the
+same transaction as the dispatch fence; draining persists update and terminal
+summaries before settlement. The first message-grant broker slice implements
+durable outbound peer messages only; inbox reads, dependency waiting, reviews,
+approvals, and other domain operations remain outside the Fleetd runtime.
 
 These are reliability requirements for the first vertical loop, not a request
 to expand the messaging kernel with harness semantics.

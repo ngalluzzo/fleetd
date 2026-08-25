@@ -21,7 +21,7 @@
 - [ ] Qualify two independently versioned vendor harness plugins against the
   complete `fleetd.harness-acp@0.1.0` matrix. OpenCode is the first
   production-shaped integration; Codex still needs real-runtime qualification.
-- [ ] Persist plugin-generation and bounded invocation-event evidence rather
+- [x] Persist plugin-generation and bounded invocation-event evidence rather
   than keeping it only in controller memory and harness transcripts.
 
 ## M2 — Continuous workforce
@@ -34,7 +34,7 @@
   become new work.
 - [ ] Run several real seats continuously against one daemon for a full night
   while recording restart, latency, throughput, and ambiguity evidence.
-- [ ] Add operator-visible worker, plugin-generation, session, and invocation
+- [x] Add operator-visible plugin-generation, session, and invocation
   health through explicit read models.
 - [ ] Exercise an author/reviewer loop on Fleetd itself using only opaque
   messages and external agent instructions.

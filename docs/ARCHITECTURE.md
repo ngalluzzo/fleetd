@@ -96,6 +96,13 @@ profiles rotate the binding generation. Active or uncertain bindings are not
 silently reused. See [ADR 0010](adr/0010-durable-session-bindings-and-owner-epochs.md)
 and [the worker guide](WORKER.md).
 
+Each ready plugin process has one durable generation record with exact
+negotiated identity, profile, heartbeat, and shutdown evidence. Each armed
+turn has one fixed-size observation record. Ordered harness updates fold into
+typed counters, byte totals, and a cryptographic chain digest; their raw
+contents remain in the harness-owned transcript and the bounded Fleetd result.
+See [ADR 0020](adr/0020-bounded-operational-observations.md).
+
 The envelope adapter provides the complete immutable Fleetd message to the
 harness. It neither recognizes product contracts nor parses domain results.
 Its exact inbound-kind allowlist is routing policy only.
@@ -134,6 +141,11 @@ contract. It uses only public authenticated endpoints and exposes blocked-work
 resolution. The contract can be generated externally, but the served artifact
 contains no compiler runtime dependency. See
 [ADR 0014](adr/0014-generated-operator-surface.md).
+
+Operator-only API read models expose plugin generations, session bindings, and
+invocation observations. They are the common operational source for browser,
+TUI, or external projections; Fleetd does not give one presentation target a
+privileged internal data path.
 
 ## Deliberate constraints
 

@@ -62,6 +62,7 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].id, "legacy-agent");
     assert_eq!(agents[0].metadata["harness"], "dsh");
+    assert_operational_tables_exist_after_migration(&store).await;
 
     let recipient = store
         .create_agent(CreateAgent {
@@ -101,6 +102,23 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
 
     assert_managed_blocking_works_after_migration(&store, &recipient.id, &created.message.id).await;
     assert_session_bindings_work_after_migration(&store, &recipient.id).await;
+}
+
+async fn assert_operational_tables_exist_after_migration(store: &fleetd::Store) {
+    assert!(
+        store
+            .list_plugin_generations(None)
+            .await
+            .expect("list plugin generations after migration")
+            .is_empty()
+    );
+    assert!(
+        store
+            .list_invocation_observations(None)
+            .await
+            .expect("list invocation observations after migration")
+            .is_empty()
+    );
 }
 
 async fn assert_session_bindings_work_after_migration(store: &fleetd::Store, agent_id: &str) {

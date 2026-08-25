@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fmt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use utoipa::ToSchema;
 
 use super::{PluginError, PluginInterface, PluginManifest, PluginProcess};
 
@@ -19,7 +20,7 @@ pub fn interface() -> PluginInterface {
 }
 
 /// Fleet-owned identity for one logical session lane.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 pub struct Binding {
     pub binding_id: String,
     pub binding_generation: u64,
@@ -272,7 +273,7 @@ pub enum HarnessExecutionCertainty {
     OutcomeUnknown,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionPersistence {
     Confirmed,

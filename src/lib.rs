@@ -8,6 +8,7 @@ pub mod error;
 mod invocation;
 pub mod message_grant_broker;
 pub mod model;
+pub mod operations;
 mod operator_surface;
 pub mod plugin;
 pub mod session_binding;
@@ -30,6 +31,11 @@ pub use model::{
     CreateMessage, Delivery, ExecutionCertainty, Invocation, InvocationBatch, InvocationCompletion,
     InvocationState, IssuedCredential, Message, MessagePage, RegisteredAgent, ResolveDeliveryBlock,
     RetryDelivery, SendMessage,
+};
+pub use operations::{
+    InvocationEventCounts, InvocationObservation, NewPluginGeneration, ObservedPluginInterface,
+    PluginGeneration, PluginGenerationDisposition, PluginGenerationHealth, PluginGenerationState,
+    PluginShutdownOutcome, StopPluginGeneration,
 };
 pub use plugin::{
     AcceptedResult, AssistantMessage, Binding, CancelTurn, CloseSession, CloseSessionResult,

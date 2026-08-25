@@ -4,12 +4,14 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
     ArmInvocation, CompleteInvocation, FleetError, Invocation, InvocationCompletion,
     SessionPersistence, Store,
     invocation::{arm_invocation_transaction, complete_invocation_transaction},
+    operations::begin_invocation_observation,
     plugin::Binding,
     store::now_ms,
 };
@@ -22,7 +24,7 @@ const MAX_REASON_BYTES: usize = 4_096;
 const MAX_ADDITIONAL_DIRECTORIES: usize = 64;
 
 /// Durable lifecycle state for one native harness session generation.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionBindingState {
     Opening,
@@ -55,7 +57,7 @@ pub enum SessionAcquisitionMode {
 }
 
 /// One durable native-session generation and its current owner fence.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 pub struct SessionBinding {
     pub binding: Binding,
     pub agent_id: String,
@@ -228,6 +230,7 @@ impl Store {
         invocation_id: &str,
         binding: &Binding,
         session_ref: &str,
+        generation_id: &str,
         input: ArmInvocation,
     ) -> Result<BoundInvocation, FleetError> {
         validate_binding(binding)?;
@@ -242,6 +245,15 @@ impl Store {
             arm_invocation_transaction(&mut transaction, agent_id, invocation_id, &input, now)
                 .await?;
         activate_binding_turn(&mut transaction, agent_id, invocation_id, binding, now).await?;
+        begin_invocation_observation(
+            &mut transaction,
+            agent_id,
+            invocation_id,
+            generation_id,
+            binding,
+            now,
+        )
+        .await?;
         let session = binding_by_identity(&mut transaction, agent_id, binding).await?;
         transaction.commit().await?;
         Ok(BoundInvocation {

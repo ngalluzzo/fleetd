@@ -127,6 +127,13 @@ higher owner epoch; incompatible profiles rotate the binding generation;
 uncertain sessions fail closed. See [the worker guide](docs/WORKER.md) and
 [the harness architecture](docs/HARNESS_EXECUTION.md).
 
+Ready plugin generations and managed turns leave bounded durable operational
+evidence. Operator-only read models expose exact generation identity and
+liveness, session ownership, and per-invocation event counters and chain
+digests at `/v1/plugin-generations`, `/v1/session-bindings`, and
+`/v1/invocation-observations`. Fleetd does not duplicate raw harness
+transcripts in SQLite.
+
 ## Agent-to-agent loop
 
 A worker may receive the narrow `fleet.messaging.send` invocation grant. The

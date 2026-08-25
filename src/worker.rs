@@ -17,9 +17,10 @@ use uuid::Uuid;
 use crate::{
     AcquireSessionBinding, FleetError, HarnessAcpClient, Invocation, ManagedHarnessController,
     ManagedTurn, ManagedTurnError, ManagedTurnGrant, ManagedTurnOutcome, MessageGrantBroker,
-    OpenSession, OpenSessionMode, PUBLISH_DURABLE_MESSAGE_GRANT, PluginError, PluginProcess,
-    PluginSpec, PromptBlock, RetryDelivery, SessionAcquisitionMode, Store, TurnPolicy,
-    TurnResultCapture, plugin::Binding,
+    NewPluginGeneration, OpenSession, OpenSessionMode, PUBLISH_DURABLE_MESSAGE_GRANT, PluginError,
+    PluginGenerationDisposition, PluginProcess, PluginShutdownOutcome, PluginSpec, PromptBlock,
+    RetryDelivery, SessionAcquisitionMode, ShutdownOutcome, StopPluginGeneration, Store,
+    TurnPolicy, TurnResultCapture, plugin::Binding,
 };
 
 const MAX_LEASE_DURATION_MS: u64 = 3_600_000;
@@ -29,6 +30,7 @@ const MAX_CAPTURE_BYTES: usize = 512 * 1024;
 const LEASE_MARGIN_MS: u64 = 60_000;
 const MAX_ACCEPTED_MESSAGE_KINDS: usize = 128;
 const MAX_MESSAGE_KIND_BYTES: usize = 256;
+const GENERATION_HEARTBEAT_INTERVAL_MS: u64 = 5_000;
 
 /// Versioned, adapter-owned declaration of which immutable message envelopes
 /// one worker seat may reserve.
@@ -246,6 +248,12 @@ pub enum ContinuousWorkerError {
         #[source]
         source: FleetError,
     },
+    #[error("durable operational evidence failed during {context}: {source}")]
+    OperationalEvidence {
+        context: String,
+        #[source]
+        source: Box<FleetError>,
+    },
 }
 
 /// Long-running worker that owns plugin generations and serially drives one
@@ -387,18 +395,41 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 .await;
             }
         };
+        let generation_id = Uuid::new_v4().to_string();
+        let compatibility_digest = worker_compatibility_digest(
+            self.config
+                .compatibility_digest
+                .as_deref()
+                .unwrap_or(&description.profile_digest),
+            &self.config.mcp_grants,
+            self.adapter.inbound_acceptance(),
+        );
         let generation = GenerationIdentity {
-            owner_instance_id: Uuid::new_v4().to_string(),
-            compatibility_digest: worker_compatibility_digest(
-                self.config
-                    .compatibility_digest
-                    .as_deref()
-                    .unwrap_or(&description.profile_digest),
-                &self.config.mcp_grants,
-                self.adapter.inbound_acceptance(),
-            ),
-            profile_digest: description.profile_digest,
+            owner_instance_id: generation_id.clone(),
+            compatibility_digest: compatibility_digest.clone(),
+            profile_digest: description.profile_digest.clone(),
         };
+        if let Err(error) = self
+            .store
+            .record_plugin_generation(NewPluginGeneration {
+                id: generation_id.clone(),
+                agent_id: self.config.agent_id.clone(),
+                plugin: harness.manifest().plugin.clone(),
+                interfaces: harness.manifest().interfaces.clone(),
+                process_id: harness.process_id(),
+                description,
+                compatibility_digest,
+                heartbeat_interval_ms: GENERATION_HEARTBEAT_INTERVAL_MS,
+            })
+            .await
+        {
+            let _unused = harness.shutdown().await;
+            return GenerationExit::Fatal(ContinuousWorkerError::OperationalEvidence {
+                context: "plugin generation start".to_owned(),
+                source: Box::new(error),
+            });
+        }
+        let heartbeat = GenerationHeartbeat::start(self.store.clone(), generation_id.clone());
         let context = GenerationContext {
             identity: &generation,
             broker,
@@ -414,7 +445,8 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 report,
             )
             .await;
-        shutdown_generation(harness, exit).await
+        heartbeat.stop().await;
+        stop_generation(self.store, harness, &generation_id, exit).await
     }
 
     async fn drive_generation(
@@ -483,6 +515,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
             }
             let opened_turn = OpenedTurn {
                 session: opened,
+                generation_id: context.identity.owner_instance_id.clone(),
                 grants: context
                     .broker
                     .map(MessageGrantBroker::turn_grant)
@@ -585,6 +618,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 harness,
                 ManagedTurn {
                     invocation: invocation.clone(),
+                    generation_id: opened.generation_id,
                     binding: opened.session.binding,
                     session_ref: opened.session.session_ref,
                     prompt: prepared.prompt,
@@ -789,6 +823,7 @@ struct OpenedSession {
 
 struct OpenedTurn {
     session: OpenedSession,
+    generation_id: String,
     grants: Vec<Arc<dyn ManagedTurnGrant>>,
 }
 
@@ -834,6 +869,104 @@ async fn shutdown_generation(harness: HarnessAcpClient, exit: GenerationExit) ->
         tracing::warn!(%error, "worker plugin generation did not shut down gracefully");
     }
     exit
+}
+
+async fn stop_generation(
+    store: &Store,
+    harness: HarnessAcpClient,
+    generation_id: &str,
+    exit: GenerationExit,
+) -> GenerationExit {
+    let (disposition, mut reason) = generation_exit_evidence(&exit);
+    let (shutdown_outcome, shutdown_exit_code) = match harness.shutdown().await {
+        Ok(ShutdownOutcome::Graceful(evidence)) => (PluginShutdownOutcome::Graceful, evidence.code),
+        Ok(ShutdownOutcome::Forced(evidence)) => (PluginShutdownOutcome::Forced, evidence.code),
+        Err(error) => {
+            tracing::warn!(%error, "worker plugin generation did not shut down gracefully");
+            reason = bounded(format!("{reason}; shutdown failed: {error}"));
+            (PluginShutdownOutcome::Failed, None)
+        }
+    };
+    if let Err(source) = store
+        .stop_plugin_generation(
+            generation_id,
+            StopPluginGeneration {
+                disposition,
+                reason,
+                shutdown_outcome,
+                shutdown_exit_code,
+            },
+        )
+        .await
+    {
+        return GenerationExit::Fatal(ContinuousWorkerError::OperationalEvidence {
+            context: format!("plugin generation stop {generation_id}"),
+            source: Box::new(source),
+        });
+    }
+    exit
+}
+
+fn generation_exit_evidence(exit: &GenerationExit) -> (PluginGenerationDisposition, String) {
+    match exit {
+        GenerationExit::Stopped => (
+            PluginGenerationDisposition::Stopped,
+            "worker stopped routing work".to_owned(),
+        ),
+        GenerationExit::Restart(reason) => (
+            PluginGenerationDisposition::Restart,
+            bounded(reason.clone()),
+        ),
+        GenerationExit::Fatal(error) => (
+            PluginGenerationDisposition::Fatal,
+            bounded(error.to_string()),
+        ),
+    }
+}
+
+struct GenerationHeartbeat {
+    cancellation: CancellationToken,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl GenerationHeartbeat {
+    fn start(store: Store, generation_id: String) -> Self {
+        let cancellation = CancellationToken::new();
+        let task_cancellation = cancellation.clone();
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    () = task_cancellation.cancelled() => break,
+                    () = tokio::time::sleep(Duration::from_millis(GENERATION_HEARTBEAT_INTERVAL_MS)) => {
+                        if let Err(error) = store.heartbeat_plugin_generation(&generation_id).await {
+                            tracing::warn!(
+                                %generation_id,
+                                %error,
+                                "plugin generation heartbeat was not persisted"
+                            );
+                        }
+                    }
+                }
+            }
+        });
+        Self {
+            cancellation,
+            task: Some(task),
+        }
+    }
+
+    async fn stop(mut self) {
+        self.cancellation.cancel();
+        if let Some(task) = self.task.take() {
+            let _unused = task.await;
+        }
+    }
+}
+
+impl Drop for GenerationHeartbeat {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
 }
 
 fn validate_config(config: &ContinuousWorkerConfig) -> Result<(), ContinuousWorkerError> {

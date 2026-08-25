@@ -5,8 +5,9 @@ use std::{path::PathBuf, time::Duration};
 use fleetd::{
     ClaimDeliveries, ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError,
     CreateAgent, CreateChannel, CreateMessage, EnvelopeTurnAdapter, ExecutionCertainty,
-    InboundAcceptance, InvocationState, PluginSpec, PreparedTurn, SessionBindingState, Store,
-    ToolBudget, TurnAdapter, TurnPolicy, harness_acp_interface,
+    InboundAcceptance, InvocationState, PluginGenerationDisposition, PluginGenerationHealth,
+    PluginGenerationState, PluginShutdownOutcome, PluginSpec, PreparedTurn, SessionBindingState,
+    Store, ToolBudget, TurnAdapter, TurnPolicy, harness_acp_interface,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -177,6 +178,37 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
     assert_eq!(report.blocked, 0);
     assert_eq!(report.plugin_generations, 1);
     assert_eq!(report.reservations, 2);
+    let generations = fixture
+        .store
+        .list_plugin_generations(Some(&fixture.receiver_id))
+        .await
+        .expect("list durable plugin generations");
+    assert_eq!(generations.len(), 1);
+    assert_eq!(generations[0].state, PluginGenerationState::Stopped);
+    assert_eq!(generations[0].health, PluginGenerationHealth::Stopped);
+    assert_eq!(
+        generations[0].stop_disposition,
+        Some(PluginGenerationDisposition::Stopped)
+    );
+    assert_eq!(
+        generations[0].shutdown_outcome,
+        Some(PluginShutdownOutcome::Graceful)
+    );
+    let observations = fixture
+        .store
+        .list_invocation_observations(Some(&fixture.receiver_id))
+        .await
+        .expect("list bounded invocation observations");
+    assert_eq!(observations.len(), 2);
+    assert!(observations.iter().all(|observation| {
+        observation.generation_id == generations[0].id
+            && observation.event_count == 1
+            && observation.counts.assistant == 1
+            && observation.event_chain_digest.is_some()
+            && observation.execution_certainty == Some(ExecutionCertainty::OutcomeKnown)
+            && observation.session_quiescent == Some(true)
+            && observation.usage == Some(json!({}))
+    }));
     let sessions = fixture
         .store
         .list_session_bindings(Some(&fixture.receiver_id))

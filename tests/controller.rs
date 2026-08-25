@@ -12,9 +12,9 @@ use std::{
 use fleetd::{
     AcquireSessionBinding, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, Invocation,
     InvocationState, ManagedHarnessController, ManagedTurn, ManagedTurnGrant, ManagedTurnOutcome,
-    OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock, SessionAcquisitionMode,
-    SessionBindingState, SessionPersistence, Store, ToolBudget, TurnPolicy, TurnResultCapture,
-    harness_acp_interface,
+    NewPluginGeneration, OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock,
+    SessionAcquisitionMode, SessionBindingState, SessionPersistence, Store, ToolBudget, TurnPolicy,
+    TurnResultCapture, harness_acp_interface,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -141,12 +141,26 @@ async fn open_harness(
     store: &Store,
     agent_id: &str,
     mode: &str,
-) -> (fleetd::HarnessAcpClient, String, fleetd::Binding) {
+) -> (fleetd::HarnessAcpClient, String, fleetd::Binding, String) {
     let process = PluginProcess::start(harness_spec(mode))
         .await
         .expect("start harness");
     let harness = process.into_harness_acp().expect("typed harness");
     let description = harness.describe().await.expect("describe harness");
+    let generation_id = "controller-test-generation".to_owned();
+    store
+        .record_plugin_generation(NewPluginGeneration {
+            id: generation_id.clone(),
+            agent_id: agent_id.to_owned(),
+            plugin: harness.manifest().plugin.clone(),
+            interfaces: harness.manifest().interfaces.clone(),
+            process_id: harness.process_id(),
+            description: description.clone(),
+            compatibility_digest: "sha256:mock-harness-v1".to_owned(),
+            heartbeat_interval_ms: 5_000,
+        })
+        .await
+        .expect("record plugin generation");
     let acquired = store
         .acquire_session_binding(
             agent_id,
@@ -183,7 +197,7 @@ async fn open_harness(
         .record_session_opened(agent_id, &binding, &session.session_ref)
         .await
         .expect("persist native session reference");
-    (harness, session.session_ref, binding)
+    (harness, session.session_ref, binding, generation_id)
 }
 
 #[tokio::test]
@@ -191,7 +205,8 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
     let (_directory, store, sender, invocation) = fixture().await;
     let agent_id = invocation.agent_id.clone();
     let invocation_id = invocation.id.clone();
-    let (mut harness, session_ref, binding) = open_harness(&store, &agent_id, "healthy").await;
+    let (mut harness, session_ref, binding, generation_id) =
+        open_harness(&store, &agent_id, "healthy").await;
     let activated_after_arm = Arc::new(AtomicBool::new(false));
     let deactivated = Arc::new(AtomicBool::new(false));
     let grant: Arc<dyn ManagedTurnGrant> = Arc::new(RecordingGrant {
@@ -204,6 +219,7 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
             &mut harness,
             ManagedTurn {
                 invocation,
+                generation_id,
                 binding,
                 session_ref,
                 prompt: vec![PromptBlock::Text {
@@ -236,6 +252,22 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
         completion.result.payload["assistant_messages"][0]["content"][0]["text"],
         "done"
     );
+    let observation = store
+        .list_invocation_observations(Some(&agent_id))
+        .await
+        .expect("list durable invocation evidence")
+        .pop()
+        .expect("one invocation observation");
+    assert_eq!(observation.invocation_id, invocation_id.as_str());
+    assert_eq!(observation.event_count, 1);
+    assert_eq!(observation.counts.assistant, 1);
+    assert!(observation.event_chain_digest.is_some());
+    assert_eq!(
+        observation.execution_certainty,
+        Some(fleetd::ExecutionCertainty::OutcomeKnown)
+    );
+    assert_eq!(observation.session_quiescent, Some(true));
+    assert_eq!(observation.usage, Some(json!({})));
     let session = store
         .list_session_bindings(Some(&agent_id))
         .await
@@ -258,12 +290,14 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
 async fn managed_controller_marks_unavailable_structured_capture_failed() {
     let (_directory, store, _sender, invocation) = fixture().await;
     let agent_id = invocation.agent_id.clone();
-    let (mut harness, session_ref, binding) = open_harness(&store, &agent_id, "healthy").await;
+    let (mut harness, session_ref, binding, generation_id) =
+        open_harness(&store, &agent_id, "healthy").await;
     let outcome = ManagedHarnessController::new(&store)
         .run(
             &mut harness,
             ManagedTurn {
                 invocation,
+                generation_id,
                 binding,
                 session_ref,
                 prompt: vec![PromptBlock::Text {
@@ -294,7 +328,7 @@ async fn managed_controller_marks_unavailable_structured_capture_failed() {
 async fn managed_controller_preserves_host_cancellation_over_runtime_end_turn() {
     let (_directory, store, _sender, invocation) = fixture().await;
     let agent_id = invocation.agent_id.clone();
-    let (mut harness, session_ref, binding) =
+    let (mut harness, session_ref, binding, generation_id) =
         open_harness(&store, &agent_id, "cancel-end-turn").await;
     let mut short_policy = policy();
     short_policy.wall_timeout_ms = 20;
@@ -303,6 +337,7 @@ async fn managed_controller_preserves_host_cancellation_over_runtime_end_turn() 
             &mut harness,
             ManagedTurn {
                 invocation,
+                generation_id,
                 binding,
                 session_ref,
                 prompt: vec![PromptBlock::Text {
@@ -335,12 +370,14 @@ async fn managed_controller_parks_post_arm_protocol_ambiguity() {
     let input_message = invocation.message.id.clone();
     let agent_id = invocation.agent_id.clone();
     let invocation_id = invocation.id.clone();
-    let (mut harness, session_ref, binding) = open_harness(&store, &agent_id, "wrong-fence").await;
+    let (mut harness, session_ref, binding, generation_id) =
+        open_harness(&store, &agent_id, "wrong-fence").await;
     let outcome = ManagedHarnessController::new(&store)
         .run(
             &mut harness,
             ManagedTurn {
                 invocation,
+                generation_id,
                 binding,
                 session_ref,
                 prompt: vec![PromptBlock::Text {

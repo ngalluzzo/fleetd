@@ -1801,6 +1801,77 @@
         ]
       }
     },
+    "/v1/invocation-observations": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "List bounded managed-turn observations",
+        "description": "Operator-only. Reports event counts, chain digests, terminal state, and usage without duplicating raw transcripts.",
+        "operationId": "listInvocationObservations",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Limit results to one agent ID.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded invocation observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InvocationObservation"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1/invocations": {
       "get": {
         "tags": [
@@ -1829,6 +1900,148 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/Invocation"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/plugin-generations": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "List durable plugin generation evidence",
+        "description": "Operator-only. Reports exact ready-generation identity, liveness, profile, runtime, and shutdown evidence.",
+        "operationId": "listPluginGenerations",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Limit results to one agent ID.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Plugin generation evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PluginGeneration"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/session-bindings": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "List durable native-session ownership",
+        "description": "Operator-only. Reports exact binding generations, owner epochs, active invocations, persistence, and uncertainty.",
+        "operationId": "listSessionBindings",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Limit results to one agent ID.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Durable session binding records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SessionBinding"
                   }
                 }
               }
@@ -1938,6 +2151,30 @@
           }
         },
         "additionalProperties": false
+      },
+      "Binding": {
+        "type": "object",
+        "description": "Fleet-owned identity for one logical session lane.",
+        "required": [
+          "binding_id",
+          "binding_generation",
+          "owner_epoch"
+        ],
+        "properties": {
+          "binding_generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "binding_id": {
+            "type": "string"
+          },
+          "owner_epoch": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
       },
       "BlockDelivery": {
         "type": "object",
@@ -2293,6 +2530,196 @@
           }
         }
       },
+      "InvocationEventCounts": {
+        "type": "object",
+        "description": "Fixed-size event counters retained for one managed invocation.",
+        "required": [
+          "assistant",
+          "reasoning",
+          "tool",
+          "plan",
+          "usage",
+          "metadata",
+          "permission",
+          "unknown"
+        ],
+        "properties": {
+          "assistant": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "metadata": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "permission": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "plan": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "reasoning": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tool": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unknown": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "usage": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "InvocationObservation": {
+        "type": "object",
+        "description": "Bounded operational evidence for one managed invocation.\n\nRaw update streams are represented by exact byte counts and a chain digest;\nthe bounded result message remains the transcript authority.",
+        "required": [
+          "invocation_id",
+          "agent_id",
+          "generation_id",
+          "binding_id",
+          "binding_generation",
+          "owner_epoch",
+          "started_at_ms",
+          "updated_at_ms",
+          "event_count",
+          "observed_payload_bytes",
+          "last_event_seq",
+          "counts"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "binding_generation": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "binding_id": {
+            "type": "string"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/InvocationEventCounts"
+          },
+          "event_chain_digest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "execution_certainty": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExecutionCertainty"
+              }
+            ]
+          },
+          "first_event_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "generation_id": {
+            "type": "string"
+          },
+          "invocation_id": {
+            "type": "string"
+          },
+          "last_event_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "last_event_seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "observed_payload_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "owner_epoch": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "runtime_stop_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_persistence": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SessionPersistence"
+              }
+            ]
+          },
+          "session_quiescent": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "started_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stop_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "terminal_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "updated_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "usage": {}
+        }
+      },
       "InvocationState": {
         "type": "string",
         "description": "Durable lifecycle state for one managed delivery attempt.",
@@ -2397,6 +2824,213 @@
           }
         }
       },
+      "ObservedPluginInterface": {
+        "type": "object",
+        "description": "One exact operational interface observed on a plugin generation.",
+        "required": [
+          "id",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "PluginGeneration": {
+        "type": "object",
+        "description": "Durable operator read model for one ready plugin generation.",
+        "required": [
+          "id",
+          "agent_id",
+          "plugin_id",
+          "plugin_name",
+          "plugin_version",
+          "interfaces",
+          "driver_version",
+          "acp_sdk_version",
+          "acp_protocol_version",
+          "runtime_name",
+          "runtime_version",
+          "runtime_executable_digest",
+          "agent_capabilities",
+          "max_concurrent_turns",
+          "max_frame_bytes",
+          "profile_digest",
+          "compatibility_digest",
+          "raw_initialize_result",
+          "heartbeat_interval_ms",
+          "state",
+          "health",
+          "started_at_ms",
+          "last_heartbeat_at_ms"
+        ],
+        "properties": {
+          "acp_protocol_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "acp_sdk_version": {
+            "type": "string"
+          },
+          "agent_capabilities": {},
+          "agent_id": {
+            "type": "string"
+          },
+          "compatibility_digest": {
+            "type": "string"
+          },
+          "driver_version": {
+            "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/PluginGenerationHealth"
+          },
+          "heartbeat_interval_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "interfaces": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedPluginInterface"
+            }
+          },
+          "last_heartbeat_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "max_concurrent_turns": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "max_frame_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "plugin_id": {
+            "type": "string"
+          },
+          "plugin_name": {
+            "type": "string"
+          },
+          "plugin_version": {
+            "type": "string"
+          },
+          "process_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "profile_digest": {
+            "type": "string"
+          },
+          "raw_initialize_result": {},
+          "runtime_executable_digest": {
+            "type": "string"
+          },
+          "runtime_name": {
+            "type": "string"
+          },
+          "runtime_version": {
+            "type": "string"
+          },
+          "shutdown_exit_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "shutdown_outcome": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PluginShutdownOutcome"
+              }
+            ]
+          },
+          "started_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PluginGenerationState"
+          },
+          "stop_disposition": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PluginGenerationDisposition"
+              }
+            ]
+          },
+          "stop_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stopped_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "PluginGenerationDisposition": {
+        "type": "string",
+        "description": "Why a worker stopped routing work through one plugin generation.",
+        "enum": [
+          "stopped",
+          "restart",
+          "fatal"
+        ]
+      },
+      "PluginGenerationHealth": {
+        "type": "string",
+        "description": "Operator-facing liveness derived from persisted state and heartbeat age.",
+        "enum": [
+          "active",
+          "stale",
+          "stopped"
+        ]
+      },
+      "PluginGenerationState": {
+        "type": "string",
+        "description": "Persisted lifecycle state of one ready plugin generation.",
+        "enum": [
+          "active",
+          "stopped"
+        ]
+      },
+      "PluginShutdownOutcome": {
+        "type": "string",
+        "description": "What Fleetd observed while terminating a plugin process group.",
+        "enum": [
+          "graceful",
+          "forced",
+          "failed"
+        ]
+      },
       "RegisteredAgent": {
         "type": "object",
         "description": "An agent registration and its one-time credential response.",
@@ -2500,6 +3134,140 @@
           }
         },
         "additionalProperties": false
+      },
+      "SessionBinding": {
+        "type": "object",
+        "description": "One durable native-session generation and its current owner fence.",
+        "required": [
+          "binding",
+          "agent_id",
+          "lane_policy",
+          "lane_key",
+          "owner_instance_id",
+          "profile_digest",
+          "compatibility_digest",
+          "working_directory",
+          "additional_directories",
+          "state",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "properties": {
+          "active_invocation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "additional_directories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "binding": {
+            "$ref": "#/components/schemas/Binding"
+          },
+          "compatibility_digest": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lane_key": {
+            "type": "string"
+          },
+          "lane_policy": {
+            "type": "string"
+          },
+          "last_quiescent_invocation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "opened_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "owner_instance_id": {
+            "type": "string"
+          },
+          "profile_digest": {
+            "type": "string"
+          },
+          "retired_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "retired_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_persistence": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SessionPersistence"
+              }
+            ]
+          },
+          "session_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/SessionBindingState"
+          },
+          "uncertain_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "working_directory": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionBindingState": {
+        "type": "string",
+        "description": "Durable lifecycle state for one native harness session generation.",
+        "enum": [
+          "opening",
+          "ready",
+          "active",
+          "uncertain",
+          "retired"
+        ]
+      },
+      "SessionPersistence": {
+        "type": "string",
+        "enum": [
+          "confirmed",
+          "runtime_claimed",
+          "unknown"
+        ]
       }
     },
     "securitySchemes": {
@@ -2529,6 +3297,10 @@
     {
       "name": "invocations",
       "description": "Crash-safe managed invocation fencing"
+    },
+    {
+      "name": "operations",
+      "description": "Operator-visible worker and harness evidence"
     }
   ]
 }
