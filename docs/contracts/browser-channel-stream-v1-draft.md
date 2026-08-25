@@ -1,9 +1,10 @@
 # Browser channel stream v1 draft
 
 This draft specifies the browser-compatible authentication edge for Fleetd's
-existing durable channel stream. It is not implemented or advertised by the
-current OpenAPI contract. ADR 0022 must be accepted and the qualification
-matrix below must pass before the protocol loses its draft status.
+existing durable channel stream. Issuance and redemption are implemented and
+advertised by the current OpenAPI contract, but the adversarial and real-browser
+qualification slices remain open. ADR 0022 must be accepted and the matrix
+below must pass before the protocol loses its draft status.
 
 ## Constants and bounds
 

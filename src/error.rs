@@ -31,6 +31,8 @@ pub enum FleetError {
     Forbidden(String),
     #[error("conflict: {0}")]
     Conflict(String),
+    #[error("resource exhausted: {0}")]
+    ResourceExhausted(String),
     #[error("lease conflict: {0}")]
     LeaseConflict(String),
     #[error("database error: {0}")]
@@ -53,6 +55,7 @@ impl IntoResponse for FleetError {
             Self::Invalid(_) => StatusCode::BAD_REQUEST,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Conflict(_) | Self::LeaseConflict(_) => StatusCode::CONFLICT,
+            Self::ResourceExhausted(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Database(_)
             | Self::Migration(_)
             | Self::Serialization(_)

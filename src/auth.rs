@@ -167,10 +167,6 @@ impl AuthService {
 
     /// Revalidates an exact credential-bound principal without accepting or
     /// returning raw credential material.
-    #[allow(
-        dead_code,
-        reason = "consumed only by the intentionally unrouted stream-grant broker"
-    )]
     pub(crate) async fn revalidate_principal(
         &self,
         expected: &Principal,

@@ -9,17 +9,15 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::browser_stream_edge::{
+    MAX_ACTIVE_BROWSER_STREAMS_PER_CREDENTIAL, MAX_ACTIVE_BROWSER_STREAMS_PER_DAEMON,
+    MAX_UNUSED_GRANTS_PER_CREDENTIAL, MAX_UNUSED_GRANTS_PER_DAEMON, STREAM_GRANT_ENTROPY_BYTES,
+    STREAM_GRANT_PREFIX, STREAM_GRANT_REDEMPTION_LIFETIME,
+};
 use crate::{auth::AuthService, channel_stream::AuthorizedChannelStream, error::FleetError};
 
-const STREAM_GRANT_PREFIX: &str = "fl_sg_";
-const STREAM_GRANT_BYTES: usize = 32;
 const STREAM_GRANT_ENCODED_LENGTH: usize = 43;
-const STREAM_GRANT_LIFETIME: Duration = Duration::from_secs(15);
 const MAX_PROTOCOL_LENGTH: usize = 128;
-const MAX_UNUSED_PER_CREDENTIAL: usize = 8;
-const MAX_UNUSED_TOTAL: usize = 1_024;
-const MAX_ACTIVE_PER_CREDENTIAL: usize = 16;
-const MAX_ACTIVE_TOTAL: usize = 1_024;
 const MAX_ENTROPY_ATTEMPTS: usize = 4;
 
 /// One-time stream-grant authority broker owned by one daemon process.
@@ -46,11 +44,11 @@ struct BrokerLimits {
 impl Default for BrokerLimits {
     fn default() -> Self {
         Self {
-            grant_lifetime: STREAM_GRANT_LIFETIME,
-            unused_per_credential: MAX_UNUSED_PER_CREDENTIAL,
-            unused_total: MAX_UNUSED_TOTAL,
-            active_per_credential: MAX_ACTIVE_PER_CREDENTIAL,
-            active_total: MAX_ACTIVE_TOTAL,
+            grant_lifetime: STREAM_GRANT_REDEMPTION_LIFETIME,
+            unused_per_credential: MAX_UNUSED_GRANTS_PER_CREDENTIAL,
+            unused_total: MAX_UNUSED_GRANTS_PER_DAEMON,
+            active_per_credential: MAX_ACTIVE_BROWSER_STREAMS_PER_CREDENTIAL,
+            active_total: MAX_ACTIVE_BROWSER_STREAMS_PER_DAEMON,
         }
     }
 }
@@ -76,12 +74,18 @@ pub(crate) struct IssuedStreamGrant {
 }
 
 impl IssuedStreamGrant {
+    #[cfg(test)]
     pub(crate) fn expose(&self) -> &str {
         &self.grant
     }
 
+    #[cfg(test)]
     pub(crate) const fn lifetime(&self) -> Duration {
         self.lifetime
+    }
+
+    pub(crate) fn into_parts(self) -> (String, Duration) {
+        (self.grant, self.lifetime)
     }
 }
 
@@ -102,6 +106,7 @@ pub(crate) struct RedeemedStreamGrant {
 }
 
 impl RedeemedStreamGrant {
+    #[cfg(test)]
     pub(crate) const fn authorization(&self) -> &AuthorizedChannelStream {
         &self.authorization
     }
@@ -267,6 +272,15 @@ impl StreamGrantBroker {
         })
     }
 
+    /// Returns whether an upgrade can proceed without already exceeding the
+    /// daemon-wide active-stream bound. Redemption still performs the atomic
+    /// capacity reservation because multiple pre-authentication sockets may
+    /// race after this advisory check.
+    pub(crate) fn has_global_active_capacity(&self) -> bool {
+        let state = lock_state(&self.shared);
+        state.active_total < self.shared.limits.active_total
+    }
+
     fn reserve_active(
         &self,
         credential_id: &str,
@@ -302,7 +316,7 @@ fn generate_unique_grant(
     existing: &HashMap<[u8; 32], GrantRecord>,
 ) -> Result<(String, [u8; 32]), StreamGrantBrokerError> {
     for _ in 0..MAX_ENTROPY_ATTEMPTS {
-        let mut entropy = [0_u8; STREAM_GRANT_BYTES];
+        let mut entropy = [0_u8; STREAM_GRANT_ENTROPY_BYTES];
         getrandom::fill(&mut entropy).map_err(|_| StreamGrantBrokerError::Entropy)?;
         let grant = format!("{STREAM_GRANT_PREFIX}{}", URL_SAFE_NO_PAD.encode(entropy));
         let digest: [u8; 32] = Sha256::digest(grant.as_bytes()).into();
@@ -319,7 +333,7 @@ fn grant_digest(grant: &str) -> Option<[u8; 32]> {
         return None;
     }
     let entropy = URL_SAFE_NO_PAD.decode(encoded).ok()?;
-    if entropy.len() != STREAM_GRANT_BYTES {
+    if entropy.len() != STREAM_GRANT_ENTROPY_BYTES {
         return None;
     }
     Some(Sha256::digest(grant.as_bytes()).into())
@@ -428,7 +442,7 @@ mod tests {
         let entropy = URL_SAFE_NO_PAD
             .decode(raw.strip_prefix(STREAM_GRANT_PREFIX).expect("grant prefix"))
             .expect("grant encoding");
-        assert_eq!(entropy.len(), STREAM_GRANT_BYTES);
+        assert_eq!(entropy.len(), STREAM_GRANT_ENTROPY_BYTES);
         assert_eq!(issued.lifetime(), Duration::from_secs(15));
         assert!(!format!("{issued:?}").contains(&raw));
         assert!(!format!("{broker:?}").contains(&raw));

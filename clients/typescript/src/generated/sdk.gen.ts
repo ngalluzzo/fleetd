@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, Options as Options2, TDataShape } from './client/index.js';
-import type { AcknowledgeDeliveryData, AcknowledgeDeliveryErrors, AcknowledgeDeliveryResponses, AddChannelMemberData, AddChannelMemberErrors, AddChannelMemberResponses, ArmInvocationData, ArmInvocationErrors, ArmInvocationResponses, BlockDeliveryData, BlockDeliveryErrors, BlockDeliveryResponses, ClaimDeliveriesData, ClaimDeliveriesErrors, ClaimDeliveriesResponses, CompleteInvocationData, CompleteInvocationErrors, CompleteInvocationResponses, CreateAgentData, CreateAgentErrors, CreateAgentResponses, CreateChannelData, CreateChannelErrors, CreateChannelMessageData, CreateChannelMessageErrors, CreateChannelMessageResponses, CreateChannelResponses, GetHealthData, GetHealthResponses, GetOpenApiDocumentData, GetOpenApiDocumentResponses, ListAgentsData, ListAgentsErrors, ListAgentsResponses, ListChannelMembersData, ListChannelMembersErrors, ListChannelMembersResponses, ListChannelMessagesData, ListChannelMessagesErrors, ListChannelMessagesResponses, ListChannelsData, ListChannelsErrors, ListChannelsResponses, ListDeliveryBlocksData, ListDeliveryBlocksErrors, ListDeliveryBlocksResponses, ListInvocationObservationsData, ListInvocationObservationsErrors, ListInvocationObservationsResponses, ListInvocationsData, ListInvocationsErrors, ListInvocationsResponses, ListPluginGenerationsData, ListPluginGenerationsErrors, ListPluginGenerationsResponses, ListSessionBindingsData, ListSessionBindingsErrors, ListSessionBindingsResponses, ReserveInvocationsData, ReserveInvocationsErrors, ReserveInvocationsResponses, ResolveDeliveryBlockData, ResolveDeliveryBlockErrors, ResolveDeliveryBlockResponses, RetryDeliveryData, RetryDeliveryErrors, RetryDeliveryResponses, RotateAgentCredentialData, RotateAgentCredentialErrors, RotateAgentCredentialResponses } from './types.gen.js';
+import type { AcknowledgeDeliveryData, AcknowledgeDeliveryErrors, AcknowledgeDeliveryResponses, AddChannelMemberData, AddChannelMemberErrors, AddChannelMemberResponses, ArmInvocationData, ArmInvocationErrors, ArmInvocationResponses, BlockDeliveryData, BlockDeliveryErrors, BlockDeliveryResponses, ClaimDeliveriesData, ClaimDeliveriesErrors, ClaimDeliveriesResponses, CompleteInvocationData, CompleteInvocationErrors, CompleteInvocationResponses, CreateAgentData, CreateAgentErrors, CreateAgentResponses, CreateBrowserChannelStreamGrantData, CreateBrowserChannelStreamGrantErrors, CreateBrowserChannelStreamGrantResponses, CreateChannelData, CreateChannelErrors, CreateChannelMessageData, CreateChannelMessageErrors, CreateChannelMessageResponses, CreateChannelResponses, GetHealthData, GetHealthResponses, GetOpenApiDocumentData, GetOpenApiDocumentResponses, ListAgentsData, ListAgentsErrors, ListAgentsResponses, ListChannelMembersData, ListChannelMembersErrors, ListChannelMembersResponses, ListChannelMessagesData, ListChannelMessagesErrors, ListChannelMessagesResponses, ListChannelsData, ListChannelsErrors, ListChannelsResponses, ListDeliveryBlocksData, ListDeliveryBlocksErrors, ListDeliveryBlocksResponses, ListInvocationObservationsData, ListInvocationObservationsErrors, ListInvocationObservationsResponses, ListInvocationsData, ListInvocationsErrors, ListInvocationsResponses, ListPluginGenerationsData, ListPluginGenerationsErrors, ListPluginGenerationsResponses, ListSessionBindingsData, ListSessionBindingsErrors, ListSessionBindingsResponses, ReserveInvocationsData, ReserveInvocationsErrors, ReserveInvocationsResponses, ResolveDeliveryBlockData, ResolveDeliveryBlockErrors, ResolveDeliveryBlockResponses, RetryDeliveryData, RetryDeliveryErrors, RetryDeliveryResponses, RotateAgentCredentialData, RotateAgentCredentialErrors, RotateAgentCredentialResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -241,6 +241,21 @@ export const listChannelMessages = <ThrowOnError extends boolean = false>(option
 export const createChannelMessage = <ThrowOnError extends boolean = false>(options: Options<CreateChannelMessageData, ThrowOnError>) => (options.client ?? client).post<CreateChannelMessageResponses, CreateChannelMessageErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/v1/channels/{channel_id}/messages',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Mint a single-use browser channel-stream grant
+ *
+ * Operators or exact channel members. The grant is process-local, expires after 15 seconds, and is returned once with Cache-Control: no-store.
+ */
+export const createBrowserChannelStreamGrant = <ThrowOnError extends boolean = false>(options: Options<CreateBrowserChannelStreamGrantData, ThrowOnError>) => (options.client ?? client).post<CreateBrowserChannelStreamGrantResponses, CreateBrowserChannelStreamGrantErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/channels/{channel_id}/stream-grants',
     ...options,
     headers: {
         'Content-Type': 'application/json',

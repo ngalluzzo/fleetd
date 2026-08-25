@@ -1,17 +1,10 @@
-//! Pure wire types and upgrade policy for the browser channel-stream edge.
-//!
-//! This module deliberately owns no routes, sockets, credentials, or grants.
-//! It defines the values that the public edge will compose with those
-//! authorities once the complete issuance and redemption path is registered.
-
-#![allow(
-    dead_code,
-    reason = "the complete browser edge is intentionally unreachable until its atomic integration commit"
-)]
+//! Wire types, origin policy, and pre-authentication capacity for the browser
+//! channel-stream edge.
 
 use std::{
     fmt,
     net::{IpAddr, SocketAddr},
+    sync::Arc,
     time::Duration,
 };
 
@@ -22,24 +15,25 @@ use axum::http::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use utoipa::ToSchema;
 
 use crate::Message;
 
-pub(crate) const BROWSER_STREAM_PROTOCOL: &str = "fleetd.channel-stream.browser.v1";
-pub(crate) const BROWSER_STREAM_PATH: &str = "/v1/browser/channel-stream";
-pub(crate) const STREAM_GRANT_PREFIX: &str = "fl_sg_";
-pub(crate) const STREAM_GRANT_ENTROPY_BYTES: usize = 32;
-pub(crate) const STREAM_GRANT_REDEMPTION_LIFETIME: Duration = Duration::from_secs(15);
-pub(crate) const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(5);
-pub(crate) const MAX_REDEMPTION_FRAME_BYTES: usize = 1_024;
-pub(crate) const MAX_UNUSED_GRANTS_PER_CREDENTIAL: usize = 8;
-pub(crate) const MAX_UNUSED_GRANTS_PER_DAEMON: usize = 1_024;
-pub(crate) const MAX_PRE_AUTHENTICATION_SOCKETS_PER_DAEMON: usize = 64;
-pub(crate) const MAX_ACTIVE_BROWSER_STREAMS_PER_CREDENTIAL: usize = 16;
-pub(crate) const MAX_ACTIVE_BROWSER_STREAMS_PER_DAEMON: usize = 1_024;
-pub(crate) const CREDENTIAL_REVALIDATION_INTERVAL: Duration = Duration::from_secs(30);
-pub(crate) const APPLICATION_FRAME_SEND_DEADLINE: Duration = Duration::from_secs(10);
+pub const BROWSER_STREAM_PROTOCOL: &str = "fleetd.channel-stream.browser.v1";
+pub const BROWSER_STREAM_PATH: &str = "/v1/browser/channel-stream";
+pub const STREAM_GRANT_PREFIX: &str = "fl_sg_";
+pub const STREAM_GRANT_ENTROPY_BYTES: usize = 32;
+pub const STREAM_GRANT_REDEMPTION_LIFETIME: Duration = Duration::from_secs(15);
+pub const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(5);
+pub const MAX_REDEMPTION_FRAME_BYTES: usize = 1_024;
+pub const MAX_UNUSED_GRANTS_PER_CREDENTIAL: usize = 8;
+pub const MAX_UNUSED_GRANTS_PER_DAEMON: usize = 1_024;
+pub const MAX_PRE_AUTHENTICATION_SOCKETS_PER_DAEMON: usize = 64;
+pub const MAX_ACTIVE_BROWSER_STREAMS_PER_CREDENTIAL: usize = 16;
+pub const MAX_ACTIVE_BROWSER_STREAMS_PER_DAEMON: usize = 1_024;
+pub const CREDENTIAL_REVALIDATION_INTERVAL: Duration = Duration::from_secs(30);
+pub const APPLICATION_FRAME_SEND_DEADLINE: Duration = Duration::from_secs(10);
 
 const STREAM_GRANT_ENCODED_ENTROPY_BYTES: usize = 43;
 
@@ -47,13 +41,14 @@ const STREAM_GRANT_ENCODED_ENTROPY_BYTES: usize = 43;
 /// grant. Representing the constant as a closed enum makes alternate values
 /// fail during JSON decoding and constrains its generated schema.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
-pub(crate) enum BrowserStreamProtocol {
+pub enum BrowserStreamProtocol {
     #[serde(rename = "fleetd.channel-stream.browser.v1")]
     V1,
 }
 
 impl BrowserStreamProtocol {
-    pub(crate) const fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::V1 => BROWSER_STREAM_PROTOCOL,
         }
@@ -62,13 +57,14 @@ impl BrowserStreamProtocol {
 
 /// Exact path returned by successful grant issuance.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
-pub(crate) enum BrowserStreamPath {
+pub enum BrowserStreamPath {
     #[serde(rename = "/v1/browser/channel-stream")]
     ChannelStream,
 }
 
 impl BrowserStreamPath {
-    pub(crate) const fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::ChannelStream => BROWSER_STREAM_PATH,
         }
@@ -79,14 +75,16 @@ impl BrowserStreamPath {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, ToSchema)]
 #[serde(transparent)]
 #[schema(value_type = i64)]
-pub(crate) struct BrowserStreamCursor(i64);
+pub struct BrowserStreamCursor(i64);
 
 impl BrowserStreamCursor {
-    pub(crate) const fn new(value: i64) -> Option<Self> {
+    #[must_use]
+    pub const fn new(value: i64) -> Option<Self> {
         if value < 0 { None } else { Some(Self(value)) }
     }
 
-    pub(crate) const fn get(self) -> i64 {
+    #[must_use]
+    pub const fn get(self) -> i64 {
         self.0
     }
 }
@@ -108,10 +106,16 @@ impl<'de> Deserialize<'de> for BrowserStreamCursor {
     value_type = String,
     pattern = r"^fl_sg_[A-Za-z0-9_-]{43}$"
 )]
-pub(crate) struct BrowserStreamGrant(String);
+pub struct BrowserStreamGrant(String);
 
 impl BrowserStreamGrant {
-    pub(crate) fn parse(value: impl Into<String>) -> Result<Self, BrowserStreamGrantParseError> {
+    /// Parses one exact, canonically encoded stream grant.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the prefix, encoded length, alphabet, decoded
+    /// entropy length, or canonical base64url representation is invalid.
+    pub fn parse(value: impl Into<String>) -> Result<Self, BrowserStreamGrantParseError> {
         let value = value.into();
         validate_grant_shape(&value)?;
         Ok(Self(value))
@@ -119,7 +123,8 @@ impl BrowserStreamGrant {
 
     /// Exposes the one-time secret only to the issuance/redemption integration
     /// that must serialize or consume it. Callers must not log the result.
-    pub(crate) fn expose_secret(&self) -> &str {
+    #[must_use]
+    pub fn expose_secret(&self) -> &str {
         &self.0
     }
 }
@@ -142,7 +147,7 @@ impl<'de> Deserialize<'de> for BrowserStreamGrant {
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[error("invalid browser stream grant shape")]
-pub(crate) struct BrowserStreamGrantParseError;
+pub struct BrowserStreamGrantParseError;
 
 fn validate_grant_shape(value: &str) -> Result<(), BrowserStreamGrantParseError> {
     let Some(encoded) = value.strip_prefix(STREAM_GRANT_PREFIX) else {
@@ -163,35 +168,40 @@ fn validate_grant_shape(value: &str) -> Result<(), BrowserStreamGrantParseError>
 /// Strict authenticated request to mint one browser stream grant.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct BrowserStreamGrantIssueRequest {
-    pub(crate) after: BrowserStreamCursor,
-    pub(crate) protocol: BrowserStreamProtocol,
+pub struct BrowserStreamGrantIssueRequest {
+    pub after: BrowserStreamCursor,
+    pub protocol: BrowserStreamProtocol,
 }
 
 /// One-time response to successful browser stream grant issuance.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct BrowserStreamGrantIssueResponse {
-    pub(crate) grant: BrowserStreamGrant,
-    pub(crate) expires_at_ms: i64,
-    pub(crate) websocket_path: BrowserStreamPath,
-    pub(crate) protocol: BrowserStreamProtocol,
+pub struct BrowserStreamGrantIssueResponse {
+    pub grant: BrowserStreamGrant,
+    pub expires_at_ms: i64,
+    pub websocket_path: BrowserStreamPath,
+    pub protocol: BrowserStreamProtocol,
 }
 
 /// The only application message accepted before browser stream authority is
 /// established. It carries no caller-selected channel, cursor, or principal.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct BrowserStreamRedemptionRequest {
+pub struct BrowserStreamRedemptionRequest {
     #[serde(rename = "type")]
-    pub(crate) message_type: BrowserStreamRedemptionMessageType,
-    pub(crate) grant: BrowserStreamGrant,
+    pub message_type: BrowserStreamRedemptionMessageType,
+    pub grant: BrowserStreamGrant,
 }
 
 impl BrowserStreamRedemptionRequest {
     /// Parses one already-reassembled text frame while enforcing the complete
     /// UTF-8 byte bound before JSON allocation or grant decoding.
-    pub(crate) fn parse_text_frame(value: &str) -> Result<Self, RedemptionFrameError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the frame exceeds the byte limit or is not the
+    /// closed redemption request shape.
+    pub fn parse_text_frame(value: &str) -> Result<Self, RedemptionFrameError> {
         if value.len() > MAX_REDEMPTION_FRAME_BYTES {
             return Err(RedemptionFrameError::Oversized);
         }
@@ -200,13 +210,13 @@ impl BrowserStreamRedemptionRequest {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
-pub(crate) enum BrowserStreamRedemptionMessageType {
+pub enum BrowserStreamRedemptionMessageType {
     #[serde(rename = "redeem")]
     Redeem,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
-pub(crate) enum RedemptionFrameError {
+pub enum RedemptionFrameError {
     #[error("browser stream redemption frame exceeds its byte limit")]
     Oversized,
     #[error("invalid browser stream redemption frame")]
@@ -217,7 +227,7 @@ pub(crate) enum RedemptionFrameError {
 /// envelope is nested without translation or field selection.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum BrowserStreamServerFrame {
+pub enum BrowserStreamServerFrame {
     Ready {
         protocol: BrowserStreamProtocol,
         channel_id: String,
@@ -229,7 +239,8 @@ pub(crate) enum BrowserStreamServerFrame {
 }
 
 impl BrowserStreamServerFrame {
-    pub(crate) fn ready(channel_id: impl Into<String>, after: BrowserStreamCursor) -> Self {
+    #[must_use]
+    pub fn ready(channel_id: impl Into<String>, after: BrowserStreamCursor) -> Self {
         Self::Ready {
             protocol: BrowserStreamProtocol::V1,
             channel_id: channel_id.into(),
@@ -237,10 +248,52 @@ impl BrowserStreamServerFrame {
         }
     }
 
-    pub(crate) fn message(message: Message) -> Self {
+    #[must_use]
+    pub fn message(message: Message) -> Self {
         Self::Message {
             message: Box::new(message),
         }
+    }
+}
+
+/// Process-local policy and capacity for sockets that have upgraded but have
+/// not yet redeemed a stream grant.
+#[derive(Clone)]
+pub(crate) struct BrowserStreamEdgeState {
+    upgrade_policy: BrowserUpgradePolicy,
+    pre_authentication_slots: Arc<Semaphore>,
+}
+
+impl BrowserStreamEdgeState {
+    pub(crate) fn for_http_listener(
+        listen_address: SocketAddr,
+    ) -> Result<Self, BrowserUpgradePolicyError> {
+        Ok(Self {
+            upgrade_policy: BrowserUpgradePolicy::from_listen_address(
+                BrowserOriginScheme::Http,
+                listen_address,
+            )?,
+            pre_authentication_slots: Arc::new(Semaphore::new(
+                MAX_PRE_AUTHENTICATION_SOCKETS_PER_DAEMON,
+            )),
+        })
+    }
+
+    pub(crate) fn canonical_origin(&self) -> &str {
+        self.upgrade_policy.canonical_origin()
+    }
+
+    pub(crate) fn validate_upgrade_headers(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<(), BrowserUpgradePolicyError> {
+        self.upgrade_policy.validate_upgrade_headers(headers)
+    }
+
+    pub(crate) fn try_acquire_pre_authentication_slot(&self) -> Option<OwnedSemaphorePermit> {
+        Arc::clone(&self.pre_authentication_slots)
+            .try_acquire_owned()
+            .ok()
     }
 }
 
@@ -248,21 +301,18 @@ impl BrowserStreamServerFrame {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BrowserOriginScheme {
     Http,
-    Https,
 }
 
 impl BrowserOriginScheme {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Http => "http",
-            Self::Https => "https",
         }
     }
 
     const fn default_port(self) -> u16 {
         match self {
             Self::Http => 80,
-            Self::Https => 443,
         }
     }
 }
@@ -301,6 +351,7 @@ impl BrowserUpgradePolicy {
         &self.origin
     }
 
+    #[cfg(test)]
     pub(crate) fn canonical_authority(&self) -> &str {
         &self.authority
     }
@@ -752,13 +803,13 @@ mod tests {
     #[test]
     fn ipv6_and_default_ports_use_browser_canonical_authorities() {
         let ipv6 = BrowserUpgradePolicy::from_listen_address(
-            BrowserOriginScheme::Https,
+            BrowserOriginScheme::Http,
             SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 8443),
         )
         .expect("IPv6 loopback policy");
-        assert_eq!(ipv6.canonical_origin(), "https://[::1]:8443");
+        assert_eq!(ipv6.canonical_origin(), "http://[::1]:8443");
         assert_eq!(ipv6.canonical_authority(), "[::1]:8443");
-        let ipv6_headers = valid_upgrade_headers("https://[::1]:8443", "[::1]:8443");
+        let ipv6_headers = valid_upgrade_headers("http://[::1]:8443", "[::1]:8443");
         assert!(ipv6.validate_upgrade_headers(&ipv6_headers).is_ok());
 
         let default_http = BrowserUpgradePolicy::from_listen_address(
@@ -768,14 +819,6 @@ mod tests {
         .expect("default HTTP policy");
         assert_eq!(default_http.canonical_origin(), "http://127.0.0.1");
         assert_eq!(default_http.canonical_authority(), "127.0.0.1");
-
-        let default_https = BrowserUpgradePolicy::from_listen_address(
-            BrowserOriginScheme::Https,
-            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 443),
-        )
-        .expect("default HTTPS policy");
-        assert_eq!(default_https.canonical_origin(), "https://[::1]");
-        assert_eq!(default_https.canonical_authority(), "[::1]");
     }
 
     #[test]

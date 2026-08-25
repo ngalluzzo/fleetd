@@ -181,9 +181,12 @@ of its daemon. See [the integration boundary](docs/INTEGRATION_BOUNDARY.md).
 
 ## Security boundary
 
-Every versioned API request requires an operator or agent-bound bearer token.
-Administrative actions require the operator. Agent delivery and invocation
-operations are bound to the authenticated agent; sender attribution is always
+Every versioned HTTP operation except the dedicated browser WebSocket upgrade
+requires an operator or agent-bound bearer token. That upgrade accepts only the
+configured same-origin loopback surface and releases no application data until
+it redeems a bearer-authenticated, single-use channel grant. Administrative
+actions require the operator. Agent delivery and invocation operations are
+bound to the authenticated agent; sender attribution is always
 constructed server-side. Raw tokens are returned once and SQLite stores only
 cryptographic digests.
 

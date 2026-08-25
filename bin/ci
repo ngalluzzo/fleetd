@@ -9,7 +9,7 @@ git diff --exit-code -- openapi/fleetd-v1.json
     npm run generate
     npm run typecheck
     npm audit --audit-level=moderate
-    if grep -q "streamChannelMessages" src/generated/index.ts; then
+    if grep -Eq "streamChannelMessages|openBrowserChannelStream" src/generated/index.ts; then
         echo "WebSocket upgrades must not be emitted as Fetch operations" >&2
         exit 1
     fi

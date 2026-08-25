@@ -187,8 +187,11 @@ automatically; it cannot prove whether the external effect happened.
 
 ## Authentication and attribution
 
-Every `/v1` HTTP request and WebSocket upgrade requires the header
-`Authorization: Bearer <token>`. Health checks remain public. Operator
+Every `/v1` HTTP operation and the native channel WebSocket require the header
+`Authorization: Bearer <token>`. The dedicated browser channel WebSocket is the
+only versioned upgrade outside that middleware: it validates the configured
+loopback origin and redeems a bearer-authenticated, single-use stream grant
+before releasing application data. Health checks remain public. Operator
 credentials administer agents, credentials, channels, membership, and blocked
 delivery resolution. Agent credentials send messages, access member channels,
 claim or settle only their own inbox, and reserve, arm, or complete only their

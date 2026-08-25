@@ -159,9 +159,10 @@ contains no compiler runtime dependency. See
 The live-conversation design keeps a human operator's administrative
 principal separate from their addressable participant principal. Native and
 TUI clients can use the existing bearer-authenticated channel WebSocket. A
-browser target remains unsatisfied until it can redeem an attenuated,
-single-use stream grant without placing credentials in a URL, cookie, or
-subprotocol. See the [live-conversation design](LIVE_CONVERSATION.md),
+browser target now has an implemented attenuated, single-use stream-grant edge
+without credentials in a URL, cookie, or subprotocol, but remains provisional
+until the adversarial and real-browser qualification matrices pass. See the
+[live-conversation design](LIVE_CONVERSATION.md),
 [ADR 0022](adr/0022-browser-channel-stream-grants.md), and the
 [draft browser stream contract](contracts/browser-channel-stream-v1-draft.md).
 

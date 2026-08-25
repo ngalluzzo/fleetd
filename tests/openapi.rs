@@ -28,7 +28,7 @@ fn committed_contract_matches_registered_handlers() {
 fn contract_has_stable_unique_operations_and_explicit_security() {
     let contract = generated_contract();
     assert_eq!(contract["openapi"], "3.1.0");
-    assert_eq!(contract["info"]["version"], "1.1.0");
+    assert_eq!(contract["info"]["version"], "1.2.0");
     assert_eq!(
         contract["components"]["securitySchemes"]["bearerAuth"]["scheme"],
         "bearer"
@@ -51,7 +51,7 @@ fn contract_has_stable_unique_operations_and_explicit_security() {
                 operation_ids.insert(operation_id.to_owned()),
                 "duplicate operationId {operation_id}"
             );
-            if path.starts_with("/v1/") {
+            if path.starts_with("/v1/") && path != "/v1/browser/channel-stream" {
                 assert_eq!(
                     operation["security"],
                     serde_json::json!([{ "bearerAuth": [] }]),
@@ -66,7 +66,7 @@ fn contract_has_stable_unique_operations_and_explicit_security() {
         }
     }
 
-    assert_eq!(operation_count, 25);
+    assert_eq!(operation_count, 27);
     assert_eq!(operation_ids.len(), operation_count);
 }
 
@@ -81,6 +81,30 @@ fn websocket_upgrade_declares_its_frame_contract() {
     assert_eq!(
         stream["responses"]["101"]["description"],
         "WebSocket protocol switched"
+    );
+
+    let browser = &contract["paths"]["/v1/browser/channel-stream"]["get"];
+    assert!(browser.get("security").is_none());
+    assert_eq!(
+        browser["x-fleetd-websocket"]["firstClientMessageSchema"]["$ref"],
+        "#/components/schemas/BrowserStreamRedemptionRequest"
+    );
+    assert_eq!(
+        browser["x-fleetd-websocket"]["serverMessageSchema"]["$ref"],
+        "#/components/schemas/BrowserStreamServerFrame"
+    );
+    assert_eq!(
+        browser["responses"]["101"]["headers"]["Sec-WebSocket-Protocol"]["description"],
+        "fleetd.channel-stream.browser.v1"
+    );
+    let issuance = &contract["paths"]["/v1/channels/{channel_id}/stream-grants"]["post"];
+    assert_eq!(
+        issuance["security"],
+        serde_json::json!([{ "bearerAuth": [] }])
+    );
+    assert_eq!(
+        issuance["responses"]["201"]["headers"]["Cache-Control"]["description"],
+        "Always no-store"
     );
 }
 

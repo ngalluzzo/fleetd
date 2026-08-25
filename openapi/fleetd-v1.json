@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "paths": {
     "/health": {
@@ -1060,6 +1060,72 @@
         ]
       }
     },
+    "/v1/browser/channel-stream": {
+      "get": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "Redeem a browser channel-stream grant",
+        "description": "Same-origin WebSocket upgrade. No bearer or grant appears in the URI, headers, or subprotocol. The first application frame must redeem the single-use grant.",
+        "operationId": "openBrowserChannelStream",
+        "responses": {
+          "101": {
+            "description": "Browser WebSocket protocol switched",
+            "headers": {
+              "Sec-WebSocket-Protocol": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "fleetd.channel-stream.browser.v1"
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid WebSocket upgrade",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin, authority, or protocol rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Browser stream edge unavailable or at capacity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-fleetd-websocket": {
+          "clientMessagesAfterRedemption": "unsupported",
+          "direction": "bidirectional-authentication-then-server-to-client",
+          "firstClientMessageSchema": {
+            "$ref": "#/components/schemas/BrowserStreamRedemptionRequest"
+          },
+          "frameType": "text",
+          "ordering": "ready, then ascending message.seq after the grant cursor",
+          "serverMessageSchema": {
+            "$ref": "#/components/schemas/BrowserStreamServerFrame"
+          },
+          "subprotocol": "fleetd.channel-stream.browser.v1"
+        }
+      }
+    },
     "/v1/channels": {
       "get": {
         "tags": [
@@ -1716,6 +1782,122 @@
         }
       }
     },
+    "/v1/channels/{channel_id}/stream-grants": {
+      "post": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "Mint a single-use browser channel-stream grant",
+        "description": "Operators or exact channel members. The grant is process-local, expires after 15 seconds, and is returned once with Cache-Control: no-store.",
+        "operationId": "createBrowserChannelStreamGrant",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "Channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BrowserStreamGrantIssueRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Single-use browser stream grant",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Always no-store"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserStreamGrantIssueResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or protocol",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Channel membership required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Channel not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Unused grant capacity exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1/delivery-blocks": {
       "get": {
         "tags": [
@@ -2327,6 +2509,145 @@
             "type": "string"
           }
         }
+      },
+      "BrowserStreamCursor": {
+        "type": "integer",
+        "format": "int64",
+        "description": "A valid exclusive cursor in Fleetd's signed global message sequence."
+      },
+      "BrowserStreamGrant": {
+        "type": "string",
+        "description": "One validated raw stream-grant token. Debug output is always redacted.",
+        "pattern": "^fl_sg_[A-Za-z0-9_-]{43}$"
+      },
+      "BrowserStreamGrantIssueRequest": {
+        "type": "object",
+        "description": "Strict authenticated request to mint one browser stream grant.",
+        "required": [
+          "after",
+          "protocol"
+        ],
+        "properties": {
+          "after": {
+            "$ref": "#/components/schemas/BrowserStreamCursor"
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/BrowserStreamProtocol"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BrowserStreamGrantIssueResponse": {
+        "type": "object",
+        "description": "One-time response to successful browser stream grant issuance.",
+        "required": [
+          "grant",
+          "expires_at_ms",
+          "websocket_path",
+          "protocol"
+        ],
+        "properties": {
+          "expires_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/BrowserStreamGrant"
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/BrowserStreamProtocol"
+          },
+          "websocket_path": {
+            "$ref": "#/components/schemas/BrowserStreamPath"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BrowserStreamPath": {
+        "type": "string",
+        "description": "Exact path returned by successful grant issuance.",
+        "enum": [
+          "/v1/browser/channel-stream"
+        ]
+      },
+      "BrowserStreamProtocol": {
+        "type": "string",
+        "description": "Exact browser stream protocol negotiated during upgrade and bound into a\ngrant. Representing the constant as a closed enum makes alternate values\nfail during JSON decoding and constrains its generated schema.",
+        "enum": [
+          "fleetd.channel-stream.browser.v1"
+        ]
+      },
+      "BrowserStreamRedemptionMessageType": {
+        "type": "string",
+        "enum": [
+          "redeem"
+        ]
+      },
+      "BrowserStreamRedemptionRequest": {
+        "type": "object",
+        "description": "The only application message accepted before browser stream authority is\nestablished. It carries no caller-selected channel, cursor, or principal.",
+        "required": [
+          "type",
+          "grant"
+        ],
+        "properties": {
+          "grant": {
+            "$ref": "#/components/schemas/BrowserStreamGrant"
+          },
+          "type": {
+            "$ref": "#/components/schemas/BrowserStreamRedemptionMessageType"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BrowserStreamServerFrame": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "protocol",
+              "channel_id",
+              "after",
+              "type"
+            ],
+            "properties": {
+              "after": {
+                "$ref": "#/components/schemas/BrowserStreamCursor"
+              },
+              "channel_id": {
+                "type": "string"
+              },
+              "protocol": {
+                "$ref": "#/components/schemas/BrowserStreamProtocol"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "ready"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "message",
+              "type"
+            ],
+            "properties": {
+              "message": {
+                "$ref": "#/components/schemas/Message"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "message"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Tagged server-to-browser application frames. The immutable message\nenvelope is nested without translation or field selection."
       },
       "Channel": {
         "type": "object",

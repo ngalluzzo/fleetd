@@ -47,13 +47,14 @@ message `kind`, `payload`, and envelope data when proxying durable events.
 
 ## Authentication and authority
 
-Every `/v1` operation requires `Authorization: Bearer <token>`. The bearer
-scheme in OpenAPI expresses authentication; each operation description states
-the narrower runtime authority:
+Every `/v1` operation except the dedicated browser WebSocket upgrade requires
+`Authorization: Bearer <token>`. The bearer scheme in OpenAPI expresses
+authentication; each operation description states the narrower runtime
+authority:
 
 | Authority | Permitted surface |
 | --- | --- |
-| Public | Health and contract discovery |
+| Public | Health, contract discovery, and the origin-bound browser upgrade before grant redemption |
 | Operator | Agent, credential, channel, membership, block, and invocation administration |
 | Agent | Message append; history and stream access for member channels |
 | Bound agent | Claim and settle only that agent's deliveries; reserve, arm, and complete only that agent's invocations |
@@ -90,12 +91,18 @@ JSON `Message`. Clients reconnect with the highest sequence they have durably
 processed.
 
 The TypeScript generator removes operations carrying this extension. That is
-intentional: a generated Fetch function would not perform the upgrade. UI
-stream code should construct a WebSocket URL, pass the same bearer credential
-during the upgrade in environments that permit custom headers, and decode
-frames as the generated `Message` type. Browser credential transport needs an
-explicit server design before browser UIs connect directly; tokens must not be
-placed in query strings by convention.
+intentional: a generated Fetch function would not perform the upgrade. Native
+stream code constructs a WebSocket request with the same bearer credential and
+decodes frames as the generated `Message` type.
+
+The provisional browser-equivalent edge mints a single-use grant through the
+authenticated `POST /v1/channels/{channel_id}/stream-grants` operation, with
+`Cache-Control: no-store`, then redeems it as the first application frame on
+the origin-bound `GET /v1/browser/channel-stream` WebSocket. The upgrade itself
+has no bearer header and is the only `/v1` operation outside ordinary bearer
+middleware. Its tagged ready/message frames and first-client-message schema are
+published in `x-fleetd-websocket`; the Fetch client generator omits both
+WebSocket operations.
 
 ## Operational read models
 

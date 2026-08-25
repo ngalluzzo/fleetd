@@ -72,6 +72,71 @@ export type BlockedDelivery = {
 };
 
 /**
+ * A valid exclusive cursor in Fleetd's signed global message sequence.
+ */
+export type BrowserStreamCursor = number;
+
+/**
+ * One validated raw stream-grant token. Debug output is always redacted.
+ */
+export type BrowserStreamGrant = string;
+
+/**
+ * Strict authenticated request to mint one browser stream grant.
+ */
+export type BrowserStreamGrantIssueRequest = {
+    after: BrowserStreamCursor;
+    protocol: BrowserStreamProtocol;
+};
+
+/**
+ * One-time response to successful browser stream grant issuance.
+ */
+export type BrowserStreamGrantIssueResponse = {
+    expires_at_ms: number;
+    grant: BrowserStreamGrant;
+    protocol: BrowserStreamProtocol;
+    websocket_path: BrowserStreamPath;
+};
+
+/**
+ * Exact path returned by successful grant issuance.
+ */
+export type BrowserStreamPath = '/v1/browser/channel-stream';
+
+/**
+ * Exact browser stream protocol negotiated during upgrade and bound into a
+ * grant. Representing the constant as a closed enum makes alternate values
+ * fail during JSON decoding and constrains its generated schema.
+ */
+export type BrowserStreamProtocol = 'fleetd.channel-stream.browser.v1';
+
+export type BrowserStreamRedemptionMessageType = 'redeem';
+
+/**
+ * The only application message accepted before browser stream authority is
+ * established. It carries no caller-selected channel, cursor, or principal.
+ */
+export type BrowserStreamRedemptionRequest = {
+    grant: BrowserStreamGrant;
+    type: BrowserStreamRedemptionMessageType;
+};
+
+/**
+ * Tagged server-to-browser application frames. The immutable message
+ * envelope is nested without translation or field selection.
+ */
+export type BrowserStreamServerFrame = {
+    after: BrowserStreamCursor;
+    channel_id: string;
+    protocol: BrowserStreamProtocol;
+    type: 'ready';
+} | {
+    message: Message;
+    type: 'message';
+};
+
+/**
  * A durable conversation shared by a bounded set of agents.
  */
 export type Channel = {
@@ -1223,6 +1288,56 @@ export type CreateChannelMessageResponses = {
 };
 
 export type CreateChannelMessageResponse = CreateChannelMessageResponses[keyof CreateChannelMessageResponses];
+
+export type CreateBrowserChannelStreamGrantData = {
+    body: BrowserStreamGrantIssueRequest;
+    path: {
+        /**
+         * Channel ID
+         */
+        channel_id: string;
+    };
+    query?: never;
+    url: '/v1/channels/{channel_id}/stream-grants';
+};
+
+export type CreateBrowserChannelStreamGrantErrors = {
+    /**
+     * Invalid cursor or protocol
+     */
+    400: ErrorResponse;
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Channel membership required
+     */
+    403: ErrorResponse;
+    /**
+     * Channel not found
+     */
+    404: ErrorResponse;
+    /**
+     * Unused grant capacity exhausted
+     */
+    429: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type CreateBrowserChannelStreamGrantError = CreateBrowserChannelStreamGrantErrors[keyof CreateBrowserChannelStreamGrantErrors];
+
+export type CreateBrowserChannelStreamGrantResponses = {
+    /**
+     * Single-use browser stream grant
+     */
+    201: BrowserStreamGrantIssueResponse;
+};
+
+export type CreateBrowserChannelStreamGrantResponse = CreateBrowserChannelStreamGrantResponses[keyof CreateBrowserChannelStreamGrantResponses];
 
 export type ListDeliveryBlocksData = {
     body?: never;

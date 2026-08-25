@@ -2,7 +2,7 @@
 
 pub mod api;
 pub mod auth;
-pub(crate) mod browser_stream_edge;
+mod browser_stream_edge;
 mod channel_stream;
 pub mod controller;
 mod delivery;
@@ -15,15 +15,17 @@ mod operator_surface;
 pub mod plugin;
 pub mod session_binding;
 pub mod store;
-#[allow(
-    dead_code,
-    reason = "the bounded broker deliberately lands before any public issuance or redemption edge"
-)]
 mod stream_grant_broker;
 pub mod worker;
 
 pub use api::{AppState, openapi_document, router};
 pub use auth::{AuthService, OperatorBootstrap, Principal};
+pub use browser_stream_edge::{
+    BROWSER_STREAM_PATH, BROWSER_STREAM_PROTOCOL, BrowserStreamCursor, BrowserStreamGrant,
+    BrowserStreamGrantIssueRequest, BrowserStreamGrantIssueResponse, BrowserStreamPath,
+    BrowserStreamProtocol, BrowserStreamRedemptionMessageType, BrowserStreamRedemptionRequest,
+    BrowserStreamServerFrame,
+};
 pub use controller::{
     ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnGrant, ManagedTurnOutcome,
     TurnResultCapture,

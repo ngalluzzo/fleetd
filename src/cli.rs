@@ -626,8 +626,15 @@ async fn serve(args: ServeArgs) -> MainResult<()> {
         "operator credential ready"
     );
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
-    tracing::info!(listen = %args.listen, database = %args.db.display(), "fleetd ready");
-    axum::serve(listener, router(AppState::new(store)))
+    let listen_address = listener.local_addr()?;
+    let state = AppState::new(store).with_browser_stream_listener(listen_address)?;
+    tracing::info!(
+        listen = %listen_address,
+        browser_origin = state.browser_origin().expect("configured browser origin"),
+        database = %args.db.display(),
+        "fleetd ready"
+    );
+    axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
