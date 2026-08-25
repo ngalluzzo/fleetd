@@ -16,10 +16,10 @@ npm test
 Configure the generated Fetch client once when the UI starts:
 
 ```ts
-import { client } from '@fleetd/client/client';
+import { client } from "@fleetd/client/client";
 
 client.setConfig({
-  baseUrl: 'http://127.0.0.1:4317',
+  baseUrl: "http://127.0.0.1:4317",
   auth: () => operatorToken,
 });
 ```
@@ -35,7 +35,7 @@ Browser presentations use the exported wire adapter rather than Fetch history
 polling:
 
 ```ts
-import { openBrowserChannelStream } from '@fleetd/client';
+import { openBrowserChannelStream } from "@fleetd/client";
 
 const stream = openBrowserChannelStream({
   origin: window.location.origin,
@@ -56,3 +56,42 @@ upgrade. `cursor` advances only after `accept` resolves. Reconnects are bounded,
 duplicate sequences are not re-presented, and a missing or mismatched grant
 linkage fails closed without an HTTP history fallback. `maxPendingMessages`
 bounds frames waiting behind the one message currently being accepted.
+
+## Headless conversation session
+
+Presentation targets compose the wire client through `ConversationTransport`
+instead of duplicating channel selection and message projection in each UI.
+The shipped browser transport uses the operator credential only for channel
+discovery and the human participant credential for membership, stream, and
+send operations. `ConversationSession` then owns generation-fenced selection,
+per-channel cursors, bounded immutable-envelope retention, send/echo
+convergence, and honest local connection state without importing a DOM.
+
+```ts
+import {
+  ConversationSession,
+  createBrowserConversationTransport,
+} from "@fleetd/client";
+
+const transport = createBrowserConversationTransport({
+  origin: window.location.origin,
+  participantId: humanAgentId,
+  operatorCredential,
+  participantCredential,
+});
+const conversation = new ConversationSession(transport);
+
+conversation.subscribe(renderSnapshot);
+await conversation.start();
+await conversation.selectChannel(channelId);
+await conversation.send({
+  idempotency_key: crypto.randomUUID(),
+  recipient_id: workerAgentId,
+  kind: configuredRequestKind,
+  payload: { text: composerText },
+});
+```
+
+The session does not interpret agent execution, harness events, or application
+payload conformance. A future TUI supplies a native bearer-WebSocket transport
+to the same interface.
