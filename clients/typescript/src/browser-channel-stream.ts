@@ -19,6 +19,14 @@ export type BrowserChannelStreamErrorCode =
   | "server_protocol_error"
   | "socket_protocol_mismatch";
 
+/** Locally observed wire state. It never represents remote agent activity. */
+export type BrowserChannelStreamStatus =
+  | "connecting"
+  | "live"
+  | "reconnecting"
+  | "failed"
+  | "closed";
+
 export class BrowserChannelStreamError extends Error {
   declare readonly code: BrowserChannelStreamErrorCode;
 
@@ -69,6 +77,8 @@ export interface BrowserChannelStreamOptions {
   after?: number;
   /** Resolving accepts one message; rejection terminates without advancing. */
   accept(message: Message): void | Promise<void>;
+  /** Optional observation of exact local connection-state transitions. */
+  statusChanged?(status: BrowserChannelStreamStatus): void;
   /** One delay per permitted reconnect after the initial connection. */
   reconnectDelaysMs?: readonly number[];
   /** Bounds frames waiting behind one asynchronous consumer acceptance. */
@@ -85,6 +95,8 @@ export interface BrowserChannelStreamOptions {
 export interface BrowserChannelStream {
   /** Highest sequence whose consumer acceptance has resolved successfully. */
   readonly cursor: number;
+  /** Exact locally observed connection state. */
+  readonly status: BrowserChannelStreamStatus;
   /** Resolves after an explicit close; rejects on terminal adapter failure. */
   readonly closed: Promise<void>;
   close(): void;
@@ -95,6 +107,7 @@ interface NormalizedOptions {
   channelId: string;
   initialCursor: number;
   accept(message: Message): void | Promise<void>;
+  statusChanged?(status: BrowserChannelStreamStatus): void;
   reconnectDelaysMs: readonly number[];
   maxPendingMessages: number;
   readyTimeoutMs: number;
@@ -126,6 +139,7 @@ export function openBrowserChannelStream(
   const normalized = normalizeOptions(options);
   let credential = options.credential;
   let cursor = normalized.initialCursor;
+  let status: BrowserChannelStreamStatus = "connecting";
   let stopRequested = false;
   let activeSocket: BrowserChannelStreamSocket | undefined;
   let activeGrantRequest: AbortController | undefined;
@@ -134,6 +148,20 @@ export function openBrowserChannelStream(
     byId: new Map(),
     order: [],
   };
+  const setStatus = (next: BrowserChannelStreamStatus) => {
+    if (status === next) return;
+    status = next;
+    try {
+      normalized.statusChanged?.(next);
+    } catch {
+      // Status observation never participates in message acceptance.
+    }
+  };
+  try {
+    normalized.statusChanged?.(status);
+  } catch {
+    // Status observation never participates in message acceptance.
+  }
 
   const closed = (async () => {
     let reconnectIndex = 0;
@@ -147,6 +175,7 @@ export function openBrowserChannelStream(
               "browser channel stream exhausted its bounded reconnect budget",
             );
           }
+          setStatus("reconnecting");
           await normalized.delay(delay);
           if (stopRequested) return;
         }
@@ -176,6 +205,7 @@ export function openBrowserChannelStream(
           } catch (error) {
             if (stopRequested) return;
             if (error instanceof RetryableTransportError) {
+              setStatus("reconnecting");
               reconnectIndex += 1;
               continue;
             }
@@ -183,6 +213,7 @@ export function openBrowserChannelStream(
           }
           if (result.type === "aborted") {
             if (stopRequested) return;
+            setStatus("reconnecting");
             reconnectIndex += 1;
             continue;
           }
@@ -218,6 +249,7 @@ export function openBrowserChannelStream(
               releaseTimeout();
               releaseTimeout = () => {};
             },
+            ready: () => setStatus("live"),
             getCursor: () => cursor,
             setCursor: (accepted) => {
               cursor = accepted;
@@ -233,18 +265,28 @@ export function openBrowserChannelStream(
           if (socket && activeSocket === socket) activeSocket = undefined;
         }
 
-        if (!stopRequested) reconnectIndex += 1;
+        if (!stopRequested) {
+          setStatus("reconnecting");
+          reconnectIndex += 1;
+        }
       }
+    } catch (error) {
+      setStatus("failed");
+      throw error;
     } finally {
       credential = "";
       activeGrantRequest = undefined;
       activeSocket = undefined;
+      if (stopRequested) setStatus("closed");
     }
   })();
 
   return {
     get cursor() {
       return cursor;
+    },
+    get status() {
+      return status;
     },
     closed,
     close() {
@@ -348,6 +390,7 @@ function normalizeOptions(options: BrowserChannelStreamOptions): NormalizedOptio
     channelId: options.channelId,
     initialCursor,
     accept: options.accept,
+    statusChanged: options.statusChanged,
     reconnectDelaysMs: [...reconnectDelaysMs],
     maxPendingMessages,
     readyTimeoutMs,
@@ -450,6 +493,7 @@ interface SocketAttemptOptions {
   acceptedIdentities: AcceptedIdentityIndex;
   signal: AbortSignal;
   readyTimeout(): void;
+  ready(): void;
   getCursor(): number;
   setCursor(cursor: number): void;
   isStopped(): boolean;
@@ -598,6 +642,7 @@ function consumeSocketAttempt(options: SocketAttemptOptions): Promise<void> {
         }
         ready = true;
         options.readyTimeout();
+        options.ready();
         return;
       }
 

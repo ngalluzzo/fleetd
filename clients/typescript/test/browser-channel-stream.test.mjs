@@ -221,6 +221,72 @@ test("uses only exact grant POSTs and the fixed secret-free WebSocket", async ()
   );
 });
 
+test("reports exact local transport state without inferring agent activity", async () => {
+  const transport = createTransport();
+  const states = [];
+  const stream = openBrowserChannelStream({
+    origin: ORIGIN,
+    channelId: CHANNEL_ID,
+    credential: CREDENTIAL,
+    accept() {},
+    statusChanged(state) {
+      states.push(state);
+    },
+    reconnectDelaysMs: [0],
+    delay: async () => {},
+    fetch: transport.fetch,
+    createWebSocket: transport.createWebSocket,
+  });
+
+  assert.equal(stream.status, "connecting");
+  await eventually(() => transport.sockets.length === 1, "initial socket");
+  transport.sockets[0].open();
+  transport.sockets[0].message(ready(0));
+  await eventually(() => stream.status === "live", "initial live state");
+
+  transport.sockets[0].serverClose();
+  await eventually(() => transport.sockets.length === 2, "replacement socket");
+  assert.equal(stream.status, "reconnecting");
+  transport.sockets[1].open();
+  transport.sockets[1].message(ready(0));
+  await eventually(() => stream.status === "live", "replacement live state");
+
+  stream.close();
+  await stream.closed;
+  assert.equal(stream.status, "closed");
+  assert.deepEqual(states, [
+    "connecting",
+    "live",
+    "reconnecting",
+    "live",
+    "closed",
+  ]);
+});
+
+test("status observers cannot alter transport acceptance or failure", async () => {
+  const transport = createTransport();
+  const stream = openBrowserChannelStream({
+    origin: ORIGIN,
+    channelId: CHANNEL_ID,
+    credential: CREDENTIAL,
+    accept() {},
+    statusChanged() {
+      throw new Error("presentation observer failed");
+    },
+    reconnectDelaysMs: [],
+    fetch: transport.fetch,
+    createWebSocket: transport.createWebSocket,
+  });
+
+  await eventually(() => transport.sockets.length === 1, "socket");
+  transport.sockets[0].open();
+  transport.sockets[0].message(ready(0));
+  await eventually(() => stream.status === "live", "live state");
+  stream.close();
+  await stream.closed;
+  assert.equal(stream.status, "closed");
+});
+
 test("reconnects from every accepted cursor and suppresses stable duplicates", async () => {
   const transport = createTransport();
   const accepted = [];
@@ -522,6 +588,7 @@ test("grant linkage failure is terminal and never falls back to history polling"
     stream.closed,
     assertStreamError("grant_linkage_mismatch"),
   );
+  assert.equal(stream.status, "failed");
   assert.equal(transport.requests.length, 1);
   assert.equal(transport.requests[0].init.method, "POST");
   assert.equal(transport.requests[0].url.endsWith("/stream-grants"), true);
@@ -553,6 +620,7 @@ test("reconnect exhaustion is finite and performs no polling fallback", async ()
     stream.closed,
     assertStreamError("reconnect_exhausted"),
   );
+  assert.equal(stream.status, "failed");
   assert.deepEqual(delays, [0, 0]);
   assert.equal(transport.requests.length, 3);
   assert.ok(
