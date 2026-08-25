@@ -17,7 +17,7 @@ use tokio_tungstenite::{
 };
 
 struct BrowserDaemon {
-    _directory: tempfile::TempDir,
+    directory: tempfile::TempDir,
     auth: AuthService,
     operator_token: String,
     address: SocketAddr,
@@ -56,12 +56,34 @@ impl BrowserDaemon {
                 .expect("serve daemon");
         });
         Self {
-            _directory: directory,
+            directory,
             auth,
             operator_token,
             address,
             server,
         }
+    }
+
+    async fn restart(&mut self) {
+        self.server.abort();
+        let _ = (&mut self.server).await;
+
+        let store = Store::open(self.directory.path().join("fleetd.db"))
+            .await
+            .expect("reopen durable store");
+        self.auth = AuthService::new(store.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("rebind daemon");
+        self.address = listener.local_addr().expect("restarted daemon address");
+        let state = AppState::new(store)
+            .with_browser_stream_listener(self.address)
+            .expect("reconfigure browser stream edge");
+        self.server = tokio::spawn(async move {
+            axum::serve(listener, router(state))
+                .await
+                .expect("serve restarted daemon");
+        });
     }
 
     async fn register(&self, name: &str) -> RegisteredAgent {
@@ -352,6 +374,249 @@ async fn browser_live_delivery_follows_durable_sequence_under_concurrent_appends
 }
 
 #[tokio::test]
+async fn browser_stream_has_no_gap_across_authorization_and_replay_boundaries() {
+    let daemon = BrowserDaemon::start().await;
+    let author = daemon.register("boundary-author").await;
+    let watcher = daemon.register("boundary-watcher").await;
+    let channel = daemon
+        .channel(
+            "browser-boundaries",
+            vec![author.agent.id.clone(), watcher.agent.id.clone()],
+        )
+        .await;
+
+    let grant = daemon
+        .issue(&channel.id, &watcher.credential.token, 0)
+        .await;
+    let after_issuance = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "boundary.after-issuance/v1",
+            json!({"window": "issuance-to-upgrade"}),
+        )
+        .await;
+
+    let (mut socket, _) = connect_browser(&daemon, None, None)
+        .await
+        .expect("boundary stream upgrade");
+    let after_upgrade = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "boundary.after-upgrade/v1",
+            json!({"window": "upgrade-to-redemption"}),
+        )
+        .await;
+
+    redeem(&mut socket, grant).await;
+    let after_redemption = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "boundary.after-redemption/v1",
+            json!({"window": "redemption-to-ready"}),
+        )
+        .await;
+    assert_ready(next_server_frame(&mut socket).await, &channel.id, 0);
+
+    let during_replay = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "boundary.during-replay/v1",
+            json!({"window": "subscription-to-live-handoff"}),
+        )
+        .await;
+    let expected = vec![
+        after_issuance,
+        after_upgrade,
+        after_redemption,
+        during_replay,
+    ];
+    let mut delivered = Vec::new();
+    for _ in 0..expected.len() {
+        delivered.push(expect_message(next_server_frame(&mut socket).await));
+    }
+    assert_eq!(delivered, expected);
+
+    let live = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "boundary.live/v1",
+            json!({"window": "live"}),
+        )
+        .await;
+    assert_message(next_server_frame(&mut socket).await, &live);
+}
+
+#[tokio::test]
+async fn browser_and_native_streams_have_identical_visibility_at_every_cursor() {
+    let daemon = BrowserDaemon::start().await;
+    let author = daemon.register("parity-author").await;
+    let recipient = daemon.register("parity-recipient").await;
+    let watcher = daemon.register("parity-watcher").await;
+    let channel = daemon
+        .channel(
+            "browser-native-parity",
+            vec![
+                author.agent.id.clone(),
+                recipient.agent.id.clone(),
+                watcher.agent.id.clone(),
+            ],
+        )
+        .await;
+
+    let hidden_first = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            Some(recipient.agent.id.clone()),
+            "private.future-contract/v41",
+            json!({"private_extension": {"must_not_leak": [true, null, 7]}}),
+        )
+        .await;
+    let broadcast = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "future.broadcast-contract/v99",
+            json!({
+                "extension": {
+                    "nested": [1, {"unrecognized": "preserved"}],
+                    "nullable": null
+                }
+            }),
+        )
+        .await;
+    let direct = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            Some(watcher.agent.id.clone()),
+            "future.direct-contract/v73",
+            json!({"opaque": {"array": [3, 2, 1], "enabled": false}}),
+        )
+        .await;
+    let hidden_last = daemon
+        .send(
+            &channel.id,
+            &recipient.credential.token,
+            Some(author.agent.id.clone()),
+            "private.reply/v2",
+            json!({"also": "hidden"}),
+        )
+        .await;
+    let final_broadcast = daemon
+        .send(
+            &channel.id,
+            &recipient.credential.token,
+            None,
+            "future.final/v5",
+            json!({"unknown_fields": {"survive": true}}),
+        )
+        .await;
+
+    let all = [
+        hidden_first,
+        broadcast.clone(),
+        direct.clone(),
+        hidden_last,
+        final_broadcast.clone(),
+    ];
+    let visible = [broadcast, direct, final_broadcast];
+    let cursors = std::iter::once(0)
+        .chain(all.iter().map(|message| message.seq))
+        .collect::<Vec<_>>();
+    for after in cursors {
+        let expected = visible
+            .iter()
+            .filter(|message| message.seq > after)
+            .cloned()
+            .collect::<Vec<_>>();
+        let native = collect_native(
+            &daemon,
+            &channel.id,
+            &watcher.credential.token,
+            after,
+            expected.len(),
+        )
+        .await;
+        let browser = collect_browser(
+            &daemon,
+            &channel.id,
+            &watcher.credential.token,
+            after,
+            expected.len(),
+        )
+        .await;
+        assert_eq!(native, expected, "native visibility after cursor {after}");
+        assert_eq!(browser, expected, "browser visibility after cursor {after}");
+    }
+}
+
+#[tokio::test]
+async fn daemon_restart_invalidates_unused_grants_and_retains_durable_replay() {
+    let mut daemon = BrowserDaemon::start().await;
+    let author = daemon.register("restart-author").await;
+    let watcher = daemon.register("restart-watcher").await;
+    let channel = daemon
+        .channel(
+            "browser-restart",
+            vec![author.agent.id.clone(), watcher.agent.id.clone()],
+        )
+        .await;
+    let durable = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "restart.opaque/v17",
+            json!({"persisted": {"unknown": ["yes"]}}),
+        )
+        .await;
+    let stale = daemon
+        .issue(&channel.id, &watcher.credential.token, 0)
+        .await;
+
+    daemon.restart().await;
+
+    let (mut stale_socket, _) = connect_browser(&daemon, None, None)
+        .await
+        .expect("upgrade after restart");
+    redeem(&mut stale_socket, stale).await;
+    assert_close(&mut stale_socket, 4_401, "grant_rejected").await;
+
+    let replay = daemon
+        .issue(&channel.id, &watcher.credential.token, 0)
+        .await;
+    let (mut replay_socket, _) = connect_browser(&daemon, None, None)
+        .await
+        .expect("replay upgrade after restart");
+    redeem(&mut replay_socket, replay).await;
+    assert_ready(next_server_frame(&mut replay_socket).await, &channel.id, 0);
+    assert_message(next_server_frame(&mut replay_socket).await, &durable);
+
+    let live = daemon
+        .send(
+            &channel.id,
+            &author.credential.token,
+            None,
+            "restart.live/v1",
+            json!({"after_restart": true}),
+        )
+        .await;
+    assert_message(next_server_frame(&mut replay_socket).await, &live);
+}
+
+#[tokio::test]
 async fn browser_edge_fails_closed_before_and_after_upgrade() {
     let daemon = BrowserDaemon::start().await;
     let member = daemon.register("edge-member").await;
@@ -461,6 +726,75 @@ async fn connect_browser(
     .await
 }
 
+async fn connect_native(
+    daemon: &BrowserDaemon,
+    channel_id: &str,
+    token: &str,
+    after: i64,
+) -> BrowserSocket {
+    use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
+
+    let mut request = format!(
+        "ws://{}/v1/channels/{channel_id}/stream?after={after}",
+        daemon.address
+    )
+    .into_client_request()
+    .expect("native stream request");
+    request.headers_mut().insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {token}")).expect("native bearer header"),
+    );
+    connect_async(request)
+        .await
+        .expect("native stream upgrade")
+        .0
+}
+
+async fn collect_native(
+    daemon: &BrowserDaemon,
+    channel_id: &str,
+    token: &str,
+    after: i64,
+    count: usize,
+) -> Vec<Message> {
+    let mut socket = connect_native(daemon, channel_id, token, after).await;
+    let mut messages = Vec::with_capacity(count);
+    for _ in 0..count {
+        let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("native frame timeout")
+            .expect("native stream open")
+            .expect("valid native frame");
+        messages.push(
+            serde_json::from_str(frame.to_text().expect("native text frame"))
+                .expect("native message envelope"),
+        );
+    }
+    socket.close(None).await.expect("close native stream");
+    messages
+}
+
+async fn collect_browser(
+    daemon: &BrowserDaemon,
+    channel_id: &str,
+    token: &str,
+    after: i64,
+    count: usize,
+) -> Vec<Message> {
+    let issued = daemon.issue(channel_id, token, after).await;
+    let (mut socket, _) = connect_browser(daemon, None, None)
+        .await
+        .expect("browser parity upgrade");
+    redeem(&mut socket, issued).await;
+    assert_ready(next_server_frame(&mut socket).await, channel_id, after);
+    let mut messages = Vec::with_capacity(count);
+    for _ in 0..count {
+        messages.push(expect_message(next_server_frame(&mut socket).await));
+    }
+    socket.close(None).await.expect("close browser stream");
+    messages
+}
+
 fn browser_request(address: SocketAddr, origin: &str, subprotocol: &str) -> Request<()> {
     let mut request = format!("ws://{address}/v1/browser/channel-stream")
         .into_client_request()
@@ -520,6 +854,13 @@ fn assert_ready(frame: BrowserStreamServerFrame, channel_id: &str, after: i64) {
 fn assert_message(frame: BrowserStreamServerFrame, expected: &Message) {
     match frame {
         BrowserStreamServerFrame::Message { message } => assert_eq!(*message, *expected),
+        BrowserStreamServerFrame::Ready { .. } => panic!("expected message frame"),
+    }
+}
+
+fn expect_message(frame: BrowserStreamServerFrame) -> Message {
+    match frame {
+        BrowserStreamServerFrame::Message { message } => *message,
         BrowserStreamServerFrame::Ready { .. } => panic!("expected message frame"),
     }
 }
