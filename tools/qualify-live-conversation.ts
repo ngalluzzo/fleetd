@@ -10,17 +10,23 @@ const options = Bun.argv.slice(3);
 const qualifyPresentation = options.includes("--presentation");
 const screenshotOption = options.find((value) => value.startsWith("--screenshot="));
 const screenshotPath = screenshotOption?.slice("--screenshot=".length);
+const viewportOption = options.find((value) => value.startsWith("--viewport="));
+const presentationViewport = parseViewport(viewportOption);
 
 if (
   !profilePath ||
   options.some(
-    (value) => value !== "--presentation" && value !== screenshotOption,
+    (value) =>
+      value !== "--presentation" &&
+      value !== screenshotOption &&
+      value !== viewportOption,
   ) ||
   (screenshotPath !== undefined &&
-    (!qualifyPresentation || !isAbsolute(screenshotPath)))
+    (!qualifyPresentation || !isAbsolute(screenshotPath))) ||
+  (viewportOption !== undefined && !qualifyPresentation)
 ) {
   throw new Error(
-    "usage: bun run tools/qualify-live-conversation.ts <qualification-profile.json> [--presentation] [--screenshot=/absolute/path.png]",
+    "usage: bun run tools/qualify-live-conversation.ts <qualification-profile.json> [--presentation] [--viewport=WIDTHxHEIGHT] [--screenshot=/absolute/path.png]",
   );
 }
 
@@ -266,6 +272,9 @@ try {
       browser_surface: qualifyPresentation
         ? "served-conversation-presentation"
         : "headless-channel-stream-adapter",
+      ...(qualifyPresentation
+        ? { browser_viewport: presentationViewport }
+        : {}),
       fleetd_revision: profile.fleetd_revision,
       qualification_profile_sha256: await sha256Text(profileSource),
       fleetd_executable_sha256: await sha256File(profile.fleetd_executable),
@@ -333,6 +342,27 @@ try {
     } catch {}
   }
   await rm(runDirectory, { recursive: true, force: true });
+}
+
+function parseViewport(option: string | undefined): {
+  width: number;
+  height: number;
+} {
+  if (!option) return { width: 1_280, height: 800 };
+  const match = /^--viewport=(\d+)x(\d+)$/.exec(option);
+  const width = Number(match?.[1]);
+  const height = Number(match?.[2]);
+  if (
+    !Number.isInteger(width) ||
+    !Number.isInteger(height) ||
+    width < 320 ||
+    width > 3_840 ||
+    height < 320 ||
+    height > 3_840
+  ) {
+    throw new Error("presentation viewport must be WIDTHxHEIGHT between 320 and 3840");
+  }
+  return { width, height };
 }
 
 function validateProfile(value: any): QualificationProfile {
@@ -986,8 +1016,8 @@ async function runPresentationBrowserTurn(
   await using view = new Bun.WebView({
     backend: "webkit",
     dataStore: "ephemeral",
-    width: 1_280,
-    height: 800,
+    width: presentationViewport.width,
+    height: presentationViewport.height,
   });
   await view.navigate(`${origin}/conversation/`);
   await instrumentPresentation(view);
@@ -1100,16 +1130,19 @@ async function runPresentationBrowserTurn(
     15_000,
     `${phase} presentation result rendering`,
   );
-  const rendering = await readRenderedTurn(view, request.id, result.id);
   const expectedAssistant = assistantMessageText(result.payload?.assistant_messages);
-  if (
-    rendering.requestText !== prompt ||
-    !expectedAssistant ||
-    rendering.resultText !== expectedAssistant ||
-    JSON.stringify(rendering.resultEnvelope) !== JSON.stringify(result)
-  ) {
-    throw new Error(`${phase} presentation did not preserve its rendered envelope`);
+  if (!expectedAssistant) {
+    throw new Error(`${phase} presentation result had no assistant message`);
   }
+  await poll(
+    () => readRenderedTurn(view, request.id, result.id),
+    (candidate) =>
+      candidate.requestText === prompt &&
+      candidate.resultText === expectedAssistant &&
+      JSON.stringify(candidate.resultEnvelope) === JSON.stringify(result),
+    15_000,
+    `${phase} presentation rendered envelope`,
+  );
 
   const audit = await readPresentationAudit(
     view,
@@ -1295,7 +1328,8 @@ async function waitForPresentationDom(
   while (
     (state.composerDisabled ||
       state.target !== workerId ||
-      state.emptyTitle !== "Start the conversation") &&
+      (state.messageCount === 0 &&
+        state.emptyTitle !== "Start the conversation")) &&
     performance.now() < deadline
   ) {
     await Bun.sleep(25);
@@ -1304,7 +1338,7 @@ async function waitForPresentationDom(
   if (
     state.composerDisabled ||
     state.target !== workerId ||
-    state.emptyTitle !== "Start the conversation"
+    (state.messageCount === 0 && state.emptyTitle !== "Start the conversation")
   ) {
     throw new Error(`${phase} presentation DOM did not reach its live state`);
   }
@@ -1363,11 +1397,13 @@ async function readPresentationDom(view: Bun.WebView): Promise<{
   composerDisabled: boolean;
   target: string;
   emptyTitle: string;
+  messageCount: number;
 }> {
   return await view.evaluate(`({
     composerDisabled: document.querySelector("#composer-text").disabled,
     target: document.querySelector("#message-target").value,
     emptyTitle: document.querySelector("#empty-conversation-title").textContent,
+    messageCount: document.querySelectorAll("[data-message-id]").length,
   })`);
 }
 
