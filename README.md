@@ -159,6 +159,9 @@ the public API, correlates bounded observations through message causation, and
 captures credential-free loopback observer JSON without interpreting provider
 fields. The daemon remains unaware of workload or model-server semantics. See
 the [first real Qwen runner qualification](docs/qualification/qwen-unattended-soak-runner-2026-08-25.md).
+An exploratory [one-versus-two sequence matrix](docs/qualification/qwen-max-num-seqs-matrix-2026-08-25.md)
+keeps one server sequence as the measured operating point for the causal
+two-seat loop; independent parallel work still needs its own matrix.
 
 ## Semantic boundary
 
