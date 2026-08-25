@@ -17,6 +17,14 @@ git diff --exit-code -- openapi/fleetd-v1.json
 )
 git diff --exit-code -- clients/typescript/src/generated
 
+(
+    cd apps/conversation-web
+    bun run typecheck
+    bun test
+    bun run build
+)
+git diff --exit-code -- web/conversation/conversation.js
+
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features

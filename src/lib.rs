@@ -5,6 +5,7 @@ pub mod auth;
 mod browser_stream_edge;
 mod channel_stream;
 pub mod controller;
+mod conversation_surface;
 mod delivery;
 pub mod error;
 mod invocation;
@@ -17,6 +18,7 @@ pub mod plugin;
 pub mod session_binding;
 pub mod store;
 mod stream_grant_broker;
+mod web_surface;
 pub mod worker;
 
 pub use api::{AppState, openapi_document, router};

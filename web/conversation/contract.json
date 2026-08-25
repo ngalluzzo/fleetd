@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "fleetd.desktop-harness-conversation",
+  "version": "0.1.0",
+  "authority": {
+    "channel_discovery": "operator",
+    "membership": "human_participant",
+    "stream": "human_participant",
+    "send": "human_participant"
+  },
+  "request_payload": {
+    "type": "object",
+    "required": ["text"],
+    "properties": {
+      "text": { "type": "string" }
+    },
+    "additionalProperties": false
+  },
+  "result_projection": "managed_completion_assistant_messages",
+  "unknown_message_fallback": "exact_json_envelope",
+  "persistence": "memory_only"
+}

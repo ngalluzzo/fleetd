@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Conversations | fleetd</title>
+    <link rel="stylesheet" href="/conversation/conversation.css" />
+    <script src="/conversation/conversation.js" defer></script>
+  </head>
+  <body>
+    <section class="connect-panel" id="connect-panel">
+      <div class="connect-copy">
+        <p class="eyebrow">fleetd / conversations</p>
+        <h1>Talk to the fleet.</h1>
+        <p class="lede">
+          One durable channel. Your own participant identity. No second chat
+          log.
+        </p>
+        <div class="invariant">
+          <span class="invariant-mark" aria-hidden="true"></span>
+          <p>
+            Operator discovery and human authorship remain separate authorities.
+          </p>
+        </div>
+      </div>
+
+      <form class="connect-form" id="connect-form" autocomplete="off">
+        <h2>Connect locally</h2>
+        <p>
+          Credentials are held in memory only and cleared from these fields
+          immediately.
+        </p>
+
+        <label for="participant-id">Human agent ID</label>
+        <input
+          id="participant-id"
+          name="participant-id"
+          required
+          spellcheck="false"
+        />
+
+        <label for="operator-credential">Operator token</label>
+        <input
+          id="operator-credential"
+          name="operator-credential"
+          type="password"
+          required
+          autocomplete="off"
+        />
+
+        <label for="participant-credential">Human agent token</label>
+        <input
+          id="participant-credential"
+          name="participant-credential"
+          type="password"
+          required
+          autocomplete="off"
+        />
+
+        <div class="contract-fields">
+          <div>
+            <label for="request-kind">Request kind</label>
+            <input
+              id="request-kind"
+              name="request-kind"
+              value="conversation.prompt/phase-c-v1"
+              required
+              spellcheck="false"
+            />
+          </div>
+          <div>
+            <label for="result-kind">Result kind</label>
+            <input
+              id="result-kind"
+              name="result-kind"
+              value="conversation.result/phase-c-v1"
+              required
+              spellcheck="false"
+            />
+          </div>
+        </div>
+
+        <p class="form-error" id="connect-error" role="alert" hidden></p>
+        <button class="primary-button" type="submit">Open conversations</button>
+      </form>
+    </section>
+
+    <main class="conversation-app" id="conversation-app" hidden>
+      <aside class="sidebar">
+        <div class="brand-row">
+          <div>
+            <p class="eyebrow">fleetd</p>
+            <h1>conversations</h1>
+          </div>
+          <span class="connection-status" id="connection-status" role="status"
+            >not connected</span
+          >
+        </div>
+
+        <nav class="channel-list" id="channel-list" aria-label="Channels"></nav>
+
+        <div class="sidebar-footer">
+          <p>Messages are replayed from Fleetd's durable cursor.</p>
+          <button class="quiet-button" id="disconnect" type="button">
+            Disconnect
+          </button>
+        </div>
+      </aside>
+
+      <section class="conversation-pane">
+        <header class="conversation-header">
+          <div>
+            <p class="eyebrow">channel</p>
+            <h2 id="channel-title">Select a channel</h2>
+            <p id="channel-meta">Durable human-to-agent conversations</p>
+          </div>
+          <label class="target-control" for="message-target">
+            <span>Send to</span>
+            <select id="message-target" aria-label="Message recipient"></select>
+          </label>
+        </header>
+
+        <div class="message-region">
+          <div class="empty-conversation" id="empty-conversation">
+            <span aria-hidden="true">↳</span>
+            <h3>Choose a channel</h3>
+            <p>History and new replies will arrive through one live cursor.</p>
+          </div>
+          <div
+            class="message-list"
+            id="message-list"
+            role="log"
+            aria-live="polite"
+          ></div>
+        </div>
+
+        <form class="composer" id="composer">
+          <label class="sr-only" for="composer-text">Message</label>
+          <textarea
+            id="composer-text"
+            rows="1"
+            placeholder="Message an agent…"
+            disabled
+          ></textarea>
+          <div class="composer-footer">
+            <span>Enter to send · Shift+Enter for newline</span>
+            <button
+              class="send-button"
+              id="send-message"
+              type="submit"
+              disabled
+            >
+              Send <span aria-hidden="true">↗</span>
+            </button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>

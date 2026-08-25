@@ -183,6 +183,7 @@ pub fn router(state: AppState) -> Router {
     let browser: Router<AppState> = browser_contract().into();
     public
         .merge(crate::operator_surface::routes())
+        .merge(crate::conversation_surface::routes())
         .merge(browser)
         .merge(protected)
         .with_state(state)

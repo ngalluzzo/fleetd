@@ -1,0 +1,11 @@
+{
+  "name": "@fleetd/conversation-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/main.ts --target browser --format=iife --outfile=../../web/conversation/conversation.js",
+    "test": "bun test",
+    "typecheck": "../../clients/typescript/node_modules/.bin/tsc --noEmit -p tsconfig.json"
+  }
+}
