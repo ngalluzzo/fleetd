@@ -150,8 +150,8 @@ GOOIR runtime or semantic interpretation enters Fleetd.
 ## Readiness sequence
 
 The conversation surface is ready only after these slices are independently
-qualified. The first four are complete through the stable membership and
-browser-stream contracts; the product-loop slices remain open:
+qualified. The first six are complete through the stable membership,
+browser-stream, and Phase C product-loop qualifications:
 
 1. channel membership discovery through the public API;
 2. immutable `inbox` versus `stream_only` membership delivery;
@@ -207,3 +207,9 @@ and executable digests, exact participant/message identities, browser cursors,
 generation shutdown evidence, session adoption, event-chain digests, and
 runner-owned process cleanup. The runner deletes its temporary database,
 credentials, and generated worker desired state on both success and failure.
+
+The first real product-loop run passed at Fleetd revision
+`06924a106c7da9bd6f704a552bc3fbf5a41da485` with OpenCode 1.4.0 and the local
+Qwen route. See the
+[human-to-agent qualification record](qualification/live-human-agent-conversation-2026-08-25.md)
+and its [exact machine evidence](qualification/live-human-agent-conversation-2026-08-25.json).

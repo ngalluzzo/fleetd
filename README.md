@@ -165,6 +165,17 @@ An exploratory [one-versus-two sequence matrix](docs/qualification/qwen-max-num-
 keeps one server sequence as the measured operating point for the causal
 two-seat loop; independent parallel work still needs its own matrix.
 
+## Human-to-agent product loop
+
+Fleetd now has a presentation-free product qualification for a human
+`stream_only` participant talking to a real continuous OpenCode/Qwen worker.
+Four causal turns passed through the production WebKit browser stream across a
+fresh browser connection, daemon replacement, and worker plus harness
+replacement. The durable binding retained its native session while advancing
+the owner epoch, and the human accumulated no leased inbox work. See the
+[qualification record](docs/qualification/live-human-agent-conversation-2026-08-25.md)
+and [exact machine evidence](docs/qualification/live-human-agent-conversation-2026-08-25.json).
+
 ## Semantic boundary
 
 Fleetd message kinds and JSON payloads are opaque transport data. Fleetd does

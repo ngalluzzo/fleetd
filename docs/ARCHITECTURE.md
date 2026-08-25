@@ -188,6 +188,13 @@ operator observations have durable latest-state read models but no live event
 subscription yet; browser or GUI work must not disguise polling as that missing
 capability or emit synthetic activity into the channel log.
 
+The presentation-free Phase C qualification composes a human `stream_only`
+participant, the real WebKit browser client, a continuous OpenCode worker, and
+the local Qwen route across browser, daemon, worker, and harness replacement.
+It preserves the native session and causal durable history without adding a
+chat subsystem. See the
+[qualification record](qualification/live-human-agent-conversation-2026-08-25.md).
+
 Operator-only API read models expose plugin generations, session bindings, and
 invocation observations. They are the common operational source for browser,
 TUI, or external projections; Fleetd does not give one presentation target a

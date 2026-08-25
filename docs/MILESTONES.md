@@ -57,7 +57,7 @@
   `stream_only` delivery for addressable participants.
 - [x] Single-use browser stream grants with origin validation, exact replay/live
   parity, and no polling fallback.
-- [ ] Human participant → continuous worker → causal result qualification across
+- [x] Human participant → continuous worker → causal result qualification across
   daemon, worker, and harness restart.
 - [ ] A separately versioned live operator-event subscription for bounded
   invocation activity; do not encode activity as synthetic channel messages.

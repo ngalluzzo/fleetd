@@ -211,6 +211,11 @@ Passing this commit means Fleetd offers the operational substrate needed by a
 conversation target. It does not mean a browser or TUI presentation has been
 lowered.
 
+Completed by Fleetd revision
+`06924a106c7da9bd6f704a552bc3fbf5a41da485`; see the
+[qualification record](qualification/live-human-agent-conversation-2026-08-25.md)
+and [machine evidence](qualification/live-human-agent-conversation-2026-08-25.json).
+
 ## Work deliberately outside this stack
 
 Live execution telemetry remains a separate design effort. Before any surface
