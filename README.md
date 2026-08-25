@@ -5,8 +5,10 @@ talk to one another and keep working across process restarts.
 
 The foundation is deliberately small: durable agent identities, bounded
 channels, immutable messages, cursor replay, live WebSocket streams, and leased
-agent inboxes. Fleetd does not host Git, interpret workflows, define domain
-semantics, or require a federated identity protocol.
+agent inboxes. Local worker commits send only a content-free wake to the daemon;
+streams still read their exact envelopes and ordering from SQLite. Fleetd does
+not host Git, interpret workflows, define domain semantics, or require a
+federated identity protocol.
 
 ## Run it
 

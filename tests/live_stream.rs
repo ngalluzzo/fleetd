@@ -105,6 +105,79 @@ async fn websocket_replays_history_then_delivers_live_messages() {
     server.abort();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn websocket_replays_a_message_committed_by_another_local_process_store() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let database_path = directory.path().join("fleetd.db");
+    let store = Store::open(&database_path)
+        .await
+        .expect("open daemon store");
+    let sender = create_member(&store, "external-writer").await;
+    let receiver = create_member(&store, "external-reader").await;
+    let receiver_id = receiver.clone();
+    let auth = AuthService::new(store.clone());
+    let receiver_credential = auth
+        .rotate_agent_credential(&receiver)
+        .await
+        .expect("issue receiver credential");
+    let channel = store
+        .create_channel(CreateChannel {
+            name: "cross-process-stream".to_owned(),
+            metadata: json!({}),
+            member_ids: vec![sender.clone(), receiver],
+            members: Vec::new(),
+        })
+        .await
+        .expect("create channel");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test server");
+    let address = listener.local_addr().expect("server address");
+    let state = AppState::new(store)
+        .with_external_message_commit_hints(&database_path)
+        .expect("bind external message hints");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router(state))
+            .await
+            .expect("serve API");
+    });
+
+    let stream_url = format!("ws://{address}/v1/channels/{}/stream?after=0", channel.id);
+    let (mut socket, _) = tokio_tungstenite::connect_async(authenticated_socket_request(
+        &stream_url,
+        &receiver_credential.token,
+    ))
+    .await
+    .expect("connect stream");
+    let writer = Store::open_with_message_commit_hints(&database_path)
+        .await
+        .expect("open external writer store");
+    let committed = writer
+        .append_message(
+            &channel.id,
+            CreateMessage {
+                sender_id: sender,
+                idempotency_key: None,
+                recipient_id: Some(receiver_id),
+                kind: "external.result/v1".to_owned(),
+                payload: json!({"unknown": {"preserved": true}}),
+                correlation_id: None,
+                causation_id: None,
+            },
+        )
+        .await
+        .expect("commit through external store");
+
+    let delivered = tokio::time::timeout(Duration::from_secs(2), next_message(&mut socket))
+        .await
+        .expect("external commit must wake the daemon stream");
+    assert_eq!(delivered, committed);
+    server.abort();
+    let _unused = server.await;
+}
+
 #[tokio::test]
 async fn streams_do_not_leak_direct_messages_between_other_members() {
     let directory = tempfile::tempdir().expect("temporary directory");

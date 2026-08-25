@@ -103,6 +103,10 @@ bounds are validated before a process starts.
   uncertain.
 - After a completed or blocked turn, result settlement is already committed in
   SQLite before the next reservation.
+- A newly committed result or invocation-scoped peer message sends one
+  content-free best-effort local wake to the daemon. Open streams then reconcile
+  SQLite; notification failure never changes the committed outcome or removes
+  cursor replay as the recovery path.
 - A known, quiescent terminal is safe to settle but is not automatically a
   successful semantic result. Final-JSON adapters report failure unless one
   complete protocol-bounded JSON value was captured. Host cancellation

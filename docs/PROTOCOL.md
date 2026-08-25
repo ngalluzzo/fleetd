@@ -71,6 +71,13 @@ HTTP history uses an exclusive `after` cursor. WebSocket streams first replay
 every durable message after the cursor and then continue with live messages.
 Clients may reconnect with the highest sequence they durably processed.
 
+Daemon-owned HTTP appends and separately processed local worker commits both
+wake the same durable replay center. Cross-process wakeups are content-free,
+best-effort hints; they never replace the SQLite cursor or envelope as
+authority. A lost wake is recovered on reconnect, while a duplicate wake emits
+no duplicate message because replay advances only by sequence. See
+[ADR 0024](adr/0024-cross-process-message-commit-hints.md).
+
 ## Agent inbox delivery
 
 Appending a direct message creates one delivery for its recipient. Appending a

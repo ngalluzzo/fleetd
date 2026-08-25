@@ -12,6 +12,7 @@ use crate::{
         APPLICATION_FRAME_SEND_DEADLINE, BrowserStreamCursor, BrowserStreamServerFrame,
         CREDENTIAL_REVALIDATION_INTERVAL,
     },
+    message_commit_hint::MessageCommitWake,
     model::Message,
     store::Store,
     stream_grant_broker::ActiveStreamSlot,
@@ -92,7 +93,7 @@ impl AuthorizedChannelStream {
 pub(crate) async fn run_native_channel_stream(
     socket: WebSocket,
     store: Store,
-    receiver: broadcast::Receiver<Message>,
+    receiver: broadcast::Receiver<MessageCommitWake>,
     authorization: AuthorizedChannelStream,
 ) {
     run_channel_stream(socket, store, receiver, authorization, StreamWire::Native).await;
@@ -103,7 +104,7 @@ pub(crate) async fn run_native_channel_stream(
 pub(crate) async fn run_browser_channel_stream(
     socket: WebSocket,
     store: Store,
-    receiver: broadcast::Receiver<Message>,
+    receiver: broadcast::Receiver<MessageCommitWake>,
     authorization: AuthorizedChannelStream,
     auth: AuthService,
     active_slot: ActiveStreamSlot,
@@ -150,7 +151,7 @@ enum StreamTermination {
 async fn run_channel_stream(
     mut socket: WebSocket,
     store: Store,
-    mut receiver: broadcast::Receiver<Message>,
+    mut receiver: broadcast::Receiver<MessageCommitWake>,
     authorization: AuthorizedChannelStream,
     mut wire: StreamWire,
 ) {
@@ -170,21 +171,21 @@ async fn run_channel_stream(
     loop {
         let event = tokio::select! {
             incoming = socket.recv() => StreamEvent::Incoming(incoming),
-            message = receiver.recv() => StreamEvent::Broadcast(message.map(Box::new)),
+            wake = receiver.recv() => StreamEvent::Wake(wake),
             () = wire.wait_for_revalidation() => StreamEvent::Revalidate,
         };
         let result = match event {
             StreamEvent::Incoming(incoming) => wire.accept_incoming(incoming),
-            StreamEvent::Broadcast(Ok(message))
+            StreamEvent::Wake(Ok(MessageCommitWake::Committed(message)))
                 if message.channel_id == authorization.channel_id() && message.seq > cursor =>
             {
                 replay(&mut socket, &store, &authorization, &mut cursor, &wire).await
             }
-            StreamEvent::Broadcast(Ok(_)) => Ok(()),
-            StreamEvent::Broadcast(Err(broadcast::error::RecvError::Lagged(_))) => {
-                replay(&mut socket, &store, &authorization, &mut cursor, &wire).await
-            }
-            StreamEvent::Broadcast(Err(broadcast::error::RecvError::Closed)) => {
+            StreamEvent::Wake(Ok(MessageCommitWake::Committed(_))) => Ok(()),
+            StreamEvent::Wake(
+                Ok(MessageCommitWake::External) | Err(broadcast::error::RecvError::Lagged(_)),
+            ) => replay(&mut socket, &store, &authorization, &mut cursor, &wire).await,
+            StreamEvent::Wake(Err(broadcast::error::RecvError::Closed)) => {
                 Err(StreamTermination::Internal)
             }
             StreamEvent::Revalidate => wire.revalidate().await,
@@ -198,7 +199,7 @@ async fn run_channel_stream(
 
 enum StreamEvent {
     Incoming(Option<Result<WebSocketMessage, axum::Error>>),
-    Broadcast(Result<Box<Message>, broadcast::error::RecvError>),
+    Wake(Result<MessageCommitWake, broadcast::error::RecvError>),
     Revalidate,
 }
 

@@ -8,6 +8,7 @@ pub mod controller;
 mod delivery;
 pub mod error;
 mod invocation;
+mod message_commit_hint;
 pub mod message_grant_broker;
 pub mod model;
 pub mod operations;

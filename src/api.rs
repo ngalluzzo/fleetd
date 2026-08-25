@@ -28,6 +28,7 @@ use crate::{
         AuthorizedChannelStream, run_browser_channel_stream, run_native_channel_stream,
     },
     error::{ErrorResponse, FleetError},
+    message_commit_hint::{MessageCommitHintBridge, MessageCommitWake},
     model::{
         AckDelivery, AddMember, ArmInvocation, BlockDelivery, ClaimDeliveries, CompleteInvocation,
         CreateAgent, CreateChannel, CreateMessage, Message, ResolveDeliveryBlock, RetryDelivery,
@@ -94,9 +95,10 @@ struct HealthResponse {
 pub struct AppState {
     store: Store,
     auth: AuthService,
-    messages: broadcast::Sender<Message>,
+    messages: broadcast::Sender<MessageCommitWake>,
     stream_grants: StreamGrantBroker,
     browser_stream: Option<BrowserStreamEdgeState>,
+    message_commit_hints: Option<std::sync::Arc<MessageCommitHintBridge>>,
 }
 
 impl Clone for AppState {
@@ -107,6 +109,7 @@ impl Clone for AppState {
             messages: self.messages.clone(),
             stream_grants: self.stream_grants.clone(),
             browser_stream: self.browser_stream.clone(),
+            message_commit_hints: self.message_commit_hints.clone(),
         }
     }
 }
@@ -123,7 +126,26 @@ impl AppState {
             store,
             messages,
             browser_stream: None,
+            message_commit_hints: None,
         }
+    }
+
+    /// Enables content-free wakeups for durable message commits made by local
+    /// writer processes using the same database.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the private local datagram cannot be bound or is
+    /// already owned by another daemon for the same database.
+    pub fn with_external_message_commit_hints(
+        mut self,
+        database_path: impl AsRef<std::path::Path>,
+    ) -> Result<Self, FleetError> {
+        self.message_commit_hints = Some(std::sync::Arc::new(MessageCommitHintBridge::bind(
+            database_path.as_ref(),
+            self.messages.clone(),
+        )?));
+        Ok(self)
     }
 
     /// Enables the origin-bound browser stream edge for the exact bound HTTP
@@ -773,7 +795,9 @@ async fn complete_invocation(
         .complete_invocation(&agent_id, &invocation_id, input)
         .await?;
     if created {
-        let _unused = state.messages.send(completion.result.clone());
+        let _unused = state.messages.send(MessageCommitWake::Committed(Box::new(
+            completion.result.clone(),
+        )));
     }
     let status = if created {
         StatusCode::CREATED
@@ -940,7 +964,9 @@ async fn append_message(
         .append_message_idempotent(&channel_id, input)
         .await?;
     if result.created {
-        let _unused = state.messages.send(result.message.clone());
+        let _unused = state.messages.send(MessageCommitWake::Committed(Box::new(
+            result.message.clone(),
+        )));
     }
     let status = if result.created {
         StatusCode::CREATED

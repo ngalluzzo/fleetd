@@ -22,6 +22,14 @@ Only after commit is the message offered to the in-memory broadcast bus.
 WebSocket consumers subscribe before replaying the durable log, deduplicate by
 sequence number, and recover lag from SQLite.
 
+A local continuous worker commits results from a separate process against the
+same SQLite authority. After a newly created message commits, that writer emits
+one content-free best-effort Unix datagram. The daemon converts it to a stream
+wake and every affected consumer reconciles its principal-relative cursor from
+SQLite. The hint carries no message or authority, and loss or duplication is
+safe because reconnect replay remains the recovery path. See
+[ADR 0024](adr/0024-cross-process-message-commit-hints.md).
+
 Addressed messages create delivery rows in the same transaction. Workers claim
 those rows with bounded leases and explicitly acknowledge, release, or park
 them. WebSockets are notification hints; the leased inbox is the work

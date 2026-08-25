@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     error::FleetError,
+    message_commit_hint::MessageCommitNotifier,
     model::{
         Agent, Channel, ChannelMember, CreateAgent, CreateChannel, CreateChannelMember,
         CreateMessage, MembershipDeliveryMode, Message, MessagePage,
@@ -31,6 +32,7 @@ static MIGRATOR: Migrator = sqlx::migrate!();
 #[derive(Clone)]
 pub struct Store {
     pub(crate) pool: SqlitePool,
+    message_commit_notifier: Option<MessageCommitNotifier>,
 }
 
 impl Store {
@@ -51,9 +53,37 @@ impl Store {
             .max_connections(8)
             .connect_with(options)
             .await?;
-        let store = Self { pool };
+        let store = Self {
+            pool,
+            message_commit_notifier: None,
+        };
         MIGRATOR.run(&store.pool).await?;
         Ok(store)
+    }
+
+    /// Opens the authoritative database with best-effort cross-process message
+    /// commit wakeups directed at its local daemon.
+    ///
+    /// The notifier carries no message data or authority. A missing listener is
+    /// not an operation failure because reconnect replay remains authoritative.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::open`] or an error resolving the
+    /// private local hint address.
+    pub async fn open_with_message_commit_hints(
+        path: impl AsRef<Path>,
+    ) -> Result<Self, FleetError> {
+        let path = path.as_ref();
+        let mut store = Self::open(path).await?;
+        store.message_commit_notifier = Some(MessageCommitNotifier::for_database(path)?);
+        Ok(store)
+    }
+
+    pub(crate) fn notify_message_commit(&self, created: bool) {
+        if created && let Some(notifier) = &self.message_commit_notifier {
+            notifier.notify();
+        }
     }
 
     /// Registers a new addressable agent.
@@ -396,6 +426,7 @@ impl Store {
 
         let message = insert_message(&mut transaction, channel_id, input).await?;
         transaction.commit().await?;
+        self.notify_message_commit(true);
         Ok(AppendMessageResult {
             message,
             created: true,

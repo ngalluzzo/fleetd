@@ -301,6 +301,7 @@ impl Store {
         )
         .await?;
         transaction.commit().await?;
+        self.notify_message_commit(completion.1);
         Ok(completion)
     }
 

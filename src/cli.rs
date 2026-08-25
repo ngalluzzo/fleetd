@@ -440,7 +440,7 @@ async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
     {
         tokio::fs::create_dir_all(parent).await?;
     }
-    let store = Store::open(&args.db).await?;
+    let store = Store::open_with_message_commit_hints(&args.db).await?;
     let adapter = desired.turn_adapter()?;
     let worker = ContinuousHarnessWorker::new(&store, desired.into_runtime_config(), adapter)?;
     let cancellation = CancellationToken::new();
@@ -627,7 +627,9 @@ async fn serve(args: ServeArgs) -> MainResult<()> {
     );
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     let listen_address = listener.local_addr()?;
-    let state = AppState::new(store).with_browser_stream_listener(listen_address)?;
+    let state = AppState::new(store)
+        .with_browser_stream_listener(listen_address)?
+        .with_external_message_commit_hints(&args.db)?;
     tracing::info!(
         listen = %listen_address,
         browser_origin = state.browser_origin().expect("configured browser origin"),
