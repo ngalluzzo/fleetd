@@ -20,7 +20,7 @@ export type BrowserChannelStreamErrorCode =
   | "socket_protocol_mismatch";
 
 export class BrowserChannelStreamError extends Error {
-  readonly code: BrowserChannelStreamErrorCode;
+  declare readonly code: BrowserChannelStreamErrorCode;
 
   constructor(
     code: BrowserChannelStreamErrorCode,
