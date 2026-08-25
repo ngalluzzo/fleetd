@@ -53,6 +53,14 @@
 ## M4 — Operator surface
 
 - [x] First small browser surface backed only by public Fleetd APIs.
-- Fleet health, blocked work, message traces, session ownership, and model
+- [ ] Public channel-membership discovery plus immutable `inbox` versus
+  `stream_only` delivery for addressable participants.
+- [ ] Single-use browser stream grants with origin validation, exact replay/live
+  parity, and no polling fallback.
+- [ ] Human participant → continuous worker → causal result qualification across
+  daemon, worker, and harness restart.
+- [ ] A separately versioned live operator-event subscription for bounded
+  invocation activity; do not encode activity as synthetic channel messages.
+- [ ] Fleet health, blocked work, message traces, session ownership, and model
   throughput.
 - Remote workers only after authenticated encrypted transport and enrollment.
