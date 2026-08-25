@@ -182,7 +182,13 @@ polling fallback. Open it in an ordinary browser and connect explicitly, or
 build the [Electrobun desktop host](apps/conversation-desktop/README.md), which
 loads the same page in a native system webview and sources its two authorities
 from separate owner-only files. Neither target adds conversation semantics to
-the daemon.
+the daemon. The
+[served-presentation qualification](docs/qualification/live-conversation-presentation-reference-2026-08-25.md)
+drives the actual page through trusted WebKit input across browser, daemon,
+worker, and plugin replacement; its
+[machine evidence](docs/qualification/live-conversation-presentation-reference-2026-08-25.json)
+records exact rendering, secret-free ephemeral storage, and zero page history
+polls.
 
 ## Semantic boundary
 

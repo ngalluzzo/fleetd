@@ -59,7 +59,7 @@
   parity, and no polling fallback.
 - [x] Human participant → continuous worker → causal result qualification across
   daemon, worker, and harness restart.
-- [ ] Qualify the served conversation presentation through trusted WebKit user
+- [x] Qualify the served conversation presentation through trusted WebKit user
   input, exact rendered envelopes, and credential-free ephemeral storage.
 - [ ] A separately versioned live operator-event subscription for bounded
   invocation activity; do not encode activity as synthetic channel messages.

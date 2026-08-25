@@ -150,8 +150,9 @@ GOOIR runtime or semantic interpretation enters Fleetd.
 ## Readiness sequence
 
 The conversation surface is ready only after these slices are independently
-qualified. The first six are complete through the stable membership,
-browser-stream, and Phase C product-loop qualifications:
+qualified. The first six and the initial served presentation are complete
+through the stable membership, browser-stream, Phase C product-loop, and
+presentation qualifications:
 
 1. channel membership discovery through the public API;
 2. immutable `inbox` versus `stream_only` membership delivery;
@@ -234,6 +235,13 @@ bun run tools/qualify-live-conversation.ts \
 The screenshot is optional and is captured only after the final
 worker-and-harness replacement turn. It is visual evidence, not protocol or
 conversation authority.
+
+The first served-presentation run passed at Fleetd revision
+`19292dfdc98ef0bebb26fa846a73b9308aa6e515` with the deterministic ACP
+reference plugin. See the
+[presentation qualification record](qualification/live-conversation-presentation-reference-2026-08-25.md)
+and its
+[exact machine evidence](qualification/live-conversation-presentation-reference-2026-08-25.json).
 
 ## Presentation client boundary
 
