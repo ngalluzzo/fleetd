@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod auth;
+pub(crate) mod browser_stream_edge;
 mod channel_stream;
 pub mod controller;
 mod delivery;
