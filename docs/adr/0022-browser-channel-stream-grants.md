@@ -1,6 +1,6 @@
 # ADR 0022: Browser channel streams redeem single-use grants
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-25
 
 ## Context
@@ -74,8 +74,8 @@ The existing bearer-authenticated WebSocket remains the native/TUI transport.
 Both entry paths call the same principal-relative replay/live implementation.
 Neither path grants message-send authority over the socket.
 
-The exact draft wire contract is
-[`browser-channel-stream-v1-draft.md`](../contracts/browser-channel-stream-v1-draft.md).
+The exact stable wire contract is
+[`browser-channel-stream-v1.md`](../contracts/browser-channel-stream-v1.md).
 
 ## Security boundary
 
@@ -114,9 +114,18 @@ The browser path adds an in-memory grant broker and one small pre-authentication
 state machine, but no migration or durable authority. Browser and native
 clients receive the same messages and visibility after authentication.
 
-The browser surface remains unavailable until the grant broker, origin policy,
-wire contract, revocation behavior, and real-browser matrix pass. There is no
-polling fallback.
+The browser transport is available through the stable client after the grant
+broker, origin policy, wire contract, revocation behavior, and real-browser
+matrix passed. There is no polling fallback.
+
+## Qualification
+
+The complete automated matrix and integrated actual-client WebKit run passed
+at Fleetd revision `e0a2798`. The WebKit run covers grant linkage, replay, live
+continuation, exact CSP, canonical-origin success, hostname-alias and foreign-
+origin rejection, secret surfaces, and absence of HTTP history polling. Its
+exact runtime versions, observed result, and browser-API limits are recorded in
+[`browser-channel-stream-webview-2026-08-25.md`](../qualification/browser-channel-stream-webview-2026-08-25.md).
 
 ## Standards basis
 

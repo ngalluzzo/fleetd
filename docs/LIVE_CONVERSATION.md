@@ -98,7 +98,7 @@ Native applications and TUIs can already satisfy this contract by attaching
 the Fleetd bearer credential to the WebSocket upgrade. The browser `WebSocket`
 API cannot supply that header. Browser targets must use the separately designed
 single-use stream-grant protocol in
-[`browser-channel-stream-v1-draft.md`](contracts/browser-channel-stream-v1-draft.md).
+[`browser-channel-stream-v1.md`](contracts/browser-channel-stream-v1.md).
 Polling is not a substitute implementation of the live-subscription primitive.
 
 ## Execution telemetry is separate
@@ -142,16 +142,16 @@ claim a semantic `LiveConversation` capability inside the daemon.
 
 An external GOOIR integration may lift those artifacts into separately
 versioned facts, link them against a conversation surface's requirements, and
-lower a browser, native GUI, or TUI target. A browser lowering must remain
-unsatisfied until the stream-grant protocol is implemented and qualified. The
-lowered static artifacts may be served by Fleetd, but no GOOIR runtime or
-semantic interpretation enters Fleetd.
+lower a browser, native GUI, or TUI target. The stable browser stream contract
+now satisfies the transport requirement; it does not imply that a presentation
+has been lowered. Lowered static artifacts may be served by Fleetd, but no
+GOOIR runtime or semantic interpretation enters Fleetd.
 
 ## Readiness sequence
 
 The conversation surface is ready only after these slices are independently
-qualified. The first two are complete through the stable membership contract;
-the browser stream and product-loop slices remain open:
+qualified. The first four are complete through the stable membership and
+browser-stream contracts; the product-loop slices remain open:
 
 1. channel membership discovery through the public API;
 2. immutable `inbox` versus `stream_only` membership delivery;

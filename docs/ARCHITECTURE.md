@@ -160,11 +160,11 @@ The live-conversation design keeps a human operator's administrative
 principal separate from their addressable participant principal. Native and
 TUI clients can use the existing bearer-authenticated channel WebSocket. A
 browser target now has an implemented attenuated, single-use stream-grant edge
-without credentials in a URL, cookie, or subprotocol, but remains provisional
-until the adversarial and real-browser qualification matrices pass. See the
+without credentials in a URL, cookie, or subprotocol. The adversarial and
+actual-client real-browser qualification matrices pass. See the
 [live-conversation design](LIVE_CONVERSATION.md),
 [ADR 0022](adr/0022-browser-channel-stream-grants.md), and the
-[draft browser stream contract](contracts/browser-channel-stream-v1-draft.md).
+[stable browser stream contract](contracts/browser-channel-stream-v1.md).
 
 Addressable membership does not imply a leased work inbox. The stable
 membership delivery mode keeps autonomous `inbox` seats distinct from

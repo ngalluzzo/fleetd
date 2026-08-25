@@ -205,3 +205,8 @@ Registering or rotating an agent returns its raw credential once. Losing it does
 not change the agent identity: the operator rotates the credential, immediately
 revoking previous tokens. Authentication failures return `401` with a Bearer
 challenge; valid credentials without the necessary authority return `403`.
+
+The browser authentication and tagged-frame edge is fixed by the stable
+[`browser-channel-stream-v1.md`](contracts/browser-channel-stream-v1.md)
+contract. The native bearer-authenticated stream and browser grant-authenticated
+stream share the same principal-relative replay/live engine.

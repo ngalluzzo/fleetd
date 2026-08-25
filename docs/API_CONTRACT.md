@@ -95,7 +95,7 @@ intentional: a generated Fetch function would not perform the upgrade. Native
 stream code constructs a WebSocket request with the same bearer credential and
 decodes frames as the generated `Message` type.
 
-The provisional browser-equivalent edge mints a single-use grant through the
+The stable browser-equivalent edge mints a single-use grant through the
 authenticated `POST /v1/channels/{channel_id}/stream-grants` operation, with
 `Cache-Control: no-store`, then redeems it as the first application frame on
 the origin-bound `GET /v1/browser/channel-stream` WebSocket. The upgrade itself
@@ -103,6 +103,12 @@ has no bearer header and is the only `/v1` operation outside ordinary bearer
 middleware. Its tagged ready/message frames and first-client-message schema are
 published in `x-fleetd-websocket`; the Fetch client generator omits both
 WebSocket operations.
+
+The handwritten TypeScript browser adapter exports this exact linkage from
+`@fleetd/client`. It advances its cursor only after consumer acceptance,
+reconnects with bounded duplicate tolerance, and fails closed without an HTTP
+history fallback. The stable wire contract is
+[`browser-channel-stream-v1.md`](contracts/browser-channel-stream-v1.md).
 
 ## Operational read models
 
