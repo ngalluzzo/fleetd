@@ -3,7 +3,7 @@
 ## Scope
 
 This run qualifies the presentation-agnostic browser channel-stream client at
-Fleetd revision `ddfc343`. The checked-in
+Fleetd revision `d213a72`. The checked-in
 `tools/qualify-browser-channel-stream.ts` runner creates a dedicated agent and
 channel through public Fleetd operations, commits one replay fixture, bundles
 the exported client, and loads it into Bun's native WebKit-backed `WebView`.
@@ -21,8 +21,8 @@ own network surface.
 - Bun 1.4.0;
 - `Bun.WebView` with the explicit `webkit` backend and a fresh ephemeral data
   store for each origin;
-- Fleetd revision `ddfc343`; and
-- Fleetd bound to `127.0.0.1:17449` over plaintext loopback HTTP.
+- Fleetd revision `d213a72`; and
+- Fleetd bound to `127.0.0.1:17459` over plaintext loopback HTTP.
 
 ## Command
 
@@ -30,7 +30,7 @@ With that exact Fleetd revision running on the bound address, the operator
 credential is supplied only through the process environment:
 
 ```sh
-FLEETD_BROWSER_QUALIFICATION_ORIGIN=http://127.0.0.1:17449 \
+FLEETD_BROWSER_QUALIFICATION_ORIGIN=http://127.0.0.1:17459 \
 FLEETD_BROWSER_QUALIFICATION_CREDENTIAL='<redacted>' \
   bun tools/qualify-browser-channel-stream.ts
 ```
@@ -38,7 +38,7 @@ FLEETD_BROWSER_QUALIFICATION_CREDENTIAL='<redacted>' \
 Observed result:
 
 ```json
-{"bun_version":"1.4.0","backend":"webkit","fixture":{"fresh_channel":true,"replay_messages_accepted":1,"live_messages_accepted":1},"csp":{"exact_policy":true,"same_origin_connect_succeeded":true,"set_cookie_headers":0},"same_origin":{"outcome":"complete","protocol":"fleetd.channel-stream.browser.v1","first_frames":["ready","message","message"],"operations":[{"kind":"fetch","method":"POST","path":"/v1/channels/<channel-id>/stream-grants"},{"kind":"websocket","path":"/v1/browser/channel-stream","protocol":"fleetd.channel-stream.browser.v1"}],"audit":{"no_secret_detected":true,"history_entry_enumeration_authoritative":false,"cookie_setter_instrumented":true,"indexed_db":{"available":true,"authoritative":true,"databases":0},"cache_api":{"available":true,"authoritative":true,"caches":0},"service_workers":{"available":true,"authoritative":true,"registrations":0},"console_calls":0,"page_errors":0,"unhandled_rejections":0}},"hostname_alias":{"page_origin":"http://localhost:17449","socket_opened":false,"application_frames":0},"foreign_origin":{"page_origin":"http://127.0.0.1:60948","adapter_application_frames":0,"direct_socket_opened":false,"direct_application_frames":0}}
+{"bun_version":"1.4.0","backend":"webkit","fixture":{"fresh_channel":true,"replay_messages_accepted":1,"live_messages_accepted":1},"csp":{"exact_policy":true,"same_origin_connect_succeeded":true,"set_cookie_headers":0},"same_origin":{"outcome":"complete","protocol":"fleetd.channel-stream.browser.v1","first_frames":["ready","message","message"],"operations":[{"kind":"fetch","method":"POST","path":"/v1/channels/<channel-id>/stream-grants"},{"kind":"websocket","path":"/v1/browser/channel-stream","protocol":"fleetd.channel-stream.browser.v1"}],"audit":{"no_secret_detected":true,"history_entry_enumeration_authoritative":false,"cookie_setter_instrumented":true,"indexed_db":{"available":true,"authoritative":true,"databases":0},"cache_api":{"available":true,"authoritative":true,"caches":0},"service_workers":{"available":true,"authoritative":true,"registrations":0},"console_calls":0,"page_errors":0,"unhandled_rejections":0}},"hostname_alias":{"page_origin":"http://localhost:17459","socket_opened":false,"application_frames":0},"foreign_origin":{"page_origin":"http://127.0.0.1:50643","adapter_application_frames":0,"direct_socket_opened":false,"direct_application_frames":0}}
 ```
 
 ## Findings
@@ -61,7 +61,7 @@ order. The consumer accepted each message once.
 ### Origin rejection
 
 The hostname-alias view successfully loaded Fleetd's operator page from
-`http://localhost:17449`, minted a grant, and constructed the browser socket.
+`http://localhost:17459`, minted a grant, and constructed the browser socket.
 The socket never opened and delivered zero application frames because the
 server requires its canonical `127.0.0.1` origin and authority.
 
