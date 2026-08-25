@@ -14,6 +14,11 @@ mod operator_surface;
 pub mod plugin;
 pub mod session_binding;
 pub mod store;
+#[allow(
+    dead_code,
+    reason = "the bounded broker deliberately lands before any public issuance or redemption edge"
+)]
+mod stream_grant_broker;
 pub mod worker;
 
 pub use api::{AppState, openapi_document, router};

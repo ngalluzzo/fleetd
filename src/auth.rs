@@ -165,6 +165,35 @@ impl AuthService {
         principal_from_row(&credential_id, &principal_kind, agent_id)
     }
 
+    /// Revalidates an exact credential-bound principal without accepting or
+    /// returning raw credential material.
+    #[allow(
+        dead_code,
+        reason = "consumed only by the intentionally unrouted stream-grant broker"
+    )]
+    pub(crate) async fn revalidate_principal(
+        &self,
+        expected: &Principal,
+    ) -> Result<bool, FleetError> {
+        let row = sqlx::query(
+            r"
+            SELECT principal_kind, agent_id
+            FROM auth_credentials
+            WHERE id = ? AND revoked_at_ms IS NULL
+            ",
+        )
+        .bind(expected.credential_id())
+        .fetch_optional(&self.store.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let principal_kind: String = row.try_get("principal_kind")?;
+        let agent_id: Option<String> = row.try_get("agent_id")?;
+        let actual = principal_from_row(expected.credential_id(), &principal_kind, agent_id)?;
+        Ok(&actual == expected)
+    }
+
     /// Registers an agent and its first credential in one transaction.
     ///
     /// # Errors

@@ -52,6 +52,22 @@ impl AuthorizedChannelStream {
         &self.credential_id
     }
 
+    #[allow(
+        dead_code,
+        reason = "consumed only by the intentionally unrouted stream-grant broker"
+    )]
+    pub(crate) fn issuing_principal(&self) -> Principal {
+        match &self.principal {
+            AuthorizedStreamPrincipal::Operator => Principal::Operator {
+                credential_id: self.credential_id.clone(),
+            },
+            AuthorizedStreamPrincipal::Agent { viewer_agent_id } => Principal::Agent {
+                credential_id: self.credential_id.clone(),
+                agent_id: viewer_agent_id.clone(),
+            },
+        }
+    }
+
     pub(crate) fn viewer_agent_id(&self) -> Option<&str> {
         match &self.principal {
             AuthorizedStreamPrincipal::Operator => None,

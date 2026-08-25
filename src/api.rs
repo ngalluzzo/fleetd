@@ -20,6 +20,7 @@ use crate::{
         SendMessage,
     },
     store::Store,
+    stream_grant_broker::StreamGrantBroker,
 };
 
 const BEARER_AUTH: &str = "bearerAuth";
@@ -65,11 +66,22 @@ struct HealthResponse {
 }
 
 /// Shared dependencies for the HTTP and WebSocket interfaces.
-#[derive(Clone)]
 pub struct AppState {
     store: Store,
     auth: AuthService,
     messages: broadcast::Sender<Message>,
+    stream_grants: StreamGrantBroker,
+}
+
+impl Clone for AppState {
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            auth: self.auth.clone(),
+            messages: self.messages.clone(),
+            stream_grants: self.stream_grants.clone(),
+        }
+    }
 }
 
 impl AppState {
@@ -77,8 +89,10 @@ impl AppState {
     #[must_use]
     pub fn new(store: Store) -> Self {
         let (messages, _) = broadcast::channel(1_024);
+        let auth = AuthService::new(store.clone());
         Self {
-            auth: AuthService::new(store.clone()),
+            stream_grants: StreamGrantBroker::new(auth.clone()),
+            auth,
             store,
             messages,
         }
