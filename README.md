@@ -148,6 +148,10 @@ inbound message kinds, preventing generic result messages from becoming new
 work accidentally. See the
 [single-hop qualification](docs/qualification/message-grant-opencode-2026-08-24.md)
 and [continuous two-seat qualification](docs/qualification/continuous-two-seat-opencode-loop-2026-08-24.md).
+The later [local Qwen restart qualification](docs/qualification/qwen-restart-resumption-2026-08-24.md)
+proves generation replacement and native-session adoption while preserving a
+typed-payload mismatch as application evidence rather than normalizing it in
+Fleetd.
 
 ## Semantic boundary
 

@@ -704,7 +704,11 @@ results and the
 not stabilize the interface or satisfy the matrix above. The later
 [real OpenCode message-grant checkpoint](qualification/message-grant-opencode-2026-08-24.md)
 does prove that one real model can discover the MCP tool and commit an
-attributed peer message through the continuous worker.
+attributed peer message through the continuous worker. The later
+[local Qwen restart checkpoint](qualification/qwen-restart-resumption-2026-08-24.md)
+proves continuous generation replacement and owner-epoch session adoption;
+it also demonstrates why an opaque JSON payload is not typed application
+conformance merely because routing and tool invocation succeeded.
 
 ## Deliberate exclusions
 
