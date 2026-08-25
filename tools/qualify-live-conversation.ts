@@ -6,10 +6,21 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 const protocol = "fleetd.channel-stream.browser.v1";
 const resultAttribute = "data-fleetd-live-conversation-qualification";
 const profilePath = Bun.argv[2];
+const options = Bun.argv.slice(3);
+const qualifyPresentation = options.includes("--presentation");
+const screenshotOption = options.find((value) => value.startsWith("--screenshot="));
+const screenshotPath = screenshotOption?.slice("--screenshot=".length);
 
-if (!profilePath) {
+if (
+  !profilePath ||
+  options.some(
+    (value) => value !== "--presentation" && value !== screenshotOption,
+  ) ||
+  (screenshotPath !== undefined &&
+    (!qualifyPresentation || !isAbsolute(screenshotPath)))
+) {
   throw new Error(
-    "usage: bun run tools/qualify-live-conversation.ts <qualification-profile.json>",
+    "usage: bun run tools/qualify-live-conversation.ts <qualification-profile.json> [--presentation] [--screenshot=/absolute/path.png]",
   );
 }
 
@@ -79,11 +90,12 @@ const port = reservePort();
 const origin = `http://127.0.0.1:${port}`;
 const repositoryRoot = resolve(dirname(import.meta.dir));
 assertFleetdRevision(profile.fleetd_revision);
-const bundle = await buildWebViewBundle();
+const bundle = qualifyPresentation ? "" : await buildWebViewBundle();
 let daemon: ManagedProcess | undefined;
 let worker: ManagedProcess | undefined;
 let operatorCredential = "";
 let humanCredential = "";
+let workerCredential = "";
 const processEvidence: Record<string, unknown>[] = [];
 
 try {
@@ -120,6 +132,7 @@ try {
   assertRegisteredAgent(human, "human");
   assertRegisteredAgent(workerAgent, "worker");
   humanCredential = human.credential.token;
+  workerCredential = workerAgent.credential.token;
 
   const channel = await postJson(
     "/v1/channels",
@@ -242,12 +255,17 @@ try {
 
   const evidence = {
     schema_version: 1,
-    qualification: "live-human-agent-conversation",
+    qualification: qualifyPresentation
+      ? "live-human-agent-conversation-presentation"
+      : "live-human-agent-conversation",
     run_id: runId,
     passed: true,
     runtime: {
       bun_version: Bun.version,
       browser_backend: "webkit",
+      browser_surface: qualifyPresentation
+        ? "served-conversation-presentation"
+        : "headless-channel-stream-adapter",
       fleetd_revision: profile.fleetd_revision,
       qualification_profile_sha256: await sha256Text(profileSource),
       fleetd_executable_sha256: await sha256File(profile.fleetd_executable),
@@ -301,6 +319,7 @@ try {
   Object.assign(evidence.process_cleanup, { processes: processEvidence });
   console.log(JSON.stringify(evidence));
 } finally {
+  workerCredential = "";
   humanCredential = "";
   operatorCredential = "";
   if (worker) {
@@ -796,6 +815,30 @@ async function runBrowserTurn(
   after: number,
   phase: string,
 ): Promise<BrowserTurn> {
+  return qualifyPresentation
+    ? await runPresentationBrowserTurn(
+        channelId,
+        humanId,
+        workerId,
+        after,
+        phase,
+      )
+    : await runHeadlessBrowserTurn(
+        channelId,
+        humanId,
+        workerId,
+        after,
+        phase,
+      );
+}
+
+async function runHeadlessBrowserTurn(
+  channelId: string,
+  humanId: string,
+  workerId: string,
+  after: number,
+  phase: string,
+): Promise<BrowserTurn> {
   await using view = new Bun.WebView({
     backend: "webkit",
     dataStore: "ephemeral",
@@ -931,6 +974,457 @@ async function runBrowserTurn(
       accepted_message_ids: state.messages.map((message: any) => message.id),
     },
   };
+}
+
+async function runPresentationBrowserTurn(
+  channelId: string,
+  humanId: string,
+  workerId: string,
+  after: number,
+  phase: string,
+): Promise<BrowserTurn> {
+  await using view = new Bun.WebView({
+    backend: "webkit",
+    dataStore: "ephemeral",
+    width: 1_280,
+    height: 800,
+  });
+  await view.navigate(`${origin}/conversation/`);
+  await instrumentPresentation(view);
+  await view.evaluate(
+    `globalThis.__fleetdConversation.connect(${JSON.stringify({
+      participantId: humanId,
+      operatorCredential,
+      participantCredential: humanCredential,
+      requestKind: profile.request_kind,
+      resultKind: profile.result_kind,
+    })})`,
+  );
+  await waitForPresentation(
+    view,
+    (state) => state.phase === "ready" && state.channel_count === 1,
+    15_000,
+    `${phase} presentation channel discovery`,
+  );
+
+  await view.click(`button[data-channel-id="${channelId}"]`);
+  await waitForPresentation(
+    view,
+    (state) =>
+      state.phase === "live" &&
+      state.selected_channel_id === channelId &&
+      state.member_count === 2 &&
+      state.cursor >= after,
+    15_000,
+    `${phase} presentation live channel`,
+  );
+  await waitForPresentationDom(view, workerId, phase);
+
+  const prompt = `Reply briefly to the human. Include the exact marker ${phase}.`;
+  await view.evaluate("document.querySelector('#composer-text').focus()");
+  await view.type(prompt);
+  const typedPrompt = await view.evaluate(
+    "document.querySelector('#composer-text').value",
+  );
+  if (typedPrompt !== prompt) {
+    throw new Error(`${phase} presentation did not accept trusted text input`);
+  }
+  await clickPresentationControl(view, "#send-message", phase);
+
+  const requestHistory = await poll(
+    () =>
+      getJson(
+        `/v1/channels/${encodeURIComponent(channelId)}/messages?after=${after}&limit=100`,
+        humanCredential,
+      ),
+    (history) =>
+      Array.isArray(history?.messages) &&
+      history.messages.some(
+        (message: any) =>
+          message.seq > after &&
+          message.sender_id === humanId &&
+          message.recipient_id === workerId &&
+          message.kind === profile.request_kind,
+      ),
+    15_000,
+    `${phase} presentation request append`,
+  );
+  const request = requestHistory.messages.find(
+    (message: any) =>
+      message.seq > after &&
+      message.sender_id === humanId &&
+      message.recipient_id === workerId &&
+      message.kind === profile.request_kind,
+  );
+  if (JSON.stringify(request?.payload) !== JSON.stringify({ text: prompt })) {
+    throw new Error(`${phase} presentation changed the request contract`);
+  }
+
+  const resultHistory = await poll(
+    () =>
+      getJson(
+        `/v1/channels/${encodeURIComponent(channelId)}/messages?after=${request.seq}&limit=100`,
+        humanCredential,
+      ),
+    (history) =>
+      Array.isArray(history?.messages) &&
+      history.messages.some(
+        (message: any) =>
+          message.kind === profile.result_kind &&
+          message.causation_id === request.id,
+      ),
+    profile.turn_timeout_ms,
+    `${phase} presentation causal result`,
+  );
+  const result = resultHistory.messages.find(
+    (message: any) =>
+      message.kind === profile.result_kind && message.causation_id === request.id,
+  );
+  if (
+    !result ||
+    result.sender_id !== workerId ||
+    result.recipient_id !== humanId ||
+    result.correlation_id !== request.correlation_id ||
+    result.payload?.status !== "completed"
+  ) {
+    throw new Error(`${phase} presentation result lost its causal attribution`);
+  }
+
+  const state = await waitForPresentation(
+    view,
+    (candidate) =>
+      candidate.phase === "live" &&
+      candidate.cursor === result.seq &&
+      candidate.message_ids.includes(request.id) &&
+      candidate.message_ids.includes(result.id),
+    15_000,
+    `${phase} presentation result rendering`,
+  );
+  const rendering = await readRenderedTurn(view, request.id, result.id);
+  const expectedAssistant = assistantMessageText(result.payload?.assistant_messages);
+  if (
+    rendering.requestText !== prompt ||
+    !expectedAssistant ||
+    rendering.resultText !== expectedAssistant ||
+    JSON.stringify(rendering.resultEnvelope) !== JSON.stringify(result)
+  ) {
+    throw new Error(`${phase} presentation did not preserve its rendered envelope`);
+  }
+
+  const audit = await readPresentationAudit(
+    view,
+    operatorCredential,
+    humanCredential,
+  );
+  if (
+    audit.protocols.length !== 1 ||
+    audit.protocols[0]?.requested !== protocol ||
+    audit.protocols[0]?.selected !== protocol ||
+    audit.protocols[0]?.url !== `${origin.replace("http", "ws")}/v1/browser/channel-stream` ||
+    audit.requests.some((request) => request.url.includes("/messages?")) ||
+    audit.secretInDom ||
+    audit.secretInUrl ||
+    audit.cookieLength !== 0 ||
+    audit.localStorageLength !== 0 ||
+    audit.sessionStorageLength !== 0 ||
+    audit.indexedDbCount !== 0 ||
+    !audit.actions.some(
+      (action) =>
+        action.type === "click" &&
+        action.channelId === channelId &&
+        action.trusted,
+    ) ||
+    !audit.actions.some(
+      (action) =>
+        action.type === "input" &&
+        action.targetId === "composer-text" &&
+        action.trusted,
+    ) ||
+    !audit.actions.some(
+      (action) =>
+        action.type === "click" &&
+        action.targetId === "send-message" &&
+        action.trusted,
+    )
+  ) {
+    throw new Error(`${phase} presentation browser audit failed closed`);
+  }
+
+  let screenshot: Record<string, unknown> | undefined;
+  if (screenshotPath && phase === "worker-harness-restart") {
+    const bytes = await view.screenshot({ encoding: "buffer" });
+    await Bun.write(screenshotPath, bytes);
+    screenshot = {
+      sha256: await sha256Bytes(bytes),
+      bytes: bytes.byteLength,
+    };
+  }
+  await view.evaluate("globalThis.__fleetdConversation.disconnect()");
+  return {
+    cursor: result.seq,
+    request,
+    result,
+    evidence: {
+      phase,
+      browser_after: after,
+      request_id: request.id,
+      request_seq: request.seq,
+      result_id: result.id,
+      result_seq: result.seq,
+      correlation_id: request.correlation_id,
+      causation_preserved: true,
+      request_payload_preserved: true,
+      result_payload_preserved: true,
+      selected_protocol: audit.protocols[0].selected,
+      accepted_message_ids: state.message_ids,
+      rendered_request_exact: true,
+      rendered_result_exact: true,
+      inspectable_envelope_exact: true,
+      trusted_browser_input: true,
+      credential_persistence_absent: true,
+      browser_history_poll_count: 0,
+      ...(screenshot ? { screenshot } : {}),
+    },
+  };
+}
+
+interface PresentationState {
+  phase: string;
+  selected_channel_id: string | null;
+  cursor: number;
+  channel_count: number;
+  member_count: number;
+  message_ids: string[];
+}
+
+interface PresentationAudit {
+  requests: Array<{ method: string; url: string }>;
+  protocols: Array<{
+    requested: string;
+    selected: string | null;
+    url: string;
+  }>;
+  actions: Array<{
+    type: string;
+    targetId: string;
+    channelId: string | null;
+    key: string | null;
+    trusted: boolean;
+  }>;
+  secretInDom: boolean;
+  secretInUrl: boolean;
+  cookieLength: number;
+  localStorageLength: number;
+  sessionStorageLength: number;
+  indexedDbCount: number;
+}
+
+async function instrumentPresentation(view: Bun.WebView): Promise<void> {
+  await view.evaluate(`(() => {
+    const audit = { requests: [], protocols: [], actions: [] };
+    Object.defineProperty(globalThis, "__fleetdPresentationQualification", {
+      configurable: false,
+      enumerable: false,
+      writable: false,
+      value: audit,
+    });
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      audit.requests.push({ method: init?.method ?? (input instanceof Request ? input.method : "GET"), url });
+      return nativeFetch(input, init);
+    };
+    const NativeWebSocket = globalThis.WebSocket;
+    globalThis.WebSocket = class QualificationWebSocket extends NativeWebSocket {
+      constructor(url, requested) {
+        super(url, requested);
+        const record = { url: String(url), requested: Array.isArray(requested) ? requested.join(",") : String(requested), selected: null };
+        audit.protocols.push(record);
+        this.addEventListener("open", () => { record.selected = this.protocol; });
+      }
+    };
+    for (const type of ["click", "input", "keydown"]) {
+      document.addEventListener(type, (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        audit.actions.push({
+          type,
+          targetId: target?.id ?? "",
+          channelId: target?.closest?.("[data-channel-id]")?.dataset?.channelId ?? null,
+          key: "key" in event ? event.key : null,
+          trusted: event.isTrusted,
+        });
+      }, true);
+    }
+    return true;
+  })()`);
+}
+
+async function readPresentation(
+  view: Bun.WebView,
+): Promise<PresentationState> {
+  return await view.evaluate("globalThis.__fleetdConversation.inspect()");
+}
+
+async function waitForPresentation(
+  view: Bun.WebView,
+  predicate: (state: PresentationState) => boolean,
+  timeoutMs: number,
+  label: string,
+): Promise<PresentationState> {
+  const deadline = performance.now() + timeoutMs;
+  let state = await readPresentation(view);
+  while (!predicate(state) && performance.now() < deadline) {
+    await Bun.sleep(25);
+    state = await readPresentation(view);
+  }
+  if (!predicate(state)) {
+    throw new Error(
+      `${label} did not complete before its deadline: ${boundedTail(JSON.stringify(state))}`,
+    );
+  }
+  return state;
+}
+
+async function waitForPresentationDom(
+  view: Bun.WebView,
+  workerId: string,
+  phase: string,
+): Promise<void> {
+  const deadline = performance.now() + 15_000;
+  let state = await readPresentationDom(view);
+  while (
+    (state.composerDisabled ||
+      state.target !== workerId ||
+      state.emptyTitle !== "Start the conversation") &&
+    performance.now() < deadline
+  ) {
+    await Bun.sleep(25);
+    state = await readPresentationDom(view);
+  }
+  if (
+    state.composerDisabled ||
+    state.target !== workerId ||
+    state.emptyTitle !== "Start the conversation"
+  ) {
+    throw new Error(`${phase} presentation DOM did not reach its live state`);
+  }
+}
+
+async function clickPresentationControl(
+  view: Bun.WebView,
+  selector: string,
+  phase: string,
+): Promise<void> {
+  const point = await view.evaluate(`(() => {
+    const element = document.querySelector(${JSON.stringify(selector)});
+    if (!(element instanceof HTMLElement)) return { reason: "missing" };
+    const rect = element.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    return {
+      x,
+      y,
+      width: rect.width,
+      height: rect.height,
+      disabled: element instanceof HTMLButtonElement && element.disabled,
+      hit: hit instanceof Element ? hit.id || hit.tagName : null,
+      containsHit: hit instanceof Element && element.contains(hit),
+      viewport: { width: innerWidth, height: innerHeight },
+    };
+  })()`);
+  if (
+    point === null ||
+    typeof point !== "object" ||
+    Array.isArray(point) ||
+    !("x" in point) ||
+    !("y" in point) ||
+    typeof point.x !== "number" ||
+    typeof point.y !== "number" ||
+    !("width" in point) ||
+    !("height" in point) ||
+    typeof point.width !== "number" ||
+    typeof point.height !== "number" ||
+    point.width <= 0 ||
+    point.height <= 0 ||
+    !("disabled" in point) ||
+    point.disabled !== false ||
+    !("containsHit" in point) ||
+    point.containsHit !== true
+  ) {
+    throw new Error(
+      `${phase} presentation control was not actionable: ${boundedTail(JSON.stringify(point))}`,
+    );
+  }
+  await view.click(point.x, point.y);
+}
+
+async function readPresentationDom(view: Bun.WebView): Promise<{
+  composerDisabled: boolean;
+  target: string;
+  emptyTitle: string;
+}> {
+  return await view.evaluate(`({
+    composerDisabled: document.querySelector("#composer-text").disabled,
+    target: document.querySelector("#message-target").value,
+    emptyTitle: document.querySelector("#empty-conversation-title").textContent,
+  })`);
+}
+
+async function readRenderedTurn(
+  view: Bun.WebView,
+  requestId: string,
+  resultId: string,
+): Promise<{
+  requestText: string | null;
+  resultText: string | null;
+  resultEnvelope: unknown;
+}> {
+  return await view.evaluate(`(() => {
+    const request = document.querySelector('[data-message-id="${requestId}"]');
+    const result = document.querySelector('[data-message-id="${resultId}"]');
+    const envelope = result?.querySelector("details pre")?.textContent ?? "null";
+    return {
+      requestText: request?.querySelector(".message-text")?.textContent ?? null,
+      resultText: result?.querySelector(".message-text")?.textContent ?? null,
+      resultEnvelope: JSON.parse(envelope),
+    };
+  })()`);
+}
+
+async function readPresentationAudit(
+  view: Bun.WebView,
+  firstSecret: string,
+  secondSecret: string,
+): Promise<PresentationAudit> {
+  return await view.evaluate(`(async () => {
+    const audit = globalThis.__fleetdPresentationQualification;
+    const html = document.documentElement.outerHTML;
+    const urls = [location.href, ...audit.requests.map((request) => request.url), ...audit.protocols.map((socket) => socket.url)];
+    return {
+      ...audit,
+      secretInDom: html.includes(${JSON.stringify(firstSecret)}) || html.includes(${JSON.stringify(secondSecret)}),
+      secretInUrl: urls.some((url) => url.includes(${JSON.stringify(firstSecret)}) || url.includes(${JSON.stringify(secondSecret)})),
+      cookieLength: document.cookie.length,
+      localStorageLength: localStorage.length,
+      sessionStorageLength: sessionStorage.length,
+      indexedDbCount: (await indexedDB.databases()).length,
+    };
+  })()`);
+}
+
+function assistantMessageText(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  const fragments: string[] = [];
+  for (const assistantMessage of value) {
+    const content = assistantMessage?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content) {
+      if (typeof block === "string") fragments.push(block);
+      else if (typeof block?.text === "string") fragments.push(block.text);
+    }
+  }
+  return fragments.join("").trim();
 }
 
 interface BrowserTurn {
@@ -1101,19 +1595,16 @@ function summarizeObservation(observation: any): Record<string, unknown> {
 }
 
 async function sha256File(path: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    await Bun.file(path).arrayBuffer(),
-  );
+  return await sha256Bytes(await Bun.file(path).arrayBuffer());
+}
+
+async function sha256Bytes(value: BufferSource): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", value);
   return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
 async function sha256Text(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(value),
-  );
-  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  return await sha256Bytes(new TextEncoder().encode(value));
 }
 
 async function poll<T>(

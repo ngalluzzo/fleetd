@@ -214,6 +214,27 @@ Qwen route. See the
 [human-to-agent qualification record](qualification/live-human-agent-conversation-2026-08-25.md)
 and its [exact machine evidence](qualification/live-human-agent-conversation-2026-08-25.json).
 
+The same runner has an additive presentation mode. It navigates Bun's native
+WebKit view to the served `/conversation/` page, connects through the page's
+public bootstrap, and drives channel selection, prompt entry, and send-button
+submission with trusted browser input. It then compares the rendered request,
+assistant result, and inspectable envelope with public durable history. The
+mode also proves the page selected the fixed browser protocol, made no HTTP
+history-poll requests, persisted no credential in DOM or browser storage, and
+recovered the complete projection across the same four process phases.
+
+```sh
+bun run tools/qualify-live-conversation.ts \
+  target/live-conversation-reference-profile.json \
+  --presentation \
+  --screenshot=/absolute/path/to/presentation.png \
+  > target/live-conversation-presentation-evidence.json
+```
+
+The screenshot is optional and is captured only after the final
+worker-and-harness replacement turn. It is visual evidence, not protocol or
+conversation authority.
+
 ## Presentation client boundary
 
 Presentation work begins above a versioned headless session, not in the

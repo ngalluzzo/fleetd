@@ -1026,6 +1026,8 @@
     channelMeta: required("channel-meta"),
     messages: required("message-list"),
     empty: required("empty-conversation"),
+    emptyTitle: required("empty-conversation-title"),
+    emptyCopy: required("empty-conversation-copy"),
     target: required("message-target"),
     composer: required("composer"),
     composerText: required("composer-text"),
@@ -1226,6 +1228,9 @@
     const nodes = snapshot.messages.map((message) => messageNode(message, snapshot.participantId, names));
     elements.messages.replaceChildren(...nodes);
     elements.empty.hidden = snapshot.messages.length !== 0;
+    const selected = snapshot.selectedChannelId !== null;
+    elements.emptyTitle.textContent = selected ? "Start the conversation" : "Choose a channel";
+    elements.emptyCopy.textContent = selected ? "Send the first durable message to an agent." : "History and new replies will arrive through one live cursor.";
     if (wasNearBottom)
       elements.messages.scrollTop = elements.messages.scrollHeight;
   }

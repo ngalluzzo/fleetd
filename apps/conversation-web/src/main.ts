@@ -49,6 +49,8 @@ const elements = {
   channelMeta: required<HTMLElement>("channel-meta"),
   messages: required<HTMLElement>("message-list"),
   empty: required<HTMLElement>("empty-conversation"),
+  emptyTitle: required<HTMLElement>("empty-conversation-title"),
+  emptyCopy: required<HTMLElement>("empty-conversation-copy"),
   target: required<HTMLSelectElement>("message-target"),
   composer: required<HTMLFormElement>("composer"),
   composerText: required<HTMLTextAreaElement>("composer-text"),
@@ -281,6 +283,13 @@ function renderMessages(snapshot: ConversationSnapshot): void {
   );
   elements.messages.replaceChildren(...nodes);
   elements.empty.hidden = snapshot.messages.length !== 0;
+  const selected = snapshot.selectedChannelId !== null;
+  elements.emptyTitle.textContent = selected
+    ? "Start the conversation"
+    : "Choose a channel";
+  elements.emptyCopy.textContent = selected
+    ? "Send the first durable message to an agent."
+    : "History and new replies will arrive through one live cursor.";
   if (wasNearBottom)
     elements.messages.scrollTop = elements.messages.scrollHeight;
 }
