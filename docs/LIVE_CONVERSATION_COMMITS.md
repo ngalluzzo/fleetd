@@ -231,6 +231,37 @@ targets. Fleetd contains neither that semantic contract nor the compiler
 runtime. The first presentation commit begins only after the operational offers
 above are stable and qualified.
 
+## Phase D — First reusable presentation target
+
+### 13. `feat: expose exact browser transport state`
+
+Publish only the browser adapter's locally observed connecting, live,
+reconnecting, failed, and closed states. Do not infer agent execution state.
+
+### 14. `feat: add a headless conversation session`
+
+Define the replaceable transport boundary and implement generation-fenced
+channel selection, cursor retention, stable-identity convergence, and
+attributed sends without a DOM dependency.
+
+### 15. `feat: add the first conversation presentation`
+
+Serve one same-origin static adapter using the headless session and a separately
+owned request/result profile. Retain opaque rendering for every unmatched
+message and keep both credentials in memory only.
+
+### 16. `feat: add a Bun-native desktop host`
+
+Package the public page in a visible system webview. The host reads explicit
+owner-only credential files and contributes no Fleetd authority or application
+state.
+
+### 17. `test: qualify the reusable conversation presentation`
+
+Exercise selection, send/echo convergence, real replay/live delivery, and
+cleanup in Bun's authoritative headless WebKit backend, then record a separate
+visible-host smoke result.
+
 ## Gate for every commit
 
 Run the repository-required Rust gates on every commit. Any commit that changes

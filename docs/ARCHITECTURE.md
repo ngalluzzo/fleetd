@@ -200,6 +200,13 @@ invocation observations. They are the common operational source for browser,
 TUI, or external projections; Fleetd does not give one presentation target a
 privileged internal data path.
 
+Presentation targets share a headless conversation session above replaceable
+authority-specific transports. The browser transport composes operator
+discovery with participant-owned stream and send operations without merging
+their principals. GUI and future TUI hosts remain packaging adapters over that
+session rather than new daemon concepts. See
+[ADR 0025](adr/0025-headless-conversation-client.md).
+
 ## Deliberate constraints
 
 - One trusted local node.

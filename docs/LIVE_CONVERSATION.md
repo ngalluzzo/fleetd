@@ -213,3 +213,19 @@ The first real product-loop run passed at Fleetd revision
 Qwen route. See the
 [human-to-agent qualification record](qualification/live-human-agent-conversation-2026-08-25.md)
 and its [exact machine evidence](qualification/live-human-agent-conversation-2026-08-25.json).
+
+## Presentation client boundary
+
+Presentation work begins above a versioned headless session, not in the
+messaging kernel. The session consumes a replaceable transport for channel and
+membership discovery, principal-relative replay/live continuation, and
+attributed sends. Browser, desktop, and future TUI targets share selection,
+cursor, stable-identity, and teardown behavior while supplying their own wire
+edge and rendering. See
+[ADR 0025](adr/0025-headless-conversation-client.md).
+
+The first target owns its exact request/result mapping outside Fleetd and
+retains an opaque fallback for every other message. It may display connection
+state because that is locally observed transport evidence. It may not label an
+agent as working, synthesize typing messages, or expose live tool activity
+until the separate operator-event subscription exists.
