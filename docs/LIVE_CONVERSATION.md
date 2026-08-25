@@ -242,6 +242,11 @@ reference plugin. See the
 [presentation qualification record](qualification/live-conversation-presentation-reference-2026-08-25.md)
 and its
 [exact machine evidence](qualification/live-conversation-presentation-reference-2026-08-25.json).
+The same presentation path then passed with OpenCode 1.4.0 and the local Qwen
+route across all four phases. See the
+[real-composition presentation record](qualification/live-conversation-presentation-opencode-qwen-2026-08-25.md)
+and its
+[machine evidence](qualification/live-conversation-presentation-opencode-qwen-2026-08-25.json).
 
 ## Presentation client boundary
 

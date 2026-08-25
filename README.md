@@ -188,7 +188,9 @@ drives the actual page through trusted WebKit input across browser, daemon,
 worker, and plugin replacement; its
 [machine evidence](docs/qualification/live-conversation-presentation-reference-2026-08-25.json)
 records exact rendering, secret-free ephemeral storage, and zero page history
-polls.
+polls. The
+[OpenCode/Qwen presentation run](docs/qualification/live-conversation-presentation-opencode-qwen-2026-08-25.md)
+then passed the same four phases through the real local model composition.
 
 ## Semantic boundary
 
