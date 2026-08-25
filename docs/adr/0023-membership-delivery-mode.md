@@ -1,6 +1,6 @@
 # ADR 0023: Channel membership declares delivery mode
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-25
 
 ## Context
@@ -59,8 +59,8 @@ recover exclusively from the immutable message cursor. Inbox delivery remains
 the stronger autonomous-work guarantee and keeps its existing lease,
 acknowledgement, retry, and block semantics.
 
-The exact draft is
-[`channel-membership-delivery-v1-draft.md`](../contracts/channel-membership-delivery-v1-draft.md).
+The stable contract is
+[`channel-membership-delivery-v1.md`](../contracts/channel-membership-delivery-v1.md).
 
 ## Rejected alternatives
 

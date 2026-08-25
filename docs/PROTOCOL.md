@@ -52,6 +52,21 @@ Credential rotation is the single mechanism that revokes an agent's access;
 after rotation every request fails with 401, including inbox claims and
 settlement.
 
+Each membership has one immutable delivery mode. `inbox` preserves the leased
+work guarantee: direct and broadcast append snapshot a delivery row under the
+existing rules. `stream_only` remains fully addressable and retains identical
+history and live-stream visibility, but message append creates no leased inbox
+row for that membership. Existing memberships, omitted add-member modes, and
+the `CreateChannel.member_ids` shorthand all use `inbox`.
+
+`CreateChannel.members` accepts exact agent and delivery-mode pairs in the same
+atomic creation transaction. Duplicate agents across either initial input are
+rejected. Re-adding an exact membership is idempotent; a different mode
+conflicts because mode transitions have no protocol. Operators and members of
+the exact channel may list the bounded membership projection at
+`GET /v1/channels/{channel_id}/members`; it omits agent metadata. See
+[the stable membership contract](contracts/channel-membership-delivery-v1.md).
+
 HTTP history uses an exclusive `after` cursor. WebSocket streams first replay
 every durable message after the cursor and then continue with live messages.
 Clients may reconnect with the highest sequence they durably processed.

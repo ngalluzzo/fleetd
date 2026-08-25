@@ -53,7 +53,7 @@
 ## M4 — Operator surface
 
 - [x] First small browser surface backed only by public Fleetd APIs.
-- [ ] Public channel-membership discovery plus immutable `inbox` versus
+- [x] Public channel-membership discovery plus immutable `inbox` versus
   `stream_only` delivery for addressable participants.
 - [ ] Single-use browser stream grants with origin validation, exact replay/live
   parity, and no polling fallback.

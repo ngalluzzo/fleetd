@@ -44,7 +44,7 @@ addressable, can send, and receive durable history and live replay without
 accumulating leased work. Worker seats use `inbox`. The kernel treats this as
 an immutable operational membership property and never infers it from agent
 metadata. See [ADR 0023](adr/0023-membership-delivery-mode.md) and the
-[draft membership contract](contracts/channel-membership-delivery-v1-draft.md).
+[stable membership contract](contracts/channel-membership-delivery-v1.md).
 
 Direct-message visibility remains principal-relative. An operator stream sees
 every message in the selected channel. A participant stream sees broadcasts
@@ -150,7 +150,8 @@ semantic interpretation enters Fleetd.
 ## Readiness sequence
 
 The conversation surface is ready only after these slices are independently
-qualified:
+qualified. The first two are complete through the stable membership contract;
+the browser stream and product-loop slices remain open:
 
 1. channel membership discovery through the public API;
 2. immutable `inbox` versus `stream_only` membership delivery;

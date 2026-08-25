@@ -156,7 +156,7 @@ resolution. The contract can be generated externally, but the served artifact
 contains no compiler runtime dependency. See
 [ADR 0014](adr/0014-generated-operator-surface.md).
 
-The proposed live-conversation surface keeps a human operator's administrative
+The live-conversation design keeps a human operator's administrative
 principal separate from their addressable participant principal. Native and
 TUI clients can use the existing bearer-authenticated channel WebSocket. A
 browser target remains unsatisfied until it can redeem an attenuated,
@@ -165,12 +165,13 @@ subprotocol. See the [live-conversation design](LIVE_CONVERSATION.md),
 [ADR 0022](adr/0022-browser-channel-stream-grants.md), and the
 [draft browser stream contract](contracts/browser-channel-stream-v1-draft.md).
 
-Addressable membership does not imply a leased work inbox. The proposed
+Addressable membership does not imply a leased work inbox. The stable
 membership delivery mode keeps autonomous `inbox` seats distinct from
 `stream_only` human or passive clients while preserving the same durable log
 and visibility. Fleetd stores that operational choice on exact channel
 membership rather than interpreting participant metadata. See
-[ADR 0023](adr/0023-membership-delivery-mode.md).
+[ADR 0023](adr/0023-membership-delivery-mode.md) and the
+[membership contract](contracts/channel-membership-delivery-v1.md).
 
 Conversation messages and execution telemetry remain distinct. Immutable
 channel messages already have durable replay plus live continuation. Mutable

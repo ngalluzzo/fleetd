@@ -64,6 +64,21 @@ use the generated `ErrorResponse` JSON envelope. Framework-level malformed
 path, query, or JSON extraction failures may be plain HTTP rejection bodies and
 must not be decoded as `ErrorResponse` without checking the content type.
 
+## Channel membership
+
+`CreateChannel.member_ids` remains the backward-compatible shorthand for
+`inbox` membership. `CreateChannel.members` accepts exact `agent_id` and
+`delivery_mode` pairs, where the closed modes are `inbox` and `stream_only`.
+`AddMember.delivery_mode` is optional and defaults to `inbox`; an exact replay
+returns success while an attempted mode change returns `409 Conflict`.
+
+`GET /v1/channels/{channel_id}/members` returns the bounded channel ID, agent
+ID, agent name, join timestamp, and delivery mode. Operators may inspect any
+existing channel. An agent may inspect only a channel of which it is a member.
+The response deliberately omits opaque agent metadata and credential state.
+Delivery mode affects only durable inbox snapshot creation, never message
+visibility or cursor replay.
+
 ## WebSocket stream
 
 `GET /v1/channels/{channel_id}/stream` is an HTTP WebSocket upgrade, not a

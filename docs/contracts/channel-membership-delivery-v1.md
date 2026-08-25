@@ -1,8 +1,8 @@
-# Channel membership delivery v1 draft
+# Channel membership delivery v1
 
-This draft adds an operational delivery mode to Fleetd membership. It is not
-implemented by the current API or schema. ADR 0023 must be accepted and the
-matrix below must pass before this becomes a stable contract.
+This contract adds an operational delivery mode to Fleetd membership. ADR 0023
+is accepted and the qualification matrix below is covered by the storage, API,
+and live-conversation membership suites.
 
 ## Wire types
 
@@ -100,7 +100,7 @@ message's deliveries.
 
 ## Qualification matrix
 
-The contract is incomplete until tests prove:
+The stable contract is qualified by tests that prove:
 
 1. the migration maps every existing membership to `inbox` without changing
    messages or delivery rows;
