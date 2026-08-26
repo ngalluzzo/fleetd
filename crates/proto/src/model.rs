@@ -454,6 +454,22 @@ impl DeliveryState {
     }
 }
 
+/// Read-only operator projection of one durable delivery.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
+pub struct DeliveryRecord {
+    pub agent_id: String,
+    pub message: Message,
+    pub state: DeliveryState,
+    pub attempt: i64,
+    pub available_at_ms: i64,
+    pub lease_expires_at_ms: Option<i64>,
+    pub lease_expired: bool,
+    pub last_error: Option<String>,
+    pub created_at_ms: i64,
+    pub acknowledged_at_ms: Option<i64>,
+    pub unresolved_block_id: Option<i64>,
+}
+
 /// What fleetd can prove about an invocation's external execution.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]

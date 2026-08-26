@@ -12,8 +12,8 @@ use crate::{
     store::{Store, message::message_from_row, now_ms},
 };
 use fleetd_proto::model::{
-    BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries, Delivery,
-    ResolveDeliveryBlock, RetryDelivery,
+    BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries, Delivery, DeliveryRecord,
+    DeliveryState, ResolveDeliveryBlock, RetryDelivery,
 };
 
 const MAX_CLAIM_LIMIT: u32 = 100;
@@ -22,6 +22,59 @@ const MAX_RETRY_DELAY_MS: u64 = 86_400_000;
 const MAX_ERROR_LENGTH: usize = 4_096;
 
 impl Store {
+    /// Lists durable deliveries, optionally for one agent and one state.
+    ///
+    /// A read model over the inbox: it reports the same rows the settlement
+    /// paths transition, without the lease token that owns them.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a limit outside its bounds, or when durable rows
+    /// cannot be read or decoded.
+    pub async fn list_deliveries(
+        &self,
+        agent_id: Option<&str>,
+        state: Option<DeliveryState>,
+        limit: u32,
+    ) -> Result<Vec<DeliveryRecord>, FleetError> {
+        if limit == 0 || limit > 500 {
+            return Err(FleetError::Invalid(
+                "delivery list limit must be between 1 and 500".to_owned(),
+            ));
+        }
+        let state_name = state.map(DeliveryState::as_str);
+        let rows = sqlx::query(
+            r"
+            SELECT m.seq, m.id, m.channel_id, m.sender_id, m.recipient_id,
+                   m.kind, m.payload_json, m.correlation_id, m.causation_id,
+                   m.created_at_ms, d.agent_id, d.state, d.attempt,
+                   d.available_at_ms, d.lease_expires_at_ms, d.last_error,
+                   d.created_at_ms AS delivery_created_at_ms,
+                   d.acknowledged_at_ms, b.id AS unresolved_block_id
+            FROM agent_deliveries d
+            JOIN messages m ON m.seq = d.message_seq
+            LEFT JOIN delivery_blocks b
+              ON b.message_seq = d.message_seq AND b.agent_id = d.agent_id
+             AND b.resolved_at_ms IS NULL
+            WHERE (? IS NULL OR d.agent_id = ?)
+              AND (? IS NULL OR d.state = ?)
+            ORDER BY m.seq, d.agent_id
+            LIMIT ?
+            ",
+        )
+        .bind(agent_id)
+        .bind(agent_id)
+        .bind(state_name)
+        .bind(state_name)
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await?;
+        let now = now_ms();
+        rows.iter()
+            .map(|row| delivery_record_from_row(row, now))
+            .collect()
+    }
+
     /// Lists unresolved blocked deliveries for operator review.
     ///
     /// # Errors
@@ -66,6 +119,31 @@ impl Store {
         transaction.commit().await?;
         Ok(())
     }
+}
+
+fn delivery_record_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+    now: i64,
+) -> Result<DeliveryRecord, FleetError> {
+    let stored: String = row.try_get("state")?;
+    let state = DeliveryState::parse(&stored).ok_or_else(|| {
+        FleetError::Invalid(format!("stored delivery state is invalid: {stored}"))
+    })?;
+    let lease_expires_at_ms = row.try_get("lease_expires_at_ms")?;
+    Ok(DeliveryRecord {
+        agent_id: row.try_get("agent_id")?,
+        message: message_from_row(row)?,
+        state,
+        attempt: row.try_get("attempt")?,
+        available_at_ms: row.try_get("available_at_ms")?,
+        lease_expires_at_ms,
+        lease_expired: state == DeliveryState::Leased
+            && lease_expires_at_ms.is_some_and(|expiry| expiry <= now),
+        last_error: row.try_get("last_error")?,
+        created_at_ms: row.try_get("delivery_created_at_ms")?,
+        acknowledged_at_ms: row.try_get("acknowledged_at_ms")?,
+        unresolved_block_id: row.try_get("unresolved_block_id")?,
+    })
 }
 
 /// Applies one delivery-block resolution inside a caller-owned transaction.
