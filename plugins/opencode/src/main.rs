@@ -1,11 +1,18 @@
-use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
-use fleetd_acp_host::{DriverConfig, DriverError, PluginDefinition, RuntimeConfig, serve};
+use fleetd_acp_host::{
+    DriverConfig, DriverError, PluginDefinition, RuntimeConfig,
+    config::{ConfigChecks, base_environment, executable_digest, profile_digest as digest_profile},
+    serve,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 
 const PLUGIN_ID: &str = "fleetd.harness.opencode";
+const CHECKS: ConfigChecks = ConfigChecks::new("OpenCode");
 const OPENCODE_POLICY_VERSION: u32 = 2;
 const ALLOWED_ENVIRONMENT: &[&str] = &["HOME", "OPENCODE_CONFIG_CONTENT", "PATH", "TERM", "TMPDIR"];
 
@@ -53,18 +60,7 @@ async fn main() {
 fn prepare_config(value: Value) -> Result<DriverConfig, DriverError> {
     let config: OpenCodeConfig = serde_json::from_value(value)?;
     validate_config(&config)?;
-    let executable = fs::canonicalize(&config.executable).map_err(|error| {
-        DriverError::InvalidConfig(format!(
-            "OpenCode executable could not be resolved at {}: {error}",
-            config.executable.display()
-        ))
-    })?;
-    if !executable.is_file() {
-        return Err(DriverError::InvalidConfig(format!(
-            "OpenCode executable must be a file: {}",
-            executable.display()
-        )));
-    }
+    let executable = CHECKS.resolved_executable("executable", &config.executable)?;
     let profile_digest = profile_digest(&config, &executable)?;
     let mut opencode_config = json!({
         "model": config.model,
@@ -85,23 +81,16 @@ fn prepare_config(value: Value) -> Result<DriverConfig, DriverError> {
         );
         opencode_config["provider"] = Value::Object(providers);
     }
-    let mut environment = BTreeMap::from([
-        (
-            "HOME".to_owned(),
-            config.home.to_string_lossy().into_owned(),
-        ),
-        (
-            "OPENCODE_CONFIG_CONTENT".to_owned(),
-            opencode_config.to_string(),
-        ),
-        ("PATH".to_owned(), config.path),
-    ]);
-    if let Some(term) = config.term {
-        environment.insert("TERM".to_owned(), term);
-    }
-    if let Some(tmpdir) = config.tmpdir {
-        environment.insert("TMPDIR".to_owned(), tmpdir.to_string_lossy().into_owned());
-    }
+    let mut environment = base_environment(
+        &config.home,
+        config.path,
+        config.term,
+        config.tmpdir.as_deref(),
+    );
+    environment.insert(
+        "OPENCODE_CONFIG_CONTENT".to_owned(),
+        opencode_config.to_string(),
+    );
     Ok(DriverConfig {
         profile_digest,
         runtime: RuntimeConfig {
@@ -116,17 +105,9 @@ fn prepare_config(value: Value) -> Result<DriverConfig, DriverError> {
 }
 
 fn validate_config(config: &OpenCodeConfig) -> Result<(), DriverError> {
-    if !config.executable.is_absolute() {
-        return Err(DriverError::InvalidConfig(
-            "OpenCode executable must be an absolute path".to_owned(),
-        ));
-    }
-    if config.expected_version.trim().is_empty() {
-        return Err(DriverError::InvalidConfig(
-            "OpenCode expected_version must not be empty".to_owned(),
-        ));
-    }
-    validate_bounded("model", &config.model, 1_024)?;
+    CHECKS.absolute("executable", &config.executable)?;
+    CHECKS.non_empty("expected_version", &config.expected_version)?;
+    CHECKS.bounded("model", &config.model, 1_024)?;
     let Some((provider, model)) = config.model.split_once('/') else {
         return Err(DriverError::InvalidConfig(
             "OpenCode model must use provider/model form".to_owned(),
@@ -137,30 +118,16 @@ fn validate_config(config: &OpenCodeConfig) -> Result<(), DriverError> {
             "OpenCode model must use provider/model form".to_owned(),
         ));
     }
-    if !config.home.is_absolute() || !config.home.is_dir() {
-        return Err(DriverError::InvalidConfig(format!(
-            "OpenCode home must be an existing absolute directory: {}",
-            config.home.display()
-        )));
-    }
-    if config.path.trim().is_empty() {
-        return Err(DriverError::InvalidConfig(
-            "OpenCode PATH must not be empty".to_owned(),
-        ));
-    }
-    if let Some(tmpdir) = &config.tmpdir
-        && (!tmpdir.is_absolute() || !tmpdir.is_dir())
-    {
-        return Err(DriverError::InvalidConfig(format!(
-            "OpenCode tmpdir must be an existing absolute directory: {}",
-            tmpdir.display()
-        )));
+    CHECKS.directory("home", &config.home)?;
+    CHECKS.non_empty("PATH", &config.path)?;
+    if let Some(tmpdir) = &config.tmpdir {
+        CHECKS.directory("tmpdir", tmpdir)?;
     }
     if let Some(provider) = &config.openai_compatible {
         validate_provider_identifier("provider_id", &provider.provider_id)?;
-        validate_bounded("provider_name", &provider.provider_name, 128)?;
-        validate_bounded("model_id", &provider.model_id, 512)?;
-        validate_bounded("model_name", &provider.model_name, 256)?;
+        CHECKS.bounded("provider_name", &provider.provider_name, 128)?;
+        CHECKS.bounded("model_id", &provider.model_id, 512)?;
+        CHECKS.bounded("model_name", &provider.model_name, 256)?;
         validate_loopback_base_url(&provider.base_url)?;
         if config.model != format!("{}/{}", provider.provider_id, provider.model_id) {
             return Err(DriverError::InvalidConfig(
@@ -173,7 +140,7 @@ fn validate_config(config: &OpenCodeConfig) -> Result<(), DriverError> {
 }
 
 fn validate_provider_identifier(field: &str, value: &str) -> Result<(), DriverError> {
-    validate_bounded(field, value, 128)?;
+    CHECKS.bounded(field, value, 128)?;
     if !value
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
@@ -185,17 +152,8 @@ fn validate_provider_identifier(field: &str, value: &str) -> Result<(), DriverEr
     Ok(())
 }
 
-fn validate_bounded(field: &str, value: &str, limit: usize) -> Result<(), DriverError> {
-    if value.trim().is_empty() || value.len() > limit || value.chars().any(char::is_control) {
-        return Err(DriverError::InvalidConfig(format!(
-            "OpenCode {field} must contain between 1 and {limit} bytes"
-        )));
-    }
-    Ok(())
-}
-
 fn validate_loopback_base_url(value: &str) -> Result<(), DriverError> {
-    validate_bounded("base_url", value, 2_048)?;
+    CHECKS.bounded("base_url", value, 2_048)?;
     let Some(rest) = value.strip_prefix("http://") else {
         return Err(DriverError::InvalidConfig(
             "OpenCode compatible base_url must use loopback HTTP".to_owned(),
@@ -219,15 +177,14 @@ fn validate_loopback_base_url(value: &str) -> Result<(), DriverError> {
     Ok(())
 }
 
-fn profile_digest(config: &OpenCodeConfig, executable: &PathBuf) -> Result<String, DriverError> {
-    let executable_bytes = fs::read(executable)?;
-    let executable_digest = format!("sha256:{:x}", Sha256::digest(executable_bytes));
-    let material = json!({
+/// The exact material that makes one `OpenCode` launch profile distinct.
+fn profile_digest(config: &OpenCodeConfig, executable: &Path) -> Result<String, DriverError> {
+    digest_profile(&json!({
         "plugin": PLUGIN_ID,
         "plugin_version": env!("CARGO_PKG_VERSION"),
         "policy_version": OPENCODE_POLICY_VERSION,
         "executable": executable,
-        "executable_digest": executable_digest,
+        "executable_digest": executable_digest(executable)?,
         "expected_version": config.expected_version,
         "model": config.model,
         "home": config.home,
@@ -235,9 +192,7 @@ fn profile_digest(config: &OpenCodeConfig, executable: &PathBuf) -> Result<Strin
         "term": config.term,
         "tmpdir": config.tmpdir,
         "openai_compatible": config.openai_compatible,
-    });
-    let encoded = serde_json::to_vec(&material)?;
-    Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
+    }))
 }
 
 #[cfg(test)]

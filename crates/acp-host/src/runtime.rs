@@ -97,7 +97,7 @@ impl DriverRuntime {
         allowed_environment: &[&str],
     ) -> Result<(Self, mpsc::Receiver<DriverNotification>), DriverError> {
         config.validate(allowed_environment)?;
-        let executable_digest = digest_file(&config.runtime.identity_path)?;
+        let executable_digest = crate::config::executable_digest(&config.runtime.identity_path)?;
         let profile_digest = config.profile_digest.clone();
         let (commands, command_rx) = mpsc::channel(32);
         let (notifications_tx, notifications) = mpsc::channel(256);
@@ -248,11 +248,6 @@ fn validate_file(kind: &str, path: &Path) -> Result<(), DriverError> {
         )));
     }
     Ok(())
-}
-
-fn digest_file(path: &Path) -> Result<String, DriverError> {
-    let bytes = std::fs::read(path)?;
-    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 enum Command {

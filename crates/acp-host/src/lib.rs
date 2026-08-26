@@ -4,6 +4,7 @@
 //! plugins own runtime identity, launch arguments, configuration, and the
 //! environment names they deliberately grant.
 
+pub mod config;
 mod runtime;
 
 use std::time::Duration;

@@ -1,11 +1,15 @@
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::path::{Path, PathBuf};
 
-use fleetd_acp_host::{DriverConfig, DriverError, PluginDefinition, RuntimeConfig, serve};
+use fleetd_acp_host::{
+    DriverConfig, DriverError, PluginDefinition, RuntimeConfig,
+    config::{ConfigChecks, base_environment, executable_digest, profile_digest as digest_profile},
+    serve,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 const PLUGIN_ID: &str = "fleetd.harness.codex";
+const CHECKS: ConfigChecks = ConfigChecks::new("Codex");
 const ALLOWED_ENVIRONMENT: &[&str] =
     &["CODEX_HOME", "HOME", "NO_BROWSER", "PATH", "TERM", "TMPDIR"];
 
@@ -47,38 +51,20 @@ async fn main() {
 fn prepare_config(value: Value) -> Result<DriverConfig, DriverError> {
     let config: CodexConfig = serde_json::from_value(value)?;
     validate_config(&config)?;
-    let executable = fs::canonicalize(&config.executable).map_err(|error| {
-        DriverError::InvalidConfig(format!(
-            "Codex adapter executable could not be resolved at {}: {error}",
-            config.executable.display()
-        ))
-    })?;
-    if !executable.is_file() {
-        return Err(DriverError::InvalidConfig(format!(
-            "Codex adapter executable must be a file: {}",
-            executable.display()
-        )));
-    }
+    let executable = CHECKS.resolved_executable("adapter executable", &config.executable)?;
     let profile_digest = profile_digest(&config, &executable)?;
-    let mut environment = BTreeMap::from([
-        (
-            "HOME".to_owned(),
-            config.home.to_string_lossy().into_owned(),
-        ),
-        (
-            "CODEX_HOME".to_owned(),
-            config.codex_home.to_string_lossy().into_owned(),
-        ),
-        ("PATH".to_owned(), config.path),
-    ]);
+    let mut environment = base_environment(
+        &config.home,
+        config.path,
+        config.term,
+        config.tmpdir.as_deref(),
+    );
+    environment.insert(
+        "CODEX_HOME".to_owned(),
+        config.codex_home.to_string_lossy().into_owned(),
+    );
     if config.no_browser {
         environment.insert("NO_BROWSER".to_owned(), "1".to_owned());
-    }
-    if let Some(term) = config.term {
-        environment.insert("TERM".to_owned(), term);
-    }
-    if let Some(tmpdir) = config.tmpdir {
-        environment.insert("TMPDIR".to_owned(), tmpdir.to_string_lossy().into_owned());
     }
     Ok(DriverConfig {
         profile_digest,
@@ -94,48 +80,25 @@ fn prepare_config(value: Value) -> Result<DriverConfig, DriverError> {
 }
 
 fn validate_config(config: &CodexConfig) -> Result<(), DriverError> {
-    if !config.executable.is_absolute() {
-        return Err(DriverError::InvalidConfig(
-            "Codex adapter executable must be an absolute path".to_owned(),
-        ));
-    }
-    if config.expected_version.trim().is_empty() {
-        return Err(DriverError::InvalidConfig(
-            "Codex expected_version must not be empty".to_owned(),
-        ));
-    }
+    CHECKS.absolute("adapter executable", &config.executable)?;
+    CHECKS.non_empty("expected_version", &config.expected_version)?;
     for (label, directory) in [("home", &config.home), ("codex_home", &config.codex_home)] {
-        if !directory.is_absolute() || !directory.is_dir() {
-            return Err(DriverError::InvalidConfig(format!(
-                "Codex {label} must be an existing absolute directory: {}",
-                directory.display()
-            )));
-        }
+        CHECKS.directory(label, directory)?;
     }
-    if config.path.trim().is_empty() {
-        return Err(DriverError::InvalidConfig(
-            "Codex PATH must not be empty".to_owned(),
-        ));
-    }
-    if let Some(tmpdir) = &config.tmpdir
-        && (!tmpdir.is_absolute() || !tmpdir.is_dir())
-    {
-        return Err(DriverError::InvalidConfig(format!(
-            "Codex tmpdir must be an existing absolute directory: {}",
-            tmpdir.display()
-        )));
+    CHECKS.non_empty("PATH", &config.path)?;
+    if let Some(tmpdir) = &config.tmpdir {
+        CHECKS.directory("tmpdir", tmpdir)?;
     }
     Ok(())
 }
 
-fn profile_digest(config: &CodexConfig, executable: &PathBuf) -> Result<String, DriverError> {
-    let executable_bytes = fs::read(executable)?;
-    let executable_digest = format!("sha256:{:x}", Sha256::digest(executable_bytes));
-    let material = json!({
+/// The exact material that makes one Codex launch profile distinct.
+fn profile_digest(config: &CodexConfig, executable: &Path) -> Result<String, DriverError> {
+    digest_profile(&json!({
         "plugin": PLUGIN_ID,
         "plugin_version": env!("CARGO_PKG_VERSION"),
         "executable": executable,
-        "executable_digest": executable_digest,
+        "executable_digest": executable_digest(executable)?,
         "expected_version": config.expected_version,
         "home": config.home,
         "codex_home": config.codex_home,
@@ -143,9 +106,7 @@ fn profile_digest(config: &CodexConfig, executable: &PathBuf) -> Result<String, 
         "no_browser": config.no_browser,
         "term": config.term,
         "tmpdir": config.tmpdir,
-    });
-    let encoded = serde_json::to_vec(&material)?;
-    Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
+    }))
 }
 
 #[cfg(test)]
