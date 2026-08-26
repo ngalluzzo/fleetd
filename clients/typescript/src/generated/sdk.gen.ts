@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, Options as Options2, TDataShape } from './client/index.js';
-import type { AcknowledgeDeliveryData, AcknowledgeDeliveryErrors, AcknowledgeDeliveryResponses, AddChannelMemberData, AddChannelMemberErrors, AddChannelMemberResponses, ArchiveChannelData, ArchiveChannelErrors, ArchiveChannelResponses, ArmInvocationData, ArmInvocationErrors, ArmInvocationResponses, BlockDeliveryData, BlockDeliveryErrors, BlockDeliveryResponses, ClaimDeliveriesData, ClaimDeliveriesErrors, ClaimDeliveriesResponses, CompleteInvocationData, CompleteInvocationErrors, CompleteInvocationResponses, CreateAgentData, CreateAgentErrors, CreateAgentResponses, CreateBrowserChannelStreamGrantData, CreateBrowserChannelStreamGrantErrors, CreateBrowserChannelStreamGrantResponses, CreateChannelData, CreateChannelErrors, CreateChannelMessageData, CreateChannelMessageErrors, CreateChannelMessageResponses, CreateChannelResponses, GetHealthData, GetHealthResponses, GetOpenApiDocumentData, GetOpenApiDocumentResponses, ListAgentsData, ListAgentSeatsData, ListAgentSeatsErrors, ListAgentSeatsResponses, ListAgentsErrors, ListAgentsResponses, ListChannelMembersData, ListChannelMembersErrors, ListChannelMembersResponses, ListChannelMessagesData, ListChannelMessagesErrors, ListChannelMessagesResponses, ListChannelsData, ListChannelsErrors, ListChannelsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListDeliveryBlocksData, ListDeliveryBlocksErrors, ListDeliveryBlocksResponses, ListInvocationObservationsData, ListInvocationObservationsErrors, ListInvocationObservationsResponses, ListInvocationsData, ListInvocationsErrors, ListInvocationsResponses, ListPluginGenerationsData, ListPluginGenerationsErrors, ListPluginGenerationsResponses, ListSessionBindingsData, ListSessionBindingsErrors, ListSessionBindingsResponses, OpenDirectConversationData, OpenDirectConversationErrors, OpenDirectConversationResponses, RenameChannelData, RenameChannelErrors, RenameChannelResponses, ReserveInvocationsData, ReserveInvocationsErrors, ReserveInvocationsResponses, ResolveDeliveryBlockData, ResolveDeliveryBlockErrors, ResolveDeliveryBlockResponses, RetryDeliveryData, RetryDeliveryErrors, RetryDeliveryResponses, RotateAgentCredentialData, RotateAgentCredentialErrors, RotateAgentCredentialResponses } from './types.gen.js';
+import type { AcknowledgeDeliveryData, AcknowledgeDeliveryErrors, AcknowledgeDeliveryResponses, AddChannelMemberData, AddChannelMemberErrors, AddChannelMemberResponses, ArchiveChannelData, ArchiveChannelErrors, ArchiveChannelResponses, ArmInvocationData, ArmInvocationErrors, ArmInvocationResponses, BlockDeliveryData, BlockDeliveryErrors, BlockDeliveryResponses, ClaimDeliveriesData, ClaimDeliveriesErrors, ClaimDeliveriesResponses, CompleteInvocationData, CompleteInvocationErrors, CompleteInvocationResponses, CreateAgentData, CreateAgentErrors, CreateAgentResponses, CreateBrowserChannelStreamGrantData, CreateBrowserChannelStreamGrantErrors, CreateBrowserChannelStreamGrantResponses, CreateChannelData, CreateChannelErrors, CreateChannelMessageData, CreateChannelMessageErrors, CreateChannelMessageResponses, CreateChannelResponses, GetHealthData, GetHealthResponses, GetOpenApiDocumentData, GetOpenApiDocumentResponses, ListAgentsData, ListAgentSeatsData, ListAgentSeatsErrors, ListAgentSeatsResponses, ListAgentsErrors, ListAgentsResponses, ListChannelMembersData, ListChannelMembersErrors, ListChannelMembersResponses, ListChannelMessagesData, ListChannelMessagesErrors, ListChannelMessagesResponses, ListChannelsData, ListChannelsErrors, ListChannelsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListDeliveriesData, ListDeliveriesErrors, ListDeliveriesResponses, ListDeliveryBlocksData, ListDeliveryBlocksErrors, ListDeliveryBlocksResponses, ListInvocationObservationsData, ListInvocationObservationsErrors, ListInvocationObservationsResponses, ListInvocationsData, ListInvocationsErrors, ListInvocationsResponses, ListPluginGenerationsData, ListPluginGenerationsErrors, ListPluginGenerationsResponses, ListSessionBindingsData, ListSessionBindingsErrors, ListSessionBindingsResponses, OpenDirectConversationData, OpenDirectConversationErrors, OpenDirectConversationResponses, ReadFleetHealthData, ReadFleetHealthErrors, ReadFleetHealthResponses, RenameChannelData, RenameChannelErrors, RenameChannelResponses, ReserveInvocationsData, ReserveInvocationsErrors, ReserveInvocationsResponses, ResolveDeliveryBlockData, ResolveDeliveryBlockErrors, ResolveDeliveryBlockResponses, RetryDeliveryData, RetryDeliveryErrors, RetryDeliveryResponses, RotateAgentCredentialData, RotateAgentCredentialErrors, RotateAgentCredentialResponses, TraceInvocationData, TraceInvocationErrors, TraceInvocationResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -312,6 +312,17 @@ export const listConversations = <ThrowOnError extends boolean = false>(options?
 });
 
 /**
+ * List durable delivery state
+ *
+ * Operator-only. Returns pending, leased, blocked, acknowledged, or dead deliveries without exposing the lease token that owns them.
+ */
+export const listDeliveries = <ThrowOnError extends boolean = false>(options?: Options<ListDeliveriesData, ThrowOnError>) => (options?.client ?? client).get<ListDeliveriesResponses, ListDeliveriesErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/deliveries',
+    ...options
+});
+
+/**
  * List unresolved delivery blocks
  *
  * Operator-only. Results may be limited to one agent.
@@ -353,6 +364,17 @@ export const openDirectConversation = <ThrowOnError extends boolean = false>(opt
 });
 
 /**
+ * Read what the fleet is doing now
+ *
+ * Operator-only. One durable read reporting the current plugin generation per agent, the current generation of each session binding, the invocations still owed an outcome, and a delivery census including leases whose window has closed.
+ */
+export const readFleetHealth = <ThrowOnError extends boolean = false>(options?: Options<ReadFleetHealthData, ThrowOnError>) => (options?.client ?? client).get<ReadFleetHealthResponses, ReadFleetHealthErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/fleet-health',
+    ...options
+});
+
+/**
  * List bounded managed-turn observations
  *
  * Operator-only. Reports event counts, chain digests, terminal state, and usage without duplicating raw transcripts.
@@ -371,6 +393,17 @@ export const listInvocationObservations = <ThrowOnError extends boolean = false>
 export const listInvocations = <ThrowOnError extends boolean = false>(options?: Options<ListInvocationsData, ThrowOnError>) => (options?.client ?? client).get<ListInvocationsResponses, ListInvocationsErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/v1/invocations',
+    ...options
+});
+
+/**
+ * Trace one managed invocation
+ *
+ * Operator-only. Joins the exact source and result envelopes to bounded invocation, native-session, and plugin-generation evidence.
+ */
+export const traceInvocation = <ThrowOnError extends boolean = false>(options: Options<TraceInvocationData, ThrowOnError>) => (options.client ?? client).get<TraceInvocationResponses, TraceInvocationErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/invocations/{invocation_id}/trace',
     ...options
 });
 

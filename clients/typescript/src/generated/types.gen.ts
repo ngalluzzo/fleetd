@@ -283,6 +283,40 @@ export type Delivery = {
 };
 
 /**
+ * A census of durable delivery rows by state, plus the leases among them
+ * whose window has already closed.
+ *
+ * `inspected` is how many rows the census actually read, which a bounded
+ * read model may cap below the true total.
+ */
+export type DeliveryCensus = {
+    acknowledged: number;
+    blocked: number;
+    dead: number;
+    expired_leases: number;
+    inspected: number;
+    leased: number;
+    pending: number;
+};
+
+/**
+ * Read-only operator projection of one durable delivery.
+ */
+export type DeliveryRecord = {
+    acknowledged_at_ms?: number | null;
+    agent_id: string;
+    attempt: number;
+    available_at_ms: number;
+    created_at_ms: number;
+    last_error?: string | null;
+    lease_expired: boolean;
+    lease_expires_at_ms?: number | null;
+    message: Message;
+    state: DeliveryState;
+    unresolved_block_id?: number | null;
+};
+
+/**
  * Durable inbox state exposed to the operator without lease credentials.
  */
 export type DeliveryState = 'pending' | 'leased' | 'blocked' | 'acknowledged' | 'dead';
@@ -298,6 +332,22 @@ export type ErrorResponse = {
  * What fleetd can prove about an invocation's external execution.
  */
 export type ExecutionCertainty = 'not_started' | 'outcome_known' | 'outcome_unknown';
+
+/**
+ * What a fleet is doing right now, as one durable read.
+ *
+ * "Current" means the newest generation for each agent and the newest
+ * generation of each session binding; older rows for the same key are
+ * history, not health. Invocations are the ones still owed an outcome.
+ */
+export type FleetHealth = {
+    active_invocations: Array<Invocation>;
+    agent_id?: string | null;
+    current_plugin_generations: Array<PluginGeneration>;
+    current_session_bindings: Array<SessionBinding>;
+    deliveries: DeliveryCensus;
+    delivery_records: Array<DeliveryRecord>;
+};
 
 export type HealthResponse = {
     status: string;
@@ -390,6 +440,23 @@ export type InvocationObservation = {
  * Durable lifecycle state for one managed delivery attempt.
  */
 export type InvocationState = 'reserved' | 'dispatch_armed' | 'terminal';
+
+/**
+ * Exact operator trace joining one invocation to its bounded harness,
+ * plugin-generation, native-session, and result evidence.
+ *
+ * A reserved invocation carries none of it yet. Once an observation exists,
+ * the session and plugin generation it names must still be readable, so a
+ * present observation with an absent session is an integrity error rather
+ * than an empty field.
+ */
+export type InvocationTrace = {
+    invocation: Invocation;
+    observation?: null | InvocationObservation;
+    plugin_generation?: null | PluginGeneration;
+    result?: null | Message;
+    session?: null | SessionBinding;
+};
 
 /**
  * A newly issued credential. Its token is returned once and never persisted
@@ -1596,6 +1663,56 @@ export type ListConversationsResponses = {
 
 export type ListConversationsResponse = ListConversationsResponses[keyof ListConversationsResponses];
 
+export type ListDeliveriesData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Limit results to one agent ID.
+         */
+        agent?: string;
+        /**
+         * Limit results to one durable delivery state.
+         */
+        state?: DeliveryState;
+        /**
+         * Bound the returned read model.
+         */
+        limit?: number;
+    };
+    url: '/v1/deliveries';
+};
+
+export type ListDeliveriesErrors = {
+    /**
+     * Invalid list bounds
+     */
+    400: ErrorResponse;
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ListDeliveriesError = ListDeliveriesErrors[keyof ListDeliveriesErrors];
+
+export type ListDeliveriesResponses = {
+    /**
+     * Durable delivery records
+     */
+    200: Array<DeliveryRecord>;
+};
+
+export type ListDeliveriesResponse = ListDeliveriesResponses[keyof ListDeliveriesResponses];
+
 export type ListDeliveryBlocksData = {
     body?: never;
     path?: never;
@@ -1733,6 +1850,52 @@ export type OpenDirectConversationResponses = {
 
 export type OpenDirectConversationResponse = OpenDirectConversationResponses[keyof OpenDirectConversationResponses];
 
+export type ReadFleetHealthData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Limit the report to one agent ID.
+         */
+        agent?: string;
+        /**
+         * Bound how many delivery rows the census reads.
+         */
+        delivery_limit?: number;
+    };
+    url: '/v1/fleet-health';
+};
+
+export type ReadFleetHealthErrors = {
+    /**
+     * Invalid census bounds
+     */
+    400: ErrorResponse;
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ReadFleetHealthError = ReadFleetHealthErrors[keyof ReadFleetHealthErrors];
+
+export type ReadFleetHealthResponses = {
+    /**
+     * Bounded fleet health report
+     */
+    200: FleetHealth;
+};
+
+export type ReadFleetHealthResponse = ReadFleetHealthResponses[keyof ReadFleetHealthResponses];
+
 export type ListInvocationObservationsData = {
     body?: never;
     path?: never;
@@ -1808,6 +1971,48 @@ export type ListInvocationsResponses = {
 };
 
 export type ListInvocationsResponse = ListInvocationsResponses[keyof ListInvocationsResponses];
+
+export type TraceInvocationData = {
+    body?: never;
+    path: {
+        /**
+         * Stable invocation ID
+         */
+        invocation_id: string;
+    };
+    query?: never;
+    url: '/v1/invocations/{invocation_id}/trace';
+};
+
+export type TraceInvocationErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Invocation not found
+     */
+    404: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type TraceInvocationError = TraceInvocationErrors[keyof TraceInvocationErrors];
+
+export type TraceInvocationResponses = {
+    /**
+     * Exact durable invocation trace
+     */
+    200: InvocationTrace;
+};
+
+export type TraceInvocationResponse = TraceInvocationResponses[keyof TraceInvocationResponses];
 
 export type ListPluginGenerationsData = {
     body?: never;

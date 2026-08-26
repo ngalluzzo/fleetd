@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "1.5.0"
+    "version": "1.6.0"
   },
   "paths": {
     "/health": {
@@ -2236,6 +2236,109 @@
         ]
       }
     },
+    "/v1/deliveries": {
+      "get": {
+        "tags": [
+          "deliveries"
+        ],
+        "summary": "List durable delivery state",
+        "description": "Operator-only. Returns pending, leased, blocked, acknowledged, or dead deliveries without exposing the lease token that owns them.",
+        "operationId": "listDeliveries",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Limit results to one agent ID.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Limit results to one durable delivery state.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DeliveryState"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Bound the returned read model.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Durable delivery records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeliveryRecord"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid list bounds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1/delivery-blocks": {
       "get": {
         "tags": [
@@ -2517,6 +2620,97 @@
         ]
       }
     },
+    "/v1/fleet-health": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Read what the fleet is doing now",
+        "description": "Operator-only. One durable read reporting the current plugin generation per agent, the current generation of each session binding, the invocations still owed an outcome, and a delivery census including leases whose window has closed.",
+        "operationId": "readFleetHealth",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Limit the report to one agent ID.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "delivery_limit",
+            "in": "query",
+            "description": "Bound how many delivery rows the census reads.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 500,
+              "maximum": 500,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded fleet health report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetHealth"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid census bounds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1/invocation-observations": {
       "get": {
         "tags": [
@@ -2633,6 +2827,84 @@
           },
           "403": {
             "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/invocations/{invocation_id}/trace": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "Trace one managed invocation",
+        "description": "Operator-only. Joins the exact source and result envelopes to bounded invocation, native-session, and plugin-generation evidence.",
+        "operationId": "traceInvocation",
+        "parameters": [
+          {
+            "name": "invocation_id",
+            "in": "path",
+            "description": "Stable invocation ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact durable invocation trace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvocationTrace"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Invocation not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -3526,6 +3798,115 @@
           }
         }
       },
+      "DeliveryCensus": {
+        "type": "object",
+        "description": "A census of durable delivery rows by state, plus the leases among them\nwhose window has already closed.\n\n`inspected` is how many rows the census actually read, which a bounded\nread model may cap below the true total.",
+        "required": [
+          "inspected",
+          "pending",
+          "leased",
+          "expired_leases",
+          "blocked",
+          "acknowledged",
+          "dead"
+        ],
+        "properties": {
+          "acknowledged": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocked": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dead": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expired_leases": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inspected": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "leased": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pending": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "DeliveryRecord": {
+        "type": "object",
+        "description": "Read-only operator projection of one durable delivery.",
+        "required": [
+          "agent_id",
+          "message",
+          "state",
+          "attempt",
+          "available_at_ms",
+          "lease_expired",
+          "created_at_ms"
+        ],
+        "properties": {
+          "acknowledged_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "available_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lease_expired": {
+            "type": "boolean"
+          },
+          "lease_expires_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "message": {
+            "$ref": "#/components/schemas/Message"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DeliveryState"
+          },
+          "unresolved_block_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
       "DeliveryState": {
         "type": "string",
         "description": "Durable inbox state exposed to the operator without lease credentials.",
@@ -3557,6 +3938,52 @@
           "outcome_known",
           "outcome_unknown"
         ]
+      },
+      "FleetHealth": {
+        "type": "object",
+        "description": "What a fleet is doing right now, as one durable read.\n\n\"Current\" means the newest generation for each agent and the newest\ngeneration of each session binding; older rows for the same key are\nhistory, not health. Invocations are the ones still owed an outcome.",
+        "required": [
+          "current_plugin_generations",
+          "current_session_bindings",
+          "active_invocations",
+          "deliveries",
+          "delivery_records"
+        ],
+        "properties": {
+          "active_invocations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Invocation"
+            }
+          },
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current_plugin_generations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PluginGeneration"
+            }
+          },
+          "current_session_bindings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionBinding"
+            }
+          },
+          "deliveries": {
+            "$ref": "#/components/schemas/DeliveryCensus"
+          },
+          "delivery_records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeliveryRecord"
+            }
+          }
+        }
       },
       "HealthResponse": {
         "type": "object",
@@ -3891,6 +4318,58 @@
           "dispatch_armed",
           "terminal"
         ]
+      },
+      "InvocationTrace": {
+        "type": "object",
+        "description": "Exact operator trace joining one invocation to its bounded harness,\nplugin-generation, native-session, and result evidence.\n\nA reserved invocation carries none of it yet. Once an observation exists,\nthe session and plugin generation it names must still be readable, so a\npresent observation with an absent session is an integrity error rather\nthan an empty field.",
+        "required": [
+          "invocation"
+        ],
+        "properties": {
+          "invocation": {
+            "$ref": "#/components/schemas/Invocation"
+          },
+          "observation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/InvocationObservation"
+              }
+            ]
+          },
+          "plugin_generation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PluginGeneration"
+              }
+            ]
+          },
+          "result": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Message"
+              }
+            ]
+          },
+          "session": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SessionBinding"
+              }
+            ]
+          }
+        }
       },
       "IssuedCredential": {
         "type": "object",

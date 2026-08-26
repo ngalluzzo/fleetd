@@ -10,7 +10,10 @@ use utoipa::IntoParams;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use fleetd_kernel::{auth::Principal, error::ErrorResponse};
-use fleetd_proto::model::{AckDelivery, BlockDelivery, ClaimDeliveries, ResolveDeliveryBlock, RetryDelivery};
+use fleetd_proto::model::{
+    AckDelivery, BlockDelivery, ClaimDeliveries, DeliveryRecord, DeliveryState,
+    ResolveDeliveryBlock, RetryDelivery,
+};
 
 use super::{
     AppState,
@@ -27,6 +30,55 @@ pub(super) fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(block_delivery))
         .routes(routes!(list_delivery_blocks))
         .routes(routes!(resolve_delivery_block))
+        .routes(routes!(list_deliveries))
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+struct DeliveryQuery {
+    /// Limit results to one agent ID.
+    agent: Option<String>,
+    /// Limit results to one durable delivery state.
+    state: Option<DeliveryState>,
+    /// Bound the returned read model.
+    #[serde(default = "default_delivery_list_limit")]
+    #[param(default = 100, minimum = 1, maximum = 500)]
+    limit: u32,
+}
+
+const fn default_delivery_list_limit() -> u32 {
+    100
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/deliveries",
+    operation_id = "listDeliveries",
+    tag = "deliveries",
+    summary = "List durable delivery state",
+    description = "Operator-only. Returns pending, leased, blocked, acknowledged, or dead deliveries without exposing the lease token that owns them.",
+    security(("bearerAuth" = [])),
+    params(DeliveryQuery),
+    responses(
+        (status = 200, description = "Durable delivery records", body = [DeliveryRecord]),
+        (status = 400, description = "Invalid list bounds", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn list_deliveries(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<DeliveryQuery>,
+) -> Result<Json<Vec<DeliveryRecord>>, ApiError> {
+    require_operator(&principal)?;
+    Ok(Json(
+        state
+            .store
+            .list_deliveries(query.agent.as_deref(), query.state, query.limit)
+            .await?,
+    ))
 }
 
 #[utoipa::path(

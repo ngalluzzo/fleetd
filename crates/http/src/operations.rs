@@ -2,7 +2,7 @@
 
 use axum::{
     Extension, Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
 };
 use serde::Deserialize;
 use utoipa::IntoParams;
@@ -25,6 +25,84 @@ pub(super) fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_plugin_generations))
         .routes(routes!(list_invocation_observations))
         .routes(routes!(list_session_bindings))
+        .routes(routes!(trace_invocation))
+        .routes(routes!(read_fleet_health))
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+struct FleetHealthQuery {
+    /// Limit the report to one agent ID.
+    agent: Option<String>,
+    /// Bound how many delivery rows the census reads.
+    #[serde(default = "default_census_limit")]
+    #[param(default = 500, minimum = 1, maximum = 500)]
+    delivery_limit: u32,
+}
+
+const fn default_census_limit() -> u32 {
+    500
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/invocations/{invocation_id}/trace",
+    operation_id = "traceInvocation",
+    tag = "operations",
+    summary = "Trace one managed invocation",
+    description = "Operator-only. Joins the exact source and result envelopes to bounded invocation, native-session, and plugin-generation evidence.",
+    security(("bearerAuth" = [])),
+    params(("invocation_id" = String, Path, description = "Stable invocation ID")),
+    responses(
+        (status = 200, description = "Exact durable invocation trace", body = fleetd_execution::operations::InvocationTrace),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 404, description = "Invocation not found", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn trace_invocation(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path(invocation_id): Path<String>,
+) -> Result<Json<fleetd_execution::operations::InvocationTrace>, ApiError> {
+    require_operator(&principal)?;
+    Ok(Json(
+        fleetd_execution::operations::invocation_trace(&state.store, &invocation_id).await?,
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/fleet-health",
+    operation_id = "readFleetHealth",
+    tag = "operations",
+    summary = "Read what the fleet is doing now",
+    description = "Operator-only. One durable read reporting the current plugin generation per agent, the current generation of each session binding, the invocations still owed an outcome, and a delivery census including leases whose window has closed.",
+    security(("bearerAuth" = [])),
+    params(FleetHealthQuery),
+    responses(
+        (status = 200, description = "Bounded fleet health report", body = fleetd_execution::health::FleetHealth),
+        (status = 400, description = "Invalid census bounds", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn read_fleet_health(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<FleetHealthQuery>,
+) -> Result<Json<fleetd_execution::health::FleetHealth>, ApiError> {
+    require_operator(&principal)?;
+    Ok(Json(
+        fleetd_execution::health::fleet_health(
+            &state.store,
+            query.agent.as_deref(),
+            query.delivery_limit,
+        )
+        .await?,
+    ))
 }
 
 #[utoipa::path(

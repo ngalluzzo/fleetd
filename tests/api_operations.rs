@@ -86,3 +86,100 @@ async fn an_agent_with_no_worker_projects_as_an_unmanaged_seat() {
         .expect("agent seat request");
     assert_eq!(forbidden.status(), reqwest::StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn tracing_an_unknown_invocation_is_a_not_found_for_the_operator_alone() {
+    let server = Daemon::start().await;
+    let agent = server.register("trace-reader").await;
+    let path = "/v1/invocations/missing-invocation/trace";
+
+    let forbidden = server
+        .get(path, Some(&agent.credential.token))
+        .send()
+        .await
+        .expect("agent trace response");
+    assert_eq!(forbidden.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let missing = server
+        .get(path, Some(&server.operator_token))
+        .send()
+        .await
+        .expect("operator trace response");
+    assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn fleet_health_is_operator_only_and_bounds_its_census() {
+    let server = Daemon::start().await;
+    let agent = server.register("health-reader").await;
+
+    let forbidden = server
+        .get("/v1/fleet-health", Some(&agent.credential.token))
+        .send()
+        .await
+        .expect("agent health response");
+    assert_eq!(forbidden.status(), reqwest::StatusCode::FORBIDDEN);
+
+    // An idle fleet reports an empty census rather than an absent one, so an
+    // operator can tell "nothing running" from "nothing known".
+    let report = server
+        .get("/v1/fleet-health", Some(&server.operator_token))
+        .send()
+        .await
+        .expect("operator health response")
+        .error_for_status()
+        .expect("operator health status")
+        .json::<serde_json::Value>()
+        .await
+        .expect("health body");
+    assert_eq!(
+        report,
+        json!({
+            "agent_id": null,
+            "current_plugin_generations": [],
+            "current_session_bindings": [],
+            "active_invocations": [],
+            "delivery_records": [],
+            "deliveries": {
+                "inspected": 0,
+                "pending": 0,
+                "leased": 0,
+                "expired_leases": 0,
+                "blocked": 0,
+                "acknowledged": 0,
+                "dead": 0
+            }
+        })
+    );
+
+    let scoped = server
+        .get(
+            &format!("/v1/fleet-health?agent={}", agent.agent.id),
+            Some(&server.operator_token),
+        )
+        .send()
+        .await
+        .expect("scoped health response")
+        .error_for_status()
+        .expect("scoped health status")
+        .json::<serde_json::Value>()
+        .await
+        .expect("scoped health body");
+    assert_eq!(scoped["agent_id"], json!(agent.agent.id));
+
+    for bad in ["0", "501"] {
+        let rejected = server
+            .get(
+                &format!("/v1/fleet-health?delivery_limit={bad}"),
+                Some(&server.operator_token),
+            )
+            .send()
+            .await
+            .expect("bounded health response");
+        assert_eq!(
+            rejected.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "delivery_limit={bad} must be refused"
+        );
+    }
+}
