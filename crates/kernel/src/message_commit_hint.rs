@@ -10,13 +10,14 @@ use sha2::{Digest, Sha256};
 use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-use crate::{error::FleetError, model::Message};
+use crate::error::FleetError;
+use fleetd_proto::model::Message;
 
 const HINT_BYTE: u8 = 1;
 
 /// One process-local or cross-process reason to reconcile durable messages.
 #[derive(Clone, Debug)]
-pub(crate) enum MessageCommitWake {
+pub enum MessageCommitWake {
     Committed(Box<Message>),
     External,
 }
@@ -60,7 +61,7 @@ impl MessageCommitNotifier {
 }
 
 /// Daemon-owned bridge from a private local datagram to the in-process bus.
-pub(crate) struct MessageCommitHintBridge {
+pub struct MessageCommitHintBridge {
     #[cfg(unix)]
     cancellation: CancellationToken,
     #[cfg(unix)]
@@ -70,7 +71,12 @@ pub(crate) struct MessageCommitHintBridge {
 }
 
 impl MessageCommitHintBridge {
-    pub(crate) fn bind(
+    /// Kernel operation used by the layers above.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the private local datagram cannot be bound, or is already owned by another daemon for the same database.
+    pub fn bind(
         database_path: &Path,
         wakes: broadcast::Sender<MessageCommitWake>,
     ) -> Result<Self, FleetError> {

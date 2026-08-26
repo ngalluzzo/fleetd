@@ -12,9 +12,9 @@ use uuid::Uuid;
 
 use crate::{
     error::FleetError,
-    model::{Agent, CreateAgent, IssuedCredential, RegisteredAgent},
     store::{Store, map_unique_conflict, now_ms, validate_name},
 };
+use fleetd_proto::model::{Agent, CreateAgent, IssuedCredential, RegisteredAgent};
 
 const OPERATOR_TOKEN_PREFIX: &str = "fl_op_";
 const AGENT_TOKEN_PREFIX: &str = "fl_ag_";
@@ -51,7 +51,7 @@ impl Principal {
 
     /// Returns the exact credential that authenticated this principal.
     #[must_use]
-    pub(crate) fn credential_id(&self) -> &str {
+    pub fn credential_id(&self) -> &str {
         match self {
             Self::Operator { credential_id } | Self::Agent { credential_id, .. } => credential_id,
         }
@@ -167,10 +167,11 @@ impl AuthService {
 
     /// Revalidates an exact credential-bound principal without accepting or
     /// returning raw credential material.
-    pub(crate) async fn revalidate_principal(
-        &self,
-        expected: &Principal,
-    ) -> Result<bool, FleetError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the credential can no longer be read.
+    pub async fn revalidate_principal(&self, expected: &Principal) -> Result<bool, FleetError> {
         let row = sqlx::query(
             r"
             SELECT principal_kind, agent_id

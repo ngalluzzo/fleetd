@@ -1,0 +1,31 @@
+[package]
+name = "fleetd-kernel"
+version = "0.1.0"
+edition = "2024"
+description = "Agents, channels, membership, immutable messages, deliveries, and principals"
+license = "MIT"
+
+# The kernel owns the authoritative store and nothing else. No web framework, no
+# HTTP client, no plugin process: rendering, transport, and execution are all
+# decisions made above it. `tests/crate_boundaries.rs` enforces that.
+[dependencies]
+base64 = "0.22"
+fleetd-proto = { path = "../proto" }
+getrandom = "0.3"
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", features = ["migrate", "runtime-tokio", "sqlite"] }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

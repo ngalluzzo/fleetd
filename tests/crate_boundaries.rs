@@ -196,34 +196,36 @@ fn re_export_statements(source: &str) -> Vec<String> {
 fn crate_root_re_exports_modules_only() {
     let lib = fs::read_to_string(workspace_root().join("src/lib.rs")).expect("crate root");
     for statement in re_export_statements(&lib) {
-        assert!(
-            !statement.contains('{'),
-            "crate root re-exports individual items: `{statement}`. A flat root list is a \
-             conflict magnet — every change appends to the same sorted block. Let consumers \
-             name the owning module instead."
-        );
-        let last = statement
-            .trim_end_matches(';')
-            .rsplit("::")
-            .next()
-            .expect("re-export path segment");
-        assert!(
-            last.chars().next().is_some_and(char::is_lowercase),
-            "crate root re-exports the type `{last}`. Only whole modules may be re-exported \
-             from the root."
-        );
+        // A module re-export may be grouped: `pub use other::{alpha, beta};`.
+        // What may never appear at the root is an individual type.
+        let path = statement
+            .trim_start_matches("pub use ")
+            .trim_end_matches(';');
+        let leaves: Vec<&str> = match (path.find('{'), path.rfind('}')) {
+            (Some(open), Some(close)) => path[open + 1..close].split(',').collect(),
+            _ => vec![path.rsplit("::").next().expect("re-export path segment")],
+        };
+        for leaf in leaves {
+            let name = leaf
+                .trim()
+                .rsplit("::")
+                .next()
+                .expect("re-export leaf")
+                .split_whitespace()
+                .next_back()
+                .expect("re-export leaf name");
+            assert!(
+                name.chars().next().is_some_and(char::is_lowercase),
+                "crate root re-exports the type `{name}` in `{statement}`. A flat root list \
+                 is a conflict magnet — every change appends to the same block. Re-export \
+                 whole modules and let consumers name the one they depend on."
+            );
+        }
     }
 }
 
 /// The six concepts ARCHITECTURE.md gives the kernel, as modules.
-const KERNEL_MODULES: [&str; 6] = [
-    "auth",
-    "delivery",
-    "error",
-    "message_commit_hint",
-    "model",
-    "store",
-];
+const KERNEL_MODULES: [&str; 5] = ["auth", "delivery", "error", "message_commit_hint", "store"];
 
 /// Everything layered above the kernel.
 const ABOVE_KERNEL: [&str; 9] = [
@@ -259,10 +261,9 @@ fn references(source: &str, module: &str) -> bool {
 #[test]
 fn the_kernel_does_not_depend_on_what_is_layered_above_it() {
     for module in KERNEL_MODULES {
-        let path = workspace_root().join(format!("src/{module}.rs"));
-        let Ok(source) = fs::read_to_string(&path) else {
-            continue;
-        };
+        let path = workspace_root().join(format!("crates/kernel/src/{module}.rs"));
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("kernel module {module} at {}", path.display()));
         for above in ABOVE_KERNEL {
             assert!(
                 !references(&source, above),
@@ -323,15 +324,51 @@ fn only_the_kernel_adds_methods_to_the_store() {
 #[test]
 fn the_kernel_does_not_speak_http() {
     for module in KERNEL_MODULES {
-        let path = workspace_root().join(format!("src/{module}.rs"));
-        let Ok(source) = fs::read_to_string(&path) else {
-            continue;
-        };
+        let path = workspace_root().join(format!("crates/kernel/src/{module}.rs"));
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("kernel module {module} at {}", path.display()));
         for forbidden in ["axum", "utoipa", "reqwest"] {
             assert!(
                 !source.contains(forbidden),
                 "kernel module `{module}` references `{forbidden}`. Rendering a domain error \
                  as a status code is the HTTP layer's decision — see `api::error::ApiError`."
+            );
+        }
+    }
+}
+
+/// Everything `fleetd-kernel` is allowed to depend on.
+///
+/// The kernel owns the authoritative store. A web framework, an HTTP client, or
+/// a plugin process here would mean every consumer of durable state builds them.
+const KERNEL_ALLOWED_DEPENDENCIES: [&str; 11] = [
+    "base64",
+    "fleetd-proto",
+    "getrandom",
+    "serde_json",
+    "sha2",
+    "sqlx",
+    "tempfile",
+    "thiserror",
+    "tokio",
+    "tokio-util",
+    "tracing",
+];
+
+#[test]
+fn the_kernel_crate_depends_only_on_storage_crates() {
+    let manifest = fs::read_to_string(workspace_root().join("crates/kernel/Cargo.toml"))
+        .expect("kernel manifest");
+    for table in [
+        "[dependencies]",
+        "[dev-dependencies]",
+        "[build-dependencies]",
+    ] {
+        for dependency in declared_dependencies(&manifest, table) {
+            assert!(
+                KERNEL_ALLOWED_DEPENDENCIES.contains(&dependency.as_str()) || dependency == "uuid",
+                "fleetd-kernel {table} contains `{dependency}`. The kernel persists the six \
+                 concepts and nothing else; see KERNEL_ALLOWED_DEPENDENCIES."
             );
         }
     }

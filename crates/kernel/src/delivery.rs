@@ -9,11 +9,11 @@ use sqlx::Row;
 
 use crate::{
     error::FleetError,
-    model::{
-        BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries, Delivery,
-        ResolveDeliveryBlock, RetryDelivery,
-    },
     store::{Store, message_from_row, now_ms},
+};
+use fleetd_proto::model::{
+    BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries, Delivery,
+    ResolveDeliveryBlock, RetryDelivery,
 };
 
 const MAX_CLAIM_LIMIT: u32 = 100;
@@ -103,7 +103,12 @@ impl Store {
     }
 }
 
-pub(crate) fn validate_claim(input: &ClaimDeliveries) -> Result<(), FleetError> {
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error for a limit or lease duration outside its bounds.
+pub fn validate_claim(input: &ClaimDeliveries) -> Result<(), FleetError> {
     if input.limit == 0 || input.limit > MAX_CLAIM_LIMIT {
         return Err(FleetError::Invalid(format!(
             "claim limit must be between 1 and {MAX_CLAIM_LIMIT}"
@@ -117,7 +122,12 @@ pub(crate) fn validate_claim(input: &ClaimDeliveries) -> Result<(), FleetError> 
     Ok(())
 }
 
-pub(crate) fn validate_retry(input: &RetryDelivery) -> Result<(), FleetError> {
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error for a malformed token, an oversized error string, or a retry delay outside its bounds.
+pub fn validate_retry(input: &RetryDelivery) -> Result<(), FleetError> {
     validate_token(&input.lease_token)?;
     if input.retry_after_ms > MAX_RETRY_DELAY_MS {
         return Err(FleetError::Invalid(format!(
@@ -136,7 +146,12 @@ pub(crate) fn validate_retry(input: &RetryDelivery) -> Result<(), FleetError> {
     Ok(())
 }
 
-pub(crate) fn validate_block(input: &BlockDelivery) -> Result<(), FleetError> {
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error for a malformed token or oversized evidence.
+pub fn validate_block(input: &BlockDelivery) -> Result<(), FleetError> {
     validate_token(&input.lease_token)?;
     validate_evidence("block reason", Some(&input.reason))
 }
@@ -172,7 +187,12 @@ fn validate_evidence(label: &str, value: Option<&str>) -> Result<(), FleetError>
     Ok(())
 }
 
-pub(crate) fn validate_token(lease_token: &str) -> Result<(), FleetError> {
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error when the token is empty or malformed.
+pub fn validate_token(lease_token: &str) -> Result<(), FleetError> {
     if lease_token.trim().is_empty() {
         return Err(FleetError::Invalid(
             "lease token must not be empty".to_owned(),
@@ -181,10 +201,12 @@ pub(crate) fn validate_token(lease_token: &str) -> Result<(), FleetError> {
     Ok(())
 }
 
-pub(crate) async fn ensure_agent(
-    pool: &sqlx::SqlitePool,
-    agent_id: &str,
-) -> Result<(), FleetError> {
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error when the agent does not exist or cannot be read.
+pub async fn ensure_agent(pool: &sqlx::SqlitePool, agent_id: &str) -> Result<(), FleetError> {
     let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agents WHERE id = ?")
         .bind(agent_id)
         .fetch_one(pool)
@@ -198,7 +220,12 @@ pub(crate) async fn ensure_agent(
     Ok(())
 }
 
-pub(crate) async fn settle_miss(
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error when the delivery is unknown, or when the lease is expired, foreign, or settled differently.
+pub async fn settle_miss(
     pool: &sqlx::SqlitePool,
     agent_id: &str,
     message_id: &str,
@@ -235,7 +262,12 @@ pub(crate) async fn settle_miss(
     ))
 }
 
-pub(crate) async fn insert_block_record(
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error when the blocked delivery changed before its evidence was recorded.
+pub async fn insert_block_record(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     message_id: &str,
@@ -268,7 +300,12 @@ pub(crate) async fn insert_block_record(
     Ok(result.last_insert_rowid())
 }
 
-pub(crate) async fn blocked_delivery_by_id(
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error when the block record is unknown or cannot be decoded.
+pub async fn blocked_delivery_by_id(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     block_id: i64,
 ) -> Result<BlockedDelivery, FleetError> {
@@ -285,7 +322,12 @@ pub(crate) async fn blocked_delivery_by_id(
         })
 }
 
-pub(crate) async fn blocked_delivery_by_lease(
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error when stored rows cannot be read or decoded.
+pub async fn blocked_delivery_by_lease(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     message_id: &str,
@@ -440,7 +482,12 @@ const fn resolution_name(resolution: &BlockResolution) -> &'static str {
     }
 }
 
-pub(crate) fn delivery_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Delivery, FleetError> {
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error when the row cannot be decoded.
+pub fn delivery_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Delivery, FleetError> {
     Ok(Delivery {
         message: message_from_row(row)?,
         attempt: row.try_get("attempt")?,
@@ -458,7 +505,7 @@ pub(crate) fn delivery_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Deliver
 /// # Errors
 ///
 /// Returns an error when the update cannot be applied.
-pub(crate) async fn lease_claimable(
+pub async fn lease_claimable(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     lease_token: &str,
@@ -509,7 +556,7 @@ pub(crate) async fn lease_claimable(
 /// # Errors
 ///
 /// Returns an error when stored rows cannot be read or decoded.
-pub(crate) async fn leased_batch(
+pub async fn leased_batch(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     lease_token: &str,
@@ -540,7 +587,7 @@ pub(crate) async fn leased_batch(
 /// # Errors
 ///
 /// Returns an error when the update cannot be applied.
-pub(crate) async fn mark_acknowledged(
+pub async fn mark_acknowledged(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     message_id: &str,
@@ -581,7 +628,7 @@ pub(crate) async fn mark_acknowledged(
 /// # Errors
 ///
 /// Returns an error when the update cannot be applied.
-pub(crate) async fn mark_retry(
+pub async fn mark_retry(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     message_id: &str,
@@ -626,7 +673,7 @@ pub(crate) async fn mark_retry(
 /// # Errors
 ///
 /// Returns an error when the update cannot be applied.
-pub(crate) async fn mark_blocked(
+pub async fn mark_blocked(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     message_id: &str,
@@ -668,7 +715,7 @@ pub(crate) async fn mark_blocked(
 /// # Errors
 ///
 /// Returns an error when the update cannot be applied.
-pub(crate) async fn block_expired_lease(
+pub async fn block_expired_lease(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     message_seq: i64,
@@ -702,7 +749,7 @@ pub(crate) async fn block_expired_lease(
 /// # Errors
 ///
 /// Returns an error when the insert cannot be applied.
-pub(crate) async fn record_block(
+pub async fn record_block(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     message_seq: i64,
     agent_id: &str,
@@ -736,7 +783,7 @@ pub(crate) async fn record_block(
 /// # Errors
 ///
 /// Returns an error when the update cannot be applied.
-pub(crate) async fn acknowledge_leased_seq(
+pub async fn acknowledge_leased_seq(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     message_seq: i64,

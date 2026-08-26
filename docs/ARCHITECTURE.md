@@ -15,6 +15,14 @@ The kernel does not know what Codex, OpenCode, DSH, a task, a pull request, a
 workflow, or a semantic capability is. Adapters select exact message kinds but
 the kernel preserves every kind and payload opaquely.
 
+`fleetd-kernel` is that boundary as a crate. It owns the authoritative SQLite
+store, its migrations, and every transition its own rows can make, and it is
+the only crate holding a connection pool. It depends on storage and
+serialization crates alone: no web framework, no HTTP client, no plugin
+process. Layers above enlist their work in a kernel transaction through
+`Store::begin_immediate`, so state the kernel owns and state they own commit
+together without either reaching into the other.
+
 ## Data path
 
 An HTTP write is validated against channel membership and committed to SQLite.

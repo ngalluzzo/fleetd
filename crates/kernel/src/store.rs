@@ -8,14 +8,11 @@ use sqlx::{
 };
 use uuid::Uuid;
 
-use crate::{
-    error::FleetError,
-    message_commit_hint::MessageCommitNotifier,
-    model::{
-        Agent, Channel, ChannelMember, ConversationKind, ConversationSummary, CreateAgent,
-        CreateChannel, CreateChannelMember, CreateMessage, MembershipDeliveryMode, Message,
-        MessagePage, OpenDirectConversation,
-    },
+use crate::{error::FleetError, message_commit_hint::MessageCommitNotifier};
+use fleetd_proto::model::{
+    Agent, Channel, ChannelMember, ConversationKind, ConversationSummary, CreateAgent,
+    CreateChannel, CreateChannelMember, CreateMessage, MembershipDeliveryMode, Message,
+    MessagePage, OpenDirectConversation,
 };
 
 const MAX_IDEMPOTENCY_KEY_LENGTH: usize = 256;
@@ -736,7 +733,12 @@ fn message_matches_input(message: &Message, channel_id: &str, input: &CreateMess
         && message.causation_id == input.causation_id
 }
 
-pub(crate) async fn insert_message(
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error for an unknown channel, a non-member sender or recipient, a conflicting idempotency key, or a persistence failure.
+pub async fn insert_message(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     channel_id: &str,
     input: CreateMessage,
@@ -847,7 +849,12 @@ async fn insert_delivery_snapshot(
     Ok(())
 }
 
-pub(crate) fn validate_name(entity: &str, name: &str) -> Result<(), FleetError> {
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error when the name is empty or exceeds its bound.
+pub fn validate_name(entity: &str, name: &str) -> Result<(), FleetError> {
     if name.trim().is_empty() {
         return Err(FleetError::Invalid(format!(
             "{entity} name must not be empty"
@@ -856,7 +863,12 @@ pub(crate) fn validate_name(entity: &str, name: &str) -> Result<(), FleetError> 
     Ok(())
 }
 
-pub(crate) fn map_unique_conflict(
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns the mapped conflict, or the original error when it is not a uniqueness violation.
+pub fn map_unique_conflict(
     result: Result<sqlx::sqlite::SqliteQueryResult, sqlx::Error>,
     field: &str,
 ) -> Result<(), FleetError> {
@@ -1121,7 +1133,12 @@ fn channel_member_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<ChannelMembe
     })
 }
 
-pub(crate) fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Message, FleetError> {
+/// Kernel operation used by the layers above.
+///
+/// # Errors
+///
+/// Returns an error when the row cannot be decoded.
+pub fn message_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Message, FleetError> {
     Ok(Message {
         seq: row.try_get("seq")?,
         id: row.try_get("id")?,
@@ -1140,7 +1157,8 @@ fn parse_json(value: &str) -> Result<Value, FleetError> {
     Ok(serde_json::from_str(value)?)
 }
 
-pub(crate) fn now_ms() -> i64 {
+#[must_use]
+pub fn now_ms() -> i64 {
     let millis = SystemTime::UNIX_EPOCH
         .elapsed()
         .map_or(0, |time| time.as_millis());

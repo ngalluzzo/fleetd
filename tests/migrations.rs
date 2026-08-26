@@ -40,7 +40,7 @@ async fn conversation_lifecycle_migration_preserves_channels_as_active_shared_co
     .expect("create pre-0010 state");
 
     sqlx::raw_sql(include_str!(
-        "../migrations/0010_conversation_lifecycle.sql"
+        "../crates/kernel/migrations/0010_conversation_lifecycle.sql"
     ))
     .execute(&mut connection)
     .await
@@ -115,7 +115,7 @@ async fn membership_delivery_migration_preserves_existing_rows_and_deliveries() 
     .expect("create pre-0009 state");
 
     sqlx::raw_sql(include_str!(
-        "../migrations/0009_channel_membership_delivery_mode.sql"
+        "../crates/kernel/migrations/0009_channel_membership_delivery_mode.sql"
     ))
     .execute(&mut connection)
     .await

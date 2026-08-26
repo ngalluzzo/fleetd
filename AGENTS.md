@@ -16,6 +16,9 @@ Read `VISION.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, and
   authenticated principal, not caller-supplied identity fields.
 - Keep network listeners on loopback until encrypted transport and enrollment
   are explicitly implemented.
+- The kernel is `crates/kernel` and holds the only connection pool. Compose
+  above it with free functions over `&Store`; never add methods to `Store` or
+  reach for the pool from outside.
 - Keep every delivery row transition in the kernel and compose it with the
   invocation fence above the kernel. Nothing layered above may write a kernel
   table directly.
