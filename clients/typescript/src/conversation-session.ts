@@ -261,6 +261,24 @@ export class ConversationSession {
     }
   }
 
+  /**
+   * Leaves the selected conversation without discarding its retained replay
+   * cursor. Presentation targets use this after a lifecycle mutation makes the
+   * active lane read-only or hidden.
+   */
+  clearSelection(): void {
+    this.#assertOpen();
+    this.#cancelSelection?.();
+    this.#cancelSelection = undefined;
+    this.#selectionGeneration += 1;
+    const selected = this.#selectedLane();
+    this.#selectedChannelId = null;
+    selected?.stream?.close();
+    this.#phase = "ready";
+    this.#error = null;
+    this.#publish();
+  }
+
   async send(message: SendMessage): Promise<Message> {
     this.#assertOpen();
     const lane = this.#selectedLane();

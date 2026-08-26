@@ -12,11 +12,12 @@
     "./browser-channel-stream": "./src/browser-channel-stream.ts",
     "./conversation": "./src/conversation-session.ts",
     "./conversation-transport": "./src/conversation-transport.ts",
+    "./operator": "./src/operator-client.ts",
     "./client": "./src/generated/client.gen.ts"
   },
   "scripts": {
     "generate": "openapi-ts",
-    "test": "node --experimental-strip-types --test test/*.test.mjs",
+    "test": "node --experimental-strip-types --test test/browser-channel-stream.test.mjs test/conversation-session.test.mjs && bun test test/operator-client.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

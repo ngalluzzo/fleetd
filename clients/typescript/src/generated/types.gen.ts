@@ -140,8 +140,10 @@ export type BrowserStreamServerFrame = {
  * A durable conversation shared by a bounded set of agents.
  */
 export type Channel = {
+    archived_at_ms?: number | null;
     created_at_ms: number;
     id: string;
+    kind: ConversationKind;
     metadata: unknown;
     name: string;
 };
@@ -185,6 +187,26 @@ export type CompleteInvocation = {
 };
 
 /**
+ * The durable conversation lifecycle selected by fleetd.
+ */
+export type ConversationKind = 'shared' | 'direct';
+
+/**
+ * One conversation with bounded participant and recency metadata for clients.
+ */
+export type ConversationSummary = {
+    archived_at_ms?: number | null;
+    created_at_ms: number;
+    id: string;
+    kind: ConversationKind;
+    latest_message_at_ms?: number | null;
+    latest_message_seq?: number | null;
+    members: Array<ChannelMember>;
+    metadata: unknown;
+    name: string;
+};
+
+/**
  * Input for registering an agent.
  */
 export type CreateAgent = {
@@ -193,7 +215,7 @@ export type CreateAgent = {
 };
 
 /**
- * Input for creating a channel and its initial membership.
+ * Input for creating a shared channel and its initial membership.
  */
 export type CreateChannel = {
     member_ids?: Array<string>;
@@ -372,6 +394,17 @@ export type ObservedPluginInterface = {
 };
 
 /**
+ * Input for idempotently opening a one-to-one direct conversation.
+ */
+export type OpenDirectConversation = {
+    /**
+     * Exactly two distinct participants. Their delivery modes become
+     * immutable with the direct conversation.
+     */
+    members: Array<CreateChannelMember>;
+};
+
+/**
  * Durable operator read model for one ready plugin generation.
  */
 export type PluginGeneration = {
@@ -432,6 +465,13 @@ export type PluginShutdownOutcome = 'graceful' | 'forced' | 'failed';
 export type RegisteredAgent = {
     agent: Agent;
     credential: IssuedCredential;
+};
+
+/**
+ * Input for renaming a shared channel.
+ */
+export type RenameChannel = {
+    name: string;
 };
 
 /**
@@ -1092,6 +1132,102 @@ export type CreateChannelResponses = {
 
 export type CreateChannelResponse = CreateChannelResponses[keyof CreateChannelResponses];
 
+export type RenameChannelData = {
+    body: RenameChannel;
+    path: {
+        /**
+         * Shared channel ID
+         */
+        channel_id: string;
+    };
+    query?: never;
+    url: '/v1/channels/{channel_id}';
+};
+
+export type RenameChannelErrors = {
+    /**
+     * Invalid channel name
+     */
+    400: ErrorResponse;
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Channel not found
+     */
+    404: ErrorResponse;
+    /**
+     * Direct, archived, or duplicate channel name
+     */
+    409: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type RenameChannelError = RenameChannelErrors[keyof RenameChannelErrors];
+
+export type RenameChannelResponses = {
+    /**
+     * Renamed channel
+     */
+    200: Channel;
+};
+
+export type RenameChannelResponse = RenameChannelResponses[keyof RenameChannelResponses];
+
+export type ArchiveChannelData = {
+    body?: never;
+    path: {
+        /**
+         * Shared channel ID
+         */
+        channel_id: string;
+    };
+    query?: never;
+    url: '/v1/channels/{channel_id}/archive';
+};
+
+export type ArchiveChannelErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Channel not found
+     */
+    404: ErrorResponse;
+    /**
+     * Direct conversations cannot be archived
+     */
+    409: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ArchiveChannelError = ArchiveChannelErrors[keyof ArchiveChannelErrors];
+
+export type ArchiveChannelResponses = {
+    /**
+     * Archived channel
+     */
+    200: Channel;
+};
+
+export type ArchiveChannelResponse = ArchiveChannelResponses[keyof ArchiveChannelResponses];
+
 export type ListChannelMembersData = {
     body?: never;
     path: {
@@ -1339,6 +1475,44 @@ export type CreateBrowserChannelStreamGrantResponses = {
 
 export type CreateBrowserChannelStreamGrantResponse = CreateBrowserChannelStreamGrantResponses[keyof CreateBrowserChannelStreamGrantResponses];
 
+export type ListConversationsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Include archived shared channels. Defaults to false.
+         */
+        include_archived?: boolean;
+    };
+    url: '/v1/conversations';
+};
+
+export type ListConversationsErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ListConversationsError = ListConversationsErrors[keyof ListConversationsErrors];
+
+export type ListConversationsResponses = {
+    /**
+     * Conversation summaries
+     */
+    200: Array<ConversationSummary>;
+};
+
+export type ListConversationsResponse = ListConversationsResponses[keyof ListConversationsResponses];
+
 export type ListDeliveryBlocksData = {
     body?: never;
     path?: never;
@@ -1426,6 +1600,55 @@ export type ResolveDeliveryBlockResponses = {
 };
 
 export type ResolveDeliveryBlockResponse = ResolveDeliveryBlockResponses[keyof ResolveDeliveryBlockResponses];
+
+export type OpenDirectConversationData = {
+    body: OpenDirectConversation;
+    path?: never;
+    query?: never;
+    url: '/v1/direct-conversations';
+};
+
+export type OpenDirectConversationErrors = {
+    /**
+     * Invalid participant pair
+     */
+    400: ErrorResponse;
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Participant not found
+     */
+    404: ErrorResponse;
+    /**
+     * Existing pair uses different immutable delivery modes
+     */
+    409: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type OpenDirectConversationError = OpenDirectConversationErrors[keyof OpenDirectConversationErrors];
+
+export type OpenDirectConversationResponses = {
+    /**
+     * Existing exact-pair conversation
+     */
+    200: ConversationSummary;
+    /**
+     * Direct conversation created
+     */
+    201: ConversationSummary;
+};
+
+export type OpenDirectConversationResponse = OpenDirectConversationResponses[keyof OpenDirectConversationResponses];
 
 export type ListInvocationObservationsData = {
     body?: never;

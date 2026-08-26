@@ -95,3 +95,37 @@ await conversation.send({
 The session does not interpret agent execution, harness events, or application
 payload conformance. A future TUI supplies a native bearer-WebSocket transport
 to the same interface.
+
+## Operator collaboration client
+
+Channel lifecycle, direct conversations, and the agent directory use an
+operator-owned client separate from the participant-owned conversation
+session. Its request and response types come directly from the generated
+OpenAPI contract. Shared-channel mutations and idempotent one-to-one direct
+conversation opening are deliberately distinct methods:
+
+```ts
+import { createFleetdOperatorClient } from "@fleetd/client/operator";
+
+const operator = createFleetdOperatorClient({
+  origin: window.location.origin,
+  operatorCredential,
+});
+
+const conversations = await operator.listConversations();
+const direct = await operator.openDirectConversation({
+  members: [
+    { agent_id: humanAgentId, delivery_mode: "stream_only" },
+    { agent_id: workerAgentId, delivery_mode: "inbox" },
+  ],
+});
+
+await conversation.refreshChannels();
+await conversation.selectChannel(direct.id);
+```
+
+`listAgents`, `listPluginGenerations`, and `listSessionBindings` expose the
+authoritative public read models without manufacturing presence from them.
+HTTP failures throw `FleetdOperatorClientError`, whose `status` and generated
+`ErrorResponse` body allow presentations to distinguish authorization,
+not-found, and conflict failures without hand-written Fetch calls.

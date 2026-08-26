@@ -219,6 +219,35 @@ test("fences abandoned channel selection and resumes each retained cursor", asyn
   session.close();
 });
 
+test("clears a selected lane while retaining its replay cursor", async () => {
+  const transport = new FakeTransport();
+  const session = new ConversationSession(transport);
+  await session.start();
+  const selected = session.selectChannel("alpha");
+  const firstStream = transport.streams[0];
+  firstStream.setStatus("live");
+  await selected;
+  await firstStream.emit(message(4, "alpha"));
+
+  session.clearSelection();
+  assert.equal(firstStream.status, "closed");
+  assert.equal(session.snapshot.phase, "ready");
+  assert.equal(session.snapshot.selectedChannelId, null);
+  assert.deepEqual(session.snapshot.messages, []);
+  assert.deepEqual(session.snapshot.members, []);
+
+  const reselected = session.selectChannel("alpha");
+  const resumed = transport.streams[1];
+  assert.equal(resumed.options.after, 4);
+  resumed.setStatus("live");
+  await reselected;
+  assert.deepEqual(
+    session.snapshot.messages.map(({ seq }) => seq),
+    [4],
+  );
+  session.close();
+});
+
 test("fails closed on stable identity conflicts and wrong participant lanes", async () => {
   const transport = new FakeTransport();
   const session = new ConversationSession(transport);

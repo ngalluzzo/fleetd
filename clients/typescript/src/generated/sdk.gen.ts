@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, Options as Options2, TDataShape } from './client/index.js';
-import type { AcknowledgeDeliveryData, AcknowledgeDeliveryErrors, AcknowledgeDeliveryResponses, AddChannelMemberData, AddChannelMemberErrors, AddChannelMemberResponses, ArmInvocationData, ArmInvocationErrors, ArmInvocationResponses, BlockDeliveryData, BlockDeliveryErrors, BlockDeliveryResponses, ClaimDeliveriesData, ClaimDeliveriesErrors, ClaimDeliveriesResponses, CompleteInvocationData, CompleteInvocationErrors, CompleteInvocationResponses, CreateAgentData, CreateAgentErrors, CreateAgentResponses, CreateBrowserChannelStreamGrantData, CreateBrowserChannelStreamGrantErrors, CreateBrowserChannelStreamGrantResponses, CreateChannelData, CreateChannelErrors, CreateChannelMessageData, CreateChannelMessageErrors, CreateChannelMessageResponses, CreateChannelResponses, GetHealthData, GetHealthResponses, GetOpenApiDocumentData, GetOpenApiDocumentResponses, ListAgentsData, ListAgentsErrors, ListAgentsResponses, ListChannelMembersData, ListChannelMembersErrors, ListChannelMembersResponses, ListChannelMessagesData, ListChannelMessagesErrors, ListChannelMessagesResponses, ListChannelsData, ListChannelsErrors, ListChannelsResponses, ListDeliveryBlocksData, ListDeliveryBlocksErrors, ListDeliveryBlocksResponses, ListInvocationObservationsData, ListInvocationObservationsErrors, ListInvocationObservationsResponses, ListInvocationsData, ListInvocationsErrors, ListInvocationsResponses, ListPluginGenerationsData, ListPluginGenerationsErrors, ListPluginGenerationsResponses, ListSessionBindingsData, ListSessionBindingsErrors, ListSessionBindingsResponses, ReserveInvocationsData, ReserveInvocationsErrors, ReserveInvocationsResponses, ResolveDeliveryBlockData, ResolveDeliveryBlockErrors, ResolveDeliveryBlockResponses, RetryDeliveryData, RetryDeliveryErrors, RetryDeliveryResponses, RotateAgentCredentialData, RotateAgentCredentialErrors, RotateAgentCredentialResponses } from './types.gen.js';
+import type { AcknowledgeDeliveryData, AcknowledgeDeliveryErrors, AcknowledgeDeliveryResponses, AddChannelMemberData, AddChannelMemberErrors, AddChannelMemberResponses, ArchiveChannelData, ArchiveChannelErrors, ArchiveChannelResponses, ArmInvocationData, ArmInvocationErrors, ArmInvocationResponses, BlockDeliveryData, BlockDeliveryErrors, BlockDeliveryResponses, ClaimDeliveriesData, ClaimDeliveriesErrors, ClaimDeliveriesResponses, CompleteInvocationData, CompleteInvocationErrors, CompleteInvocationResponses, CreateAgentData, CreateAgentErrors, CreateAgentResponses, CreateBrowserChannelStreamGrantData, CreateBrowserChannelStreamGrantErrors, CreateBrowserChannelStreamGrantResponses, CreateChannelData, CreateChannelErrors, CreateChannelMessageData, CreateChannelMessageErrors, CreateChannelMessageResponses, CreateChannelResponses, GetHealthData, GetHealthResponses, GetOpenApiDocumentData, GetOpenApiDocumentResponses, ListAgentsData, ListAgentsErrors, ListAgentsResponses, ListChannelMembersData, ListChannelMembersErrors, ListChannelMembersResponses, ListChannelMessagesData, ListChannelMessagesErrors, ListChannelMessagesResponses, ListChannelsData, ListChannelsErrors, ListChannelsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListDeliveryBlocksData, ListDeliveryBlocksErrors, ListDeliveryBlocksResponses, ListInvocationObservationsData, ListInvocationObservationsErrors, ListInvocationObservationsResponses, ListInvocationsData, ListInvocationsErrors, ListInvocationsResponses, ListPluginGenerationsData, ListPluginGenerationsErrors, ListPluginGenerationsResponses, ListSessionBindingsData, ListSessionBindingsErrors, ListSessionBindingsResponses, OpenDirectConversationData, OpenDirectConversationErrors, OpenDirectConversationResponses, RenameChannelData, RenameChannelErrors, RenameChannelResponses, ReserveInvocationsData, ReserveInvocationsErrors, ReserveInvocationsResponses, ResolveDeliveryBlockData, ResolveDeliveryBlockErrors, ResolveDeliveryBlockResponses, RetryDeliveryData, RetryDeliveryErrors, RetryDeliveryResponses, RotateAgentCredentialData, RotateAgentCredentialErrors, RotateAgentCredentialResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -197,6 +197,32 @@ export const createChannel = <ThrowOnError extends boolean = false>(options: Opt
 });
 
 /**
+ * Rename a shared channel
+ *
+ * Operator-only. Direct conversation names are derived from their participants; archived channels are immutable.
+ */
+export const renameChannel = <ThrowOnError extends boolean = false>(options: Options<RenameChannelData, ThrowOnError>) => (options.client ?? client).patch<RenameChannelResponses, RenameChannelErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/channels/{channel_id}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Archive a shared channel
+ *
+ * Operator-only and idempotent. Archive is one-way, retains permanent membership and immutable history, and rejects new messages.
+ */
+export const archiveChannel = <ThrowOnError extends boolean = false>(options: Options<ArchiveChannelData, ThrowOnError>) => (options.client ?? client).post<ArchiveChannelResponses, ArchiveChannelErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/channels/{channel_id}/archive',
+    ...options
+});
+
+/**
  * List exact channel memberships
  *
  * Available to the operator or a member of this exact channel. The bounded projection omits opaque agent metadata.
@@ -264,6 +290,17 @@ export const createBrowserChannelStreamGrant = <ThrowOnError extends boolean = f
 });
 
 /**
+ * List shared and direct conversations
+ *
+ * Operator-only. Returns one bounded presentation projection for both conversation kinds. Archived shared channels are omitted unless explicitly requested.
+ */
+export const listConversations = <ThrowOnError extends boolean = false>(options?: Options<ListConversationsData, ThrowOnError>) => (options?.client ?? client).get<ListConversationsResponses, ListConversationsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/conversations',
+    ...options
+});
+
+/**
  * List unresolved delivery blocks
  *
  * Operator-only. Results may be limited to one agent.
@@ -282,6 +319,21 @@ export const listDeliveryBlocks = <ThrowOnError extends boolean = false>(options
 export const resolveDeliveryBlock = <ThrowOnError extends boolean = false>(options: Options<ResolveDeliveryBlockData, ThrowOnError>) => (options.client ?? client).post<ResolveDeliveryBlockResponses, ResolveDeliveryBlockErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/v1/delivery-blocks/{block_id}/resolve',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Open a one-to-one direct conversation
+ *
+ * Operator-only. Exactly two distinct participants are required. The exact unordered pair is created atomically or returned idempotently; participant delivery modes are immutable.
+ */
+export const openDirectConversation = <ThrowOnError extends boolean = false>(options: Options<OpenDirectConversationData, ThrowOnError>) => (options.client ?? client).post<OpenDirectConversationResponses, OpenDirectConversationErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/direct-conversations',
     ...options,
     headers: {
         'Content-Type': 'application/json',
