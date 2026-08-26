@@ -149,7 +149,7 @@ fn inspect(path: &Path, checked: &mut usize) {
 /// the coupling splitting the router was meant to remove.
 #[test]
 fn http_route_domains_do_not_import_each_other() {
-    let directory = workspace_root().join("src/http");
+    let directory = workspace_root().join("crates/http/src");
     for domain in HTTP_ROUTE_DOMAINS {
         let source = fs::read_to_string(directory.join(format!("{domain}.rs")))
             .unwrap_or_else(|_| panic!("http route domain module {domain}"));
@@ -174,7 +174,7 @@ fn http_route_domains_do_not_import_each_other() {
 
 #[test]
 fn http_composition_registers_every_route_domain() {
-    let composition = fs::read_to_string(workspace_root().join("src/http/mod.rs"))
+    let composition = fs::read_to_string(workspace_root().join("crates/http/src/lib.rs"))
         .expect("http composition module");
     // One list declares the modules and builds the contract, so a domain cannot
     // be declared without being reachable. What is left to check is that the
@@ -269,7 +269,7 @@ const EXECUTION_MODULES: [&str; 7] = [
 /// Both are surfaces, named for a mechanism, which is what having two of them
 /// makes plain. A new surface is a new entry here rather than a folder nobody
 /// notices. `execution` left for `crates/execution`.
-const SOURCE_LAYERS: [&str; 2] = ["http", "mcp"];
+const SOURCE_LAYERS: [&str; 0] = [];
 
 /// The layer that exposes it. Route domains own handlers; the rest is
 /// composition, shared guards, and the transport beneath them.
@@ -293,16 +293,6 @@ const HTTP_SUPPORT: [&str; 7] = [
     "surface",
 ];
 
-/// Every surface module still inside the daemon, by path within `src/`.
-fn above_kernel() -> Vec<String> {
-    HTTP_ROUTE_DOMAINS
-        .iter()
-        .chain(HTTP_SUPPORT.iter())
-        .map(|module| format!("http/{module}"))
-        .chain(["http/mod".to_owned(), "mcp/mod".to_owned()])
-        .collect()
-}
-
 fn collect_sources(path: &Path, sources: &mut Vec<PathBuf>) {
     if path.is_dir() {
         for entry in fs::read_dir(path).expect("module directory is readable") {
@@ -322,7 +312,12 @@ fn collect_sources(path: &Path, sources: &mut Vec<PathBuf>) {
 /// `only_the_kernel_writes_kernel_tables`. That makes the list of places it is
 /// checked load-bearing: a new crate above the substrate that is missing here is
 /// unchecked, not compliant.
-const ABOVE_SUBSTRATE_CRATES: [&str; 2] = ["crates/conversation/src", "crates/execution/src"];
+const ABOVE_SUBSTRATE_CRATES: [&str; 4] = [
+    "crates/conversation/src",
+    "crates/execution/src",
+    "crates/http/src",
+    "crates/mcp/src",
+];
 
 /// Checks the one rule in this file that cannot be made structural.
 ///
@@ -350,13 +345,7 @@ fn only_the_kernel_writes_kernel_tables() {
         "delivery_blocks",
         "messages",
     ];
-    let mut sources: Vec<(String, PathBuf)> = above_kernel()
-        .into_iter()
-        .map(|module| {
-            let path = workspace_root().join(format!("src/{module}.rs"));
-            (module, path)
-        })
-        .collect();
+    let mut sources: Vec<(String, PathBuf)> = Vec::new();
     for crate_root in ABOVE_SUBSTRATE_CRATES {
         let root = workspace_root().join(crate_root);
         let mut crate_sources = Vec::new();
@@ -635,11 +624,12 @@ fn the_source_tree_matches_the_declared_layers() {
         .chain(HTTP_SUPPORT.iter())
         .map(|m| (*m).to_owned())
         .collect();
+    expected_http.push("lib".to_owned());
     expected_http.sort();
     assert_eq!(
-        rust_module_names(&source.join("http")),
+        rust_module_names(&workspace_root().join("crates/http/src")),
         expected_http,
-        "src/http does not match its declared modules. A route domain belongs in \
+        "crates/http does not match its declared modules. A route domain belongs in \
          HTTP_ROUTE_DOMAINS and must be merged into a contract; anything else is support."
     );
 }

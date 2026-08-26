@@ -3,7 +3,7 @@
 //! Authentication resolves which principal made the request; these decide what
 //! that principal may reach.
 
-use crate::{auth::Principal, error::FleetError};
+use fleetd_kernel::{auth::Principal, error::FleetError};
 
 use super::AppState;
 

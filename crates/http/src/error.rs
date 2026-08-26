@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::error::{ErrorResponse, FleetError};
+use fleetd_kernel::error::{ErrorResponse, FleetError};
 
 /// One domain error on its way to a client.
 #[derive(Debug)]

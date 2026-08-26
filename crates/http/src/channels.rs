@@ -10,11 +10,8 @@ use serde::Deserialize;
 use utoipa::IntoParams;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::{
-    auth::Principal,
-    error::ErrorResponse,
-    model::{AddMember, CreateChannel, OpenDirectConversation, RenameChannel},
-};
+use fleetd_kernel::{auth::Principal, error::ErrorResponse};
+use fleetd_proto::model::{AddMember, CreateChannel, OpenDirectConversation, RenameChannel};
 
 use super::{
     AppState,
@@ -40,7 +37,7 @@ pub(super) fn routes() -> OpenApiRouter<AppState> {
     security(("bearerAuth" = [])),
     request_body = CreateChannel,
     responses(
-        (status = 201, description = "Channel created", body = crate::model::Channel),
+        (status = 201, description = "Channel created", body = fleetd_proto::model::Channel),
         (status = 400, description = "Invalid channel", body = ErrorResponse),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
@@ -53,7 +50,7 @@ async fn create_channel(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Json(input): Json<CreateChannel>,
-) -> Result<(StatusCode, Json<crate::model::Channel>), ApiError> {
+) -> Result<(StatusCode, Json<fleetd_proto::model::Channel>), ApiError> {
     require_operator(&principal)?;
     let channel = state.store.create_channel(input).await?;
     Ok((StatusCode::CREATED, Json(channel)))
@@ -68,7 +65,7 @@ async fn create_channel(
     description = "Operator-only.",
     security(("bearerAuth" = [])),
     responses(
-        (status = 200, description = "Channels", body = [crate::model::Channel]),
+        (status = 200, description = "Channels", body = [fleetd_proto::model::Channel]),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
         (status = 500, description = "Internal failure", body = ErrorResponse)
@@ -77,7 +74,7 @@ async fn create_channel(
 async fn list_channels(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-) -> Result<Json<Vec<crate::model::Channel>>, ApiError> {
+) -> Result<Json<Vec<fleetd_proto::model::Channel>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(state.store.list_channels().await?))
 }
@@ -100,7 +97,7 @@ struct ConversationQuery {
     security(("bearerAuth" = [])),
     params(ConversationQuery),
     responses(
-        (status = 200, description = "Conversation summaries", body = [crate::model::ConversationSummary]),
+        (status = 200, description = "Conversation summaries", body = [fleetd_proto::model::ConversationSummary]),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
         (status = 500, description = "Internal failure", body = ErrorResponse)
@@ -110,7 +107,7 @@ async fn list_conversations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<ConversationQuery>,
-) -> Result<Json<Vec<crate::model::ConversationSummary>>, ApiError> {
+) -> Result<Json<Vec<fleetd_proto::model::ConversationSummary>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
         conversation::list(&state.store, query.include_archived).await?,
@@ -127,8 +124,8 @@ async fn list_conversations(
     security(("bearerAuth" = [])),
     request_body = OpenDirectConversation,
     responses(
-        (status = 200, description = "Existing exact-pair conversation", body = crate::model::ConversationSummary),
-        (status = 201, description = "Direct conversation created", body = crate::model::ConversationSummary),
+        (status = 200, description = "Existing exact-pair conversation", body = fleetd_proto::model::ConversationSummary),
+        (status = 201, description = "Direct conversation created", body = fleetd_proto::model::ConversationSummary),
         (status = 400, description = "Invalid participant pair", body = ErrorResponse),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
@@ -141,7 +138,7 @@ async fn open_direct_conversation(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Json(input): Json<OpenDirectConversation>,
-) -> Result<(StatusCode, Json<crate::model::ConversationSummary>), ApiError> {
+) -> Result<(StatusCode, Json<fleetd_proto::model::ConversationSummary>), ApiError> {
     require_operator(&principal)?;
     // The substrate opens the pair; presenting it is a read model above the
     // substrate. Composing them here is what keeps the kernel unaware of it.
@@ -166,7 +163,7 @@ async fn open_direct_conversation(
     params(("channel_id" = String, Path, description = "Shared channel ID")),
     request_body = RenameChannel,
     responses(
-        (status = 200, description = "Renamed channel", body = crate::model::Channel),
+        (status = 200, description = "Renamed channel", body = fleetd_proto::model::Channel),
         (status = 400, description = "Invalid channel name", body = ErrorResponse),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
@@ -180,7 +177,7 @@ async fn rename_channel(
     Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
     Json(input): Json<RenameChannel>,
-) -> Result<Json<crate::model::Channel>, ApiError> {
+) -> Result<Json<fleetd_proto::model::Channel>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
         state.store.rename_channel(&channel_id, input.name).await?,
@@ -197,7 +194,7 @@ async fn rename_channel(
     security(("bearerAuth" = [])),
     params(("channel_id" = String, Path, description = "Shared channel ID")),
     responses(
-        (status = 200, description = "Archived channel", body = crate::model::Channel),
+        (status = 200, description = "Archived channel", body = fleetd_proto::model::Channel),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
         (status = 404, description = "Channel not found", body = ErrorResponse),
@@ -209,7 +206,7 @@ async fn archive_channel(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
-) -> Result<Json<crate::model::Channel>, ApiError> {
+) -> Result<Json<fleetd_proto::model::Channel>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(state.store.archive_channel(&channel_id).await?))
 }
@@ -257,7 +254,7 @@ async fn add_member(
     security(("bearerAuth" = [])),
     params(("channel_id" = String, Path, description = "Channel ID")),
     responses(
-        (status = 200, description = "Exact channel memberships", body = [crate::model::ChannelMember]),
+        (status = 200, description = "Exact channel memberships", body = [fleetd_proto::model::ChannelMember]),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Channel membership required", body = ErrorResponse),
         (status = 404, description = "Channel not found", body = ErrorResponse),
@@ -268,7 +265,7 @@ async fn list_channel_members(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
-) -> Result<Json<Vec<crate::model::ChannelMember>>, ApiError> {
+) -> Result<Json<Vec<fleetd_proto::model::ChannelMember>>, ApiError> {
     require_channel_access(&state, &principal, &channel_id).await?;
     Ok(Json(state.store.list_channel_members(&channel_id).await?))
 }

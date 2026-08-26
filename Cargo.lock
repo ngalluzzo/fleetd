@@ -858,7 +858,9 @@ dependencies = [
  "clap",
  "fleetd-conversation",
  "fleetd-execution",
+ "fleetd-http",
  "fleetd-kernel",
+ "fleetd-mcp",
  "fleetd-plugin-host",
  "fleetd-proto",
  "futures-util",
@@ -971,6 +973,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleetd-http"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "fleetd-conversation",
+ "fleetd-execution",
+ "fleetd-kernel",
+ "fleetd-proto",
+ "futures-util",
+ "getrandom 0.3.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "utoipa",
+ "utoipa-axum",
+]
+
+[[package]]
 name = "fleetd-kernel"
 version = "0.1.0"
 dependencies = [
@@ -980,6 +1005,26 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "fleetd-mcp"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "fleetd-execution",
+ "fleetd-kernel",
+ "fleetd-plugin-host",
+ "fleetd-proto",
+ "reqwest 0.12.28",
+ "rmcp",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",

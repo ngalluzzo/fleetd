@@ -6,27 +6,36 @@ The tree is the architecture. Where a boundary is a crate, Cargo enforces it;
 where it is a module, only `tests/crate_boundaries.rs` does, by reading source
 as text. The difference is worth reading off this list:
 
-    crates/proto          wire types crossing any boundary          (crate)
-    crates/kernel         the substrate, migrations, the only pool  (crate)
-    crates/conversation   a read model over the substrate           (crate)
-    crates/execution      what happens to durable state             (crate)
-    crates/plugin-host    child-process lifecycle and ACP client    (crate)
-    src/http              a surface: the versioned HTTP contract    (module)
-    src/mcp               a surface: invocation-scoped publishing   (module)
-    src/{main,cli}.rs     the binary, which wires the surfaces
+    crates/proto          wire types crossing any boundary
+    crates/kernel         the substrate, migrations, the only pool
+    crates/conversation   a read model over the substrate
+    crates/execution      what happens to durable state
+    crates/plugin-host    child-process lifecycle and ACP client
+    crates/http           a surface: the versioned HTTP contract
+    crates/mcp            a surface: invocation-scoped publishing
+    src/{main,cli}.rs     the binary, which wires them together
 
-A module boundary is a convention a test checks after the fact. A crate boundary
-is a compile error: `fleetd-kernel` does not depend on `fleetd-conversation`, so
-the substrate cannot name its own projection, and neither `fleetd-conversation`
-nor `fleetd-execution` depends on a web framework, so neither can expose
-anything. Making `execution` a crate retired four text checks outright -- see the
-note at the top of `tests/crate_boundaries.rs` for what now holds each.
+Every layer is a crate. `src/` holds the binary and nothing else, which is why
+`SOURCE_LAYERS` in `tests/crate_boundaries.rs` is an empty list: a directory
+appearing there means a layer was added to the daemon instead of beside it.
 
-The surfaces are still modules of the daemon, so what keeps them apart is still a
-test reading source. They are named for their mechanism on purpose: HTTP and MCP
-are two ways to reach the same decisions, not two domains, and `execution` knows
-about neither. A surface provisions a transport and hands the worker a
-`TurnGrant`; nothing below a surface can start a listener.
+Each `[dependencies]` block states a permitted direction, and the compiler
+enforces it. Verified rather than asserted:
+
+    execution naming a surface        error[E0432]: unresolved import `fleetd_http`
+    one surface naming the other      error[E0432]: unresolved import `fleetd_http`
+    a surface adding a Store method   error[E0116]: impl for a type outside the crate
+
+The surfaces are named for their mechanism on purpose: HTTP and MCP are two ways
+to reach the same decisions, not two domains, and neither can see the other.
+`execution` cannot name either, so a surface provisions a transport and hands the
+worker a `TurnGrant`; nothing below a surface can start a listener.
+
+Four text checks retired when this became true -- see the note at the top of
+`tests/crate_boundaries.rs` for what holds each now. What survives there does so
+because nothing else can hold it: sibling route domains inside `fleetd-http` are
+modules, not crates, and no signature distinguishes reading a table a layer owns
+from writing one it does not.
 
 Dependencies run downward only. `execution` composes over the kernel and never
 extends it; `http` composes over `execution`; neither reaches back. Nothing

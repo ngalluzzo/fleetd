@@ -7,16 +7,18 @@ use tokio::{
 };
 
 use crate::{
-    auth::{AuthService, Principal},
-    http::browser_stream_edge::{
+    browser_stream_edge::{
         APPLICATION_FRAME_SEND_DEADLINE, BrowserStreamCursor, BrowserStreamServerFrame,
         CREDENTIAL_REVALIDATION_INTERVAL,
     },
-    http::stream_grant_broker::ActiveStreamSlot,
+    stream_grant_broker::ActiveStreamSlot,
+};
+use fleetd_kernel::{
+    auth::{AuthService, Principal},
     message_commit_hint::MessageCommitWake,
-    model::Message,
     store::Store,
 };
+use fleetd_proto::model::Message;
 
 const REPLAY_PAGE_SIZE: u32 = 500;
 

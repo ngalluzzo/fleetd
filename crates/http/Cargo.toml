@@ -1,0 +1,38 @@
+[package]
+name = "fleetd-http"
+version = "0.1.0"
+edition = "2024"
+description = "The versioned HTTP and WebSocket surface for fleetd"
+license = "MIT"
+
+# A surface, named for its mechanism. It exposes decisions made below it and
+# makes none of its own: no migrations, no pool, no harness process. `fleetd-mcp`
+# is its peer, and neither can be reached from `fleetd-execution`.
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
+fleetd-conversation = { path = "../conversation" }
+fleetd-execution = { path = "../execution" }
+fleetd-kernel = { path = "../kernel" }
+fleetd-proto = { path = "../proto" }
+futures-util = "0.3"
+getrandom = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+tracing = "0.1"
+utoipa = { version = "5.5.0", features = ["axum_extras"] }
+utoipa-axum = "0.2.0"
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

@@ -9,12 +9,8 @@ use serde::Deserialize;
 use utoipa::IntoParams;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::{
-    auth::Principal,
-    error::ErrorResponse,
-    message_commit_hint::MessageCommitWake,
-    model::{CreateMessage, Message, SendMessage},
-};
+use fleetd_kernel::{auth::Principal, error::ErrorResponse, message_commit_hint::MessageCommitWake};
+use fleetd_proto::model::{CreateMessage, Message, SendMessage};
 
 use super::{
     AppState,
@@ -101,7 +97,7 @@ const fn default_page_limit() -> u32 {
         PageQuery
     ),
     responses(
-        (status = 200, description = "Messages strictly after the cursor", body = crate::model::MessagePage),
+        (status = 200, description = "Messages strictly after the cursor", body = fleetd_proto::model::MessagePage),
         (status = 400, description = "Invalid cursor", body = ErrorResponse),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Channel membership required", body = ErrorResponse),
@@ -114,7 +110,7 @@ async fn list_messages(
     Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
     Query(query): Query<PageQuery>,
-) -> Result<Json<crate::model::MessagePage>, ApiError> {
+) -> Result<Json<fleetd_proto::model::MessagePage>, ApiError> {
     require_channel_access(&state, &principal, &channel_id).await?;
     Ok(Json(
         state

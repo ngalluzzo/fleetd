@@ -56,28 +56,28 @@ pub mod operator {
     async fn index() -> Response {
         asset(
             "text/html; charset=utf-8",
-            include_str!("../../web/operator/index.html"),
+            include_str!("../../../web/operator/index.html"),
         )
     }
 
     async fn styles() -> Response {
         asset(
             "text/css; charset=utf-8",
-            include_str!("../../web/operator/operator.css"),
+            include_str!("../../../web/operator/operator.css"),
         )
     }
 
     async fn script() -> Response {
         asset(
             "text/javascript; charset=utf-8",
-            include_str!("../../web/operator/operator.js"),
+            include_str!("../../../web/operator/operator.js"),
         )
     }
 
     async fn contract() -> Response {
         asset(
             "application/json",
-            include_str!("../../web/operator/contract.json"),
+            include_str!("../../../web/operator/contract.json"),
         )
     }
 }
@@ -101,28 +101,28 @@ pub mod conversation {
     async fn index() -> Response {
         asset(
             "text/html; charset=utf-8",
-            include_str!("../../web/conversation/index.html"),
+            include_str!("../../../web/conversation/index.html"),
         )
     }
 
     async fn styles() -> Response {
         asset(
             "text/css; charset=utf-8",
-            include_str!("../../web/conversation/conversation.css"),
+            include_str!("../../../web/conversation/conversation.css"),
         )
     }
 
     async fn script() -> Response {
         asset(
             "text/javascript; charset=utf-8",
-            include_str!("../../web/conversation/conversation.js"),
+            include_str!("../../../web/conversation/conversation.js"),
         )
     }
 
     async fn contract() -> Response {
         asset(
             "application/json",
-            include_str!("../../web/conversation/contract.json"),
+            include_str!("../../../web/conversation/contract.json"),
         )
     }
 }

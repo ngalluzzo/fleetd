@@ -16,11 +16,10 @@ use tokio::sync::broadcast;
 use utoipa::{Modify, OpenApi};
 use utoipa_axum::router::OpenApiRouter;
 
-use crate::{
+use crate::{browser_stream_edge::BrowserStreamEdgeState, stream_grant_broker::StreamGrantBroker};
+use fleetd_kernel::{
     auth::AuthService,
     error::FleetError,
-    http::browser_stream_edge::BrowserStreamEdgeState,
-    http::stream_grant_broker::StreamGrantBroker,
     message_commit_hint::{MessageCommitHintBridge, MessageCommitWake},
     store::Store,
 };

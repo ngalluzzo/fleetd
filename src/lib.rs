@@ -17,6 +17,5 @@ pub use fleetd_plugin_host as plugin;
 pub use fleetd_proto::model;
 
 pub use fleetd_execution as execution;
-
-pub mod http;
-pub mod mcp;
+pub use fleetd_http as http;
+pub use fleetd_mcp as mcp;

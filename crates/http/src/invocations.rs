@@ -9,19 +9,15 @@ use serde::Deserialize;
 use utoipa::IntoParams;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::{
-    auth::Principal,
-    error::ErrorResponse,
-    message_commit_hint::MessageCommitWake,
-    model::{ArmInvocation, ClaimDeliveries, CompleteInvocation},
-};
+use fleetd_kernel::{auth::Principal, error::ErrorResponse, message_commit_hint::MessageCommitWake};
+use fleetd_proto::model::{ArmInvocation, ClaimDeliveries, CompleteInvocation};
 
 use super::{
     AppState,
     error::ApiError,
     guard::{require_bound_agent, require_operator},
 };
-use crate::execution::invocation;
+use fleetd_execution::invocation;
 
 pub(super) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::default()
@@ -42,7 +38,7 @@ pub(super) fn routes() -> OpenApiRouter<AppState> {
     params(("agent_id" = String, Path, description = "Agent ID bound to the credential")),
     request_body = ClaimDeliveries,
     responses(
-        (status = 200, description = "Reserved invocation batch", body = crate::model::InvocationBatch),
+        (status = 200, description = "Reserved invocation batch", body = fleetd_proto::model::InvocationBatch),
         (status = 400, description = "Invalid lease bounds", body = ErrorResponse),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
@@ -55,7 +51,7 @@ async fn reserve_invocations(
     Extension(principal): Extension<Principal>,
     Path(agent_id): Path<String>,
     Json(input): Json<ClaimDeliveries>,
-) -> Result<Json<crate::model::InvocationBatch>, ApiError> {
+) -> Result<Json<fleetd_proto::model::InvocationBatch>, ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     Ok(Json(
         invocation::reserve_invocations(&state.store, &agent_id, input).await?,
@@ -76,7 +72,7 @@ async fn reserve_invocations(
     ),
     request_body = ArmInvocation,
     responses(
-        (status = 200, description = "Armed invocation", body = crate::model::Invocation),
+        (status = 200, description = "Armed invocation", body = fleetd_proto::model::Invocation),
         (status = 400, description = "Invalid tokens", body = ErrorResponse),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
@@ -90,7 +86,7 @@ async fn arm_invocation(
     Extension(principal): Extension<Principal>,
     Path((agent_id, invocation_id)): Path<(String, String)>,
     Json(input): Json<ArmInvocation>,
-) -> Result<Json<crate::model::Invocation>, ApiError> {
+) -> Result<Json<fleetd_proto::model::Invocation>, ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     Ok(Json(
         invocation::arm_invocation(&state.store, &agent_id, &invocation_id, input).await?,
@@ -111,8 +107,8 @@ async fn arm_invocation(
     ),
     request_body = CompleteInvocation,
     responses(
-        (status = 200, description = "Existing completion returned for an exact replay", body = crate::model::InvocationCompletion),
-        (status = 201, description = "Invocation completed", body = crate::model::InvocationCompletion),
+        (status = 200, description = "Existing completion returned for an exact replay", body = fleetd_proto::model::InvocationCompletion),
+        (status = 201, description = "Invocation completed", body = fleetd_proto::model::InvocationCompletion),
         (status = 400, description = "Invalid completion", body = ErrorResponse),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
@@ -126,7 +122,7 @@ async fn complete_invocation(
     Extension(principal): Extension<Principal>,
     Path((agent_id, invocation_id)): Path<(String, String)>,
     Json(input): Json<CompleteInvocation>,
-) -> Result<(StatusCode, Json<crate::model::InvocationCompletion>), ApiError> {
+) -> Result<(StatusCode, Json<fleetd_proto::model::InvocationCompletion>), ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     let (completion, created) =
         invocation::complete_invocation(&state.store, &agent_id, &invocation_id, input).await?;
@@ -160,7 +156,7 @@ struct InvocationQuery {
     security(("bearerAuth" = [])),
     params(InvocationQuery),
     responses(
-        (status = 200, description = "Managed invocations", body = [crate::model::Invocation]),
+        (status = 200, description = "Managed invocations", body = [fleetd_proto::model::Invocation]),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
         (status = 500, description = "Internal failure", body = ErrorResponse)
@@ -170,7 +166,7 @@ async fn list_invocations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<InvocationQuery>,
-) -> Result<Json<Vec<crate::model::Invocation>>, ApiError> {
+) -> Result<Json<Vec<fleetd_proto::model::Invocation>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
         invocation::list_invocations(&state.store, query.agent.as_deref()).await?,

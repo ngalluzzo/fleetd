@@ -28,17 +28,15 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{
-    execution::{
-        message_grant::{
-            MessageBrokerInner, PUBLISH_DURABLE_MESSAGE_GRANT, PublishMessageInput,
-            PublishMessageOutput,
-        },
-        worker::TurnGrant,
+use fleetd_execution::{
+    message_grant::{
+        MessageBrokerInner, PUBLISH_DURABLE_MESSAGE_GRANT, PublishMessageInput,
+        PublishMessageOutput,
     },
-    plugin::{ResolvedMcpEndpoint, ResolvedMcpGrant, ResolvedMcpHttpHeader},
-    store::Store,
+    worker::TurnGrant,
 };
+use fleetd_kernel::store::Store;
+use fleetd_plugin_host::{ResolvedMcpEndpoint, ResolvedMcpGrant, ResolvedMcpHttpHeader};
 
 const GRANT_HEADER: &str = "x-fleetd-grant-token";
 
@@ -202,9 +200,9 @@ async fn require_grant_token(
 
 #[cfg(test)]
 mod tests {
-    use crate::execution::invocation;
-    use crate::execution::message_grant::MAX_MESSAGES_PER_INVOCATION;
-    use crate::model::{CreateMessage, Invocation};
+    use fleetd_execution::invocation;
+    use fleetd_execution::message_grant::MAX_MESSAGES_PER_INVOCATION;
+    use fleetd_proto::model::{CreateMessage, Invocation};
     use serde_json::Value;
     use std::collections::HashMap;
 
@@ -221,7 +219,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::model::{Agent, Channel, ClaimDeliveries, CreateAgent, CreateChannel, Message};
+    use fleetd_proto::model::{
+        Agent, Channel, ClaimDeliveries, CreateAgent, CreateChannel, Message,
+    };
 
     struct Fixture {
         _directory: TempDir,

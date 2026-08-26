@@ -9,18 +9,15 @@ use serde::Deserialize;
 use utoipa::IntoParams;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::{
-    auth::Principal,
-    error::ErrorResponse,
-    model::{AckDelivery, BlockDelivery, ClaimDeliveries, ResolveDeliveryBlock, RetryDelivery},
-};
+use fleetd_kernel::{auth::Principal, error::ErrorResponse};
+use fleetd_proto::model::{AckDelivery, BlockDelivery, ClaimDeliveries, ResolveDeliveryBlock, RetryDelivery};
 
 use super::{
     AppState,
     error::ApiError,
     guard::{require_bound_agent, require_operator},
 };
-use crate::execution::settlement;
+use fleetd_execution::settlement;
 
 pub(super) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::default()
@@ -43,7 +40,7 @@ pub(super) fn routes() -> OpenApiRouter<AppState> {
     params(("agent_id" = String, Path, description = "Agent ID bound to the credential")),
     request_body = ClaimDeliveries,
     responses(
-        (status = 200, description = "Leased delivery batch", body = crate::model::ClaimBatch),
+        (status = 200, description = "Leased delivery batch", body = fleetd_proto::model::ClaimBatch),
         (status = 400, description = "Invalid lease bounds", body = ErrorResponse),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
@@ -56,7 +53,7 @@ async fn claim_deliveries(
     Extension(principal): Extension<Principal>,
     Path(agent_id): Path<String>,
     Json(input): Json<ClaimDeliveries>,
-) -> Result<Json<crate::model::ClaimBatch>, ApiError> {
+) -> Result<Json<fleetd_proto::model::ClaimBatch>, ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     Ok(Json(
         settlement::claim_deliveries(&state.store, &agent_id, input).await?,
@@ -146,8 +143,8 @@ async fn retry_delivery(
     ),
     request_body = BlockDelivery,
     responses(
-        (status = 200, description = "Existing block returned for an exact replay", body = crate::model::BlockedDelivery),
-        (status = 201, description = "Delivery blocked", body = crate::model::BlockedDelivery),
+        (status = 200, description = "Existing block returned for an exact replay", body = fleetd_proto::model::BlockedDelivery),
+        (status = 201, description = "Delivery blocked", body = fleetd_proto::model::BlockedDelivery),
         (status = 400, description = "Invalid block evidence", body = ErrorResponse),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Credential is not bound to this agent", body = ErrorResponse),
@@ -161,7 +158,7 @@ async fn block_delivery(
     Extension(principal): Extension<Principal>,
     Path((agent_id, message_id)): Path<(String, String)>,
     Json(input): Json<BlockDelivery>,
-) -> Result<(StatusCode, Json<crate::model::BlockedDelivery>), ApiError> {
+) -> Result<(StatusCode, Json<fleetd_proto::model::BlockedDelivery>), ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     let (blocked, created) =
         settlement::block_delivery(&state.store, &agent_id, &message_id, input).await?;
@@ -190,7 +187,7 @@ struct DeliveryBlockQuery {
     security(("bearerAuth" = [])),
     params(DeliveryBlockQuery),
     responses(
-        (status = 200, description = "Unresolved delivery blocks", body = [crate::model::BlockedDelivery]),
+        (status = 200, description = "Unresolved delivery blocks", body = [fleetd_proto::model::BlockedDelivery]),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
         (status = 500, description = "Internal failure", body = ErrorResponse)
@@ -200,7 +197,7 @@ async fn list_delivery_blocks(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<DeliveryBlockQuery>,
-) -> Result<Json<Vec<crate::model::BlockedDelivery>>, ApiError> {
+) -> Result<Json<Vec<fleetd_proto::model::BlockedDelivery>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
         state
