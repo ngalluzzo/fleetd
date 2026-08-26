@@ -11,6 +11,8 @@ use serde_json::json;
 
 mod common;
 
+use fleetd_conversation as conversation;
+
 async fn test_store() -> (tempfile::TempDir, Store) {
     let common::TempStore {
         directory, store, ..
@@ -481,16 +483,15 @@ async fn listing_conversations_reports_the_same_membership_as_reading_one() {
         })
         .await
         .expect("create memberless channel");
-    let direct = store
-        .open_direct_conversation(fleetd::model::OpenDirectConversation {
+    let (direct, _) = store
+        .open_direct_pair(fleetd::model::OpenDirectConversation {
             members: vec![
                 exact_member(&first.id, MembershipDeliveryMode::Inbox),
                 exact_member(&second.id, MembershipDeliveryMode::Inbox),
             ],
         })
         .await
-        .expect("open direct conversation")
-        .conversation;
+        .expect("open direct pair");
     let archived = store
         .create_channel_with_members(
             "listing-archived".to_owned(),
@@ -507,8 +508,7 @@ async fn listing_conversations_reports_the_same_membership_as_reading_one() {
     // One listing must agree with reading each conversation on its own, member
     // for member and in the same order. The listing groups one membership query
     // across every row, so nothing but this pins the two together.
-    let listed = store
-        .list_conversations(true)
+    let listed = conversation::list(&store, true)
         .await
         .expect("list every conversation");
     assert_eq!(
@@ -537,8 +537,7 @@ async fn listing_conversations_reports_the_same_membership_as_reading_one() {
         .expect("memberless conversation is listed");
     assert!(memberless.members.is_empty());
 
-    let active = store
-        .list_conversations(false)
+    let active = conversation::list(&store, false)
         .await
         .expect("list active conversations");
     assert!(active.iter().all(|summary| summary.id != archived.id));

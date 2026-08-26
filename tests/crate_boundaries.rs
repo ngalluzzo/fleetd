@@ -439,6 +439,45 @@ const KERNEL_ALLOWED_DEPENDENCIES: [&str; 11] = [
     "tracing",
 ];
 
+/// Everything `fleetd-conversation` is allowed to depend on.
+///
+/// It is a read model over the substrate. A web framework here would mean the
+/// projection had started rendering itself, and a plugin process would mean it
+/// had started doing work. This list is why neither is possible rather than
+/// merely discouraged: the crate cannot name what it does not depend on.
+const CONVERSATION_ALLOWED_DEPENDENCIES: [&str; 3] = ["fleetd-kernel", "fleetd-proto", "sqlx"];
+
+#[test]
+fn the_conversation_crate_depends_only_on_the_substrate() {
+    let manifest = fs::read_to_string(workspace_root().join("crates/conversation/Cargo.toml"))
+        .expect("conversation manifest");
+    for table in [
+        "[dependencies]",
+        "[dev-dependencies]",
+        "[build-dependencies]",
+    ] {
+        for dependency in declared_dependencies(&manifest, table) {
+            assert!(
+                CONVERSATION_ALLOWED_DEPENDENCIES.contains(&dependency.as_str()),
+                "fleetd-conversation {table} contains `{dependency}`. The projection reads the \
+                 substrate and shapes it; see CONVERSATION_ALLOWED_DEPENDENCIES."
+            );
+        }
+    }
+}
+
+#[test]
+fn the_substrate_does_not_know_about_its_projections() {
+    let manifest =
+        fs::read_to_string(workspace_root().join("crates/kernel/Cargo.toml")).expect("manifest");
+    assert!(
+        !manifest.contains("fleetd-conversation"),
+        "fleetd-kernel depends on fleetd-conversation. A conversation is one way to read the \
+         substrate, not something the substrate knows it has; the direction is what makes the \
+         projection replaceable."
+    );
+}
+
 #[test]
 fn the_kernel_crate_depends_only_on_storage_crates() {
     let manifest = fs::read_to_string(workspace_root().join("crates/kernel/Cargo.toml"))

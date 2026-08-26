@@ -856,6 +856,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "clap",
+ "fleetd-conversation",
  "fleetd-kernel",
  "fleetd-plugin-host",
  "fleetd-proto",
@@ -911,6 +912,15 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "fleetd-conversation"
+version = "0.1.0"
+dependencies = [
+ "fleetd-kernel",
+ "fleetd-proto",
+ "sqlx",
 ]
 
 [[package]]

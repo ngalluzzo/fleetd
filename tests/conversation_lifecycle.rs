@@ -9,6 +9,8 @@ use serde_json::json;
 
 mod common;
 
+use fleetd_conversation as conversation;
+
 use common::api::Daemon;
 
 async fn test_store() -> (tempfile::TempDir, Store) {
@@ -48,27 +50,31 @@ async fn direct_conversation_open_is_exact_pair_idempotent_and_concurrency_safe(
     };
 
     let (first, second) = tokio::join!(
-        store.open_direct_conversation(input.clone()),
-        store.open_direct_conversation(OpenDirectConversation {
+        store.open_direct_pair(input.clone()),
+        store.open_direct_pair(OpenDirectConversation {
             members: input.members.iter().cloned().rev().collect(),
         })
     );
-    let first = first.expect("first concurrent open");
-    let second = second.expect("second concurrent open");
-    assert_eq!(first.conversation.id, second.conversation.id);
-    assert_ne!(first.created, second.created);
-    assert_eq!(first.conversation.kind, ConversationKind::Direct);
-    assert_eq!(first.conversation.members.len(), 2);
+    let (first_channel, first_created) = first.expect("first concurrent open");
+    let (second_channel, second_created) = second.expect("second concurrent open");
+    assert_eq!(first_channel.id, second_channel.id);
+    assert_ne!(first_created, second_created);
+    assert_eq!(first_channel.kind, ConversationKind::Direct);
 
-    let listed = store
-        .list_conversations(false)
+    // The pair is substrate; its membership is the projection over it.
+    let opened = conversation::summary(&store, &first_channel.id)
+        .await
+        .expect("present the opened pair");
+    assert_eq!(opened.members.len(), 2);
+
+    let listed = conversation::list(&store, false)
         .await
         .expect("list conversations");
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].id, first.conversation.id);
+    assert_eq!(listed[0].id, first_channel.id);
 
     let incompatible = store
-        .open_direct_conversation(OpenDirectConversation {
+        .open_direct_pair(OpenDirectConversation {
             members: vec![
                 participant(&human.id, MembershipDeliveryMode::Inbox),
                 participant(&worker.id, MembershipDeliveryMode::Inbox),
@@ -82,7 +88,7 @@ async fn direct_conversation_open_is_exact_pair_idempotent_and_concurrency_safe(
     ));
     let fixed_membership = store
         .add_member_with_mode(
-            &first.conversation.id,
+            &first_channel.id,
             &human.id,
             MembershipDeliveryMode::StreamOnly,
         )
@@ -93,12 +99,12 @@ async fn direct_conversation_open_is_exact_pair_idempotent_and_concurrency_safe(
         fleetd::error::FleetError::Conflict(_)
     ));
     let renamed = store
-        .rename_channel(&first.conversation.id, "not-a-direct-name".to_owned())
+        .rename_channel(&first_channel.id, "not-a-direct-name".to_owned())
         .await
         .expect_err("direct conversation name is fixed");
     assert!(matches!(renamed, fleetd::error::FleetError::Conflict(_)));
     let archived = store
-        .archive_channel(&first.conversation.id)
+        .archive_channel(&first_channel.id)
         .await
         .expect_err("direct conversation lifecycle is fixed");
     assert!(matches!(archived, fleetd::error::FleetError::Conflict(_)));
@@ -111,7 +117,7 @@ async fn direct_conversation_open_is_exact_pair_idempotent_and_concurrency_safe(
         ],
     ] {
         let invalid = store
-            .open_direct_conversation(OpenDirectConversation {
+            .open_direct_pair(OpenDirectConversation {
                 members: invalid_members,
             })
             .await
@@ -166,14 +172,12 @@ async fn shared_channel_rename_and_archive_preserve_history_and_close_writes() {
     assert_eq!(replay.archived_at_ms, archived.archived_at_ms);
     assert!(archived.archived_at_ms.is_some());
     assert!(
-        store
-            .list_conversations(false)
+        conversation::list(&store, false)
             .await
             .expect("active conversations")
             .is_empty()
     );
-    let all = store
-        .list_conversations(true)
+    let all = conversation::list(&store, true)
         .await
         .expect("all conversations");
     assert_eq!(all[0].latest_message_seq, Some(message.seq));

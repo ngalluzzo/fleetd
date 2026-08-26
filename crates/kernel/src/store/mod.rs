@@ -12,7 +12,6 @@
 
 pub mod agent;
 pub mod channel;
-pub mod conversation;
 pub mod membership;
 pub mod message;
 

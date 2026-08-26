@@ -2,14 +2,24 @@
 
 ## Topology
 
-The tree is the architecture, and every layer below is a crate:
+The tree is the architecture. Where a boundary is a crate, Cargo enforces it;
+where it is a module, only `tests/crate_boundaries.rs` does, by reading source
+as text. The difference is worth reading off this list:
 
-    crates/proto          wire types crossing any boundary
-    crates/kernel         the six concepts, migrations, the only pool
-    crates/plugin-host    child-process lifecycle and the typed ACP client
-    src/execution         what happens to durable state
-    src/http              how it is exposed
+    crates/proto          wire types crossing any boundary          (crate)
+    crates/kernel         the substrate, migrations, the only pool  (crate)
+    crates/conversation   a read model over the substrate           (crate)
+    crates/plugin-host    child-process lifecycle and ACP client    (crate)
+    src/execution         what happens to durable state             (module)
+    src/http              how it is exposed                         (module)
     src/{main,cli}.rs     the binary
+
+A module boundary is a convention a test checks after the fact. A crate boundary
+is a compile error: `fleetd-kernel` does not depend on `fleetd-conversation`, so
+the substrate cannot name its own projection, and `fleetd-conversation` does not
+depend on a web framework, so it cannot render itself. Neither needs asserting.
+Moving `execution` and `http` to crates would retire five of those text checks;
+until then the list above says which boundaries are real.
 
 Dependencies run downward only. `execution` composes over the kernel and never
 extends it; `http` composes over `execution`; neither reaches back. Nothing
@@ -21,6 +31,13 @@ module cannot be added without saying which layer owns it, and a layer cannot
 quietly start depending on the one above it.
 
 ## Kernel boundary
+
+The kernel is the substrate. A *conversation* is not one of its concepts: it is
+`crates/conversation`, a read model that presents a channel, its membership, and
+how recently anything was said. Opening a direct pair is a substrate write and
+stays here; presenting the result is the projection's job, and a caller that
+wants both composes them. That is why `message.kind` is unconstrained and why
+`work.request` and `text` are the same kind of thing to the kernel.
 
 The kernel owns six concepts:
 

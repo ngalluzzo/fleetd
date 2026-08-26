@@ -155,9 +155,14 @@ pub(super) async fn ensure_member(
     Ok(())
 }
 
-pub(super) fn channel_member_from_row(
-    row: &sqlx::sqlite::SqliteRow,
-) -> Result<ChannelMember, FleetError> {
+/// Decodes one membership row.
+///
+/// Public for the same reason as [`super::channel::channel_from_row`].
+///
+/// # Errors
+///
+/// Returns an error when the stored delivery mode cannot be decoded.
+pub fn channel_member_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<ChannelMember, FleetError> {
     let stored_mode: String = row.try_get("delivery_mode")?;
     let delivery_mode = MembershipDeliveryMode::parse(&stored_mode).ok_or_else(|| {
         FleetError::Invalid(format!(

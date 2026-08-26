@@ -1,0 +1,23 @@
+[package]
+name = "fleetd-conversation"
+version = "0.1.0"
+edition = "2024"
+description = "The conversation projection over the fleetd substrate"
+license = "MIT"
+
+# This crate reads the substrate and shapes it for presentation. It holds no
+# pool, writes no row, and speaks no transport, and the dependency list is how
+# that is enforced rather than asserted: there is no web framework here to
+# reach for, and no way to reach a table the kernel has not exposed.
+# `tests/crate_boundaries.rs` checks this list.
+[dependencies]
+fleetd-kernel = { path = "../kernel" }
+fleetd-proto = { path = "../proto" }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

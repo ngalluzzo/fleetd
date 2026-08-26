@@ -5,6 +5,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
+use fleetd_conversation as conversation;
 use serde::Deserialize;
 use utoipa::IntoParams;
 use utoipa_axum::{router::OpenApiRouter, routes};
@@ -112,10 +113,7 @@ async fn list_conversations(
 ) -> Result<Json<Vec<crate::model::ConversationSummary>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
-        state
-            .store
-            .list_conversations(query.include_archived)
-            .await?,
+        conversation::list(&state.store, query.include_archived).await?,
     ))
 }
 
@@ -145,13 +143,16 @@ async fn open_direct_conversation(
     Json(input): Json<OpenDirectConversation>,
 ) -> Result<(StatusCode, Json<crate::model::ConversationSummary>), ApiError> {
     require_operator(&principal)?;
-    let result = state.store.open_direct_conversation(input).await?;
-    let status = if result.created {
+    // The substrate opens the pair; presenting it is a read model above the
+    // substrate. Composing them here is what keeps the kernel unaware of it.
+    let (channel, created) = state.store.open_direct_pair(input).await?;
+    let conversation = conversation::summary(&state.store, &channel.id).await?;
+    let status = if created {
         StatusCode::CREATED
     } else {
         StatusCode::OK
     };
-    Ok((status, Json(result.conversation)))
+    Ok((status, Json(conversation)))
 }
 
 #[utoipa::path(
