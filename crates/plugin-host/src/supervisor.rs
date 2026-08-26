@@ -5,7 +5,7 @@ use thiserror::Error;
 use tokio::process::{Child, Command};
 use uuid::Uuid;
 
-use super::{
+use crate::{
     protocol::{
         HealthResult, InitializeParams, LIFECYCLE_PROTOCOL_VERSION, PluginInterface,
         PluginManifest, PluginNotification, ShutdownResult, validate_identifier,
@@ -371,7 +371,7 @@ async fn initialize(rpc: &RpcPeer, spec: &PluginSpec) -> Result<PluginManifest, 
     let manifest: PluginManifest = rpc
         .call("fleetd.initialize", &params, spec.initialize_timeout)
         .await?;
-    super::protocol::negotiate(&manifest, &spec.id, &spec.required_interfaces)?;
+    crate::protocol::negotiate(&manifest, &spec.id, &spec.required_interfaces)?;
     check_health(rpc, spec.request_timeout).await?;
     Ok(manifest)
 }

@@ -13,7 +13,7 @@ pub use fleetd_proto::plugin::{
     PluginNotification, validate_identifier,
 };
 
-use super::supervisor::PluginError;
+use crate::supervisor::PluginError;
 
 /// Negotiates one manifest against the exact expectations of its launcher.
 ///

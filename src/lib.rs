@@ -6,6 +6,7 @@
 //! on, and adding a type should not mean editing a list every other change
 //! also edits.
 
+pub use fleetd_plugin_host as plugin;
 pub use fleetd_proto::model;
 
 pub mod api;
@@ -21,7 +22,6 @@ mod message_commit_hint;
 pub mod message_grant_broker;
 pub mod operations;
 mod operator_surface;
-pub mod plugin;
 pub mod session_binding;
 pub mod store;
 mod stream_grant_broker;

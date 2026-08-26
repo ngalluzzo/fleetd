@@ -16,7 +16,7 @@ use tokio::{
 };
 use tokio_util::codec::{FramedRead, LinesCodec};
 
-use super::{protocol::PluginNotification, supervisor::PluginError};
+use crate::{protocol::PluginNotification, supervisor::PluginError};
 
 const MAX_FRAME_LENGTH: usize = 1024 * 1024;
 const NOTIFICATION_BUFFER: usize = 256;

@@ -14,7 +14,7 @@ pub use fleetd_proto::harness_acp::{
     StartTurnResult, ToolBudget, TurnEvent, TurnPolicy, TurnSource, TurnTerminal, interface,
 };
 
-use super::{PluginError, PluginManifest, PluginProcess};
+use crate::{PluginError, PluginManifest, PluginProcess};
 
 const MAX_FLEET_ID_BYTES: usize = 256;
 const MAX_SESSION_REF_BYTES: usize = 4_096;
@@ -296,7 +296,7 @@ impl HarnessAcpClient {
     /// # Errors
     ///
     /// Returns an error when graceful shutdown is rejected or transport fails.
-    pub async fn shutdown(self) -> Result<super::ShutdownOutcome, PluginError> {
+    pub async fn shutdown(self) -> Result<crate::ShutdownOutcome, PluginError> {
         self.process.shutdown().await
     }
 

@@ -1,6 +1,6 @@
 use std::{path::PathBuf, time::Duration};
 
-use fleetd::plugin::{
+use fleetd_plugin_host::{
     Binding, ExecutionFence, HarnessAcpNotification, OpenSession, OpenSessionMode,
     PermissionOutcome, PermissionResolution, PluginProcess, PluginSpec, PromptBlock, StartTurn,
     ToolBudget, TurnPolicy, TurnSource, harness_acp_interface,
@@ -84,7 +84,7 @@ fn plugin_spec(arguments: &Arguments) -> PluginSpec {
 }
 
 async fn run_prompt(
-    harness: &mut fleetd::plugin::HarnessAcpClient,
+    harness: &mut fleetd_plugin_host::HarnessAcpClient,
     binding_id: String,
     session_ref: String,
     prompt: String,

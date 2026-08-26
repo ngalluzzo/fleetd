@@ -856,6 +856,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "clap",
+ "fleetd-plugin-host",
  "fleetd-proto",
  "futures-util",
  "getrandom 0.3.4",
@@ -904,8 +905,8 @@ dependencies = [
 name = "fleetd-acp-reference"
 version = "0.1.0"
 dependencies = [
- "fleetd",
  "fleetd-acp-host",
+ "fleetd-plugin-host",
  "serde_json",
  "tokio",
  "uuid",
@@ -915,8 +916,8 @@ dependencies = [
 name = "fleetd-harness-codex"
 version = "0.1.0"
 dependencies = [
- "fleetd",
  "fleetd-acp-host",
+ "fleetd-plugin-host",
  "serde",
  "serde_json",
  "sha2",
@@ -928,12 +929,28 @@ dependencies = [
 name = "fleetd-harness-opencode"
 version = "0.1.0"
 dependencies = [
- "fleetd",
  "fleetd-acp-host",
+ "fleetd-plugin-host",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "fleetd-plugin-host"
+version = "0.1.0"
+dependencies = [
+ "fleetd-proto",
+ "futures-util",
+ "nix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-util",
  "uuid",
 ]
 

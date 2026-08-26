@@ -10,6 +10,7 @@ license = "MIT"
 members = [
     ".",
     "crates/acp-host",
+    "crates/plugin-host",
     "crates/proto",
     "plugins/acp-reference",
     "plugins/codex",
@@ -20,6 +21,7 @@ resolver = "2"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
+fleetd-plugin-host = { path = "crates/plugin-host" }
 fleetd-proto = { path = "crates/proto" }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive", "env"] }

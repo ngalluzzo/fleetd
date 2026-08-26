@@ -19,7 +19,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-fleetd = { path = "../.." }
+fleetd-plugin-host = { path = "../../crates/plugin-host" }
 
 [lints.rust]
 unsafe_code = "forbid"
