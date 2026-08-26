@@ -18,3 +18,4 @@ pub use fleetd_proto::model;
 
 pub mod execution;
 pub mod http;
+pub mod mcp;

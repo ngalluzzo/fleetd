@@ -82,6 +82,7 @@ fn worker_config(agent_id: &str, mode: &str, working_directory: PathBuf) -> Cont
         working_directory,
         additional_directories: Vec::new(),
         mcp_grants: Vec::new(),
+        turn_grants: Vec::new(),
         compatibility_digest: None,
         lease_duration: Duration::from_secs(70),
         poll_interval: Duration::from_millis(10),
@@ -608,8 +609,8 @@ async fn worker_rejects_unknown_or_duplicate_mcp_grants_before_startup() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")),
     );
     config.mcp_grants = vec![
-        fleetd::execution::message_grant_broker::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
-        fleetd::execution::message_grant_broker::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
+        fleetd::execution::message_grant::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
+        fleetd::execution::message_grant::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
     ];
     let error = ContinuousHarnessWorker::new(&fixture.store, config, envelope_adapter())
         .err()

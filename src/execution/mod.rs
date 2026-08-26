@@ -10,7 +10,7 @@
 
 pub mod controller;
 pub mod invocation;
-pub mod message_grant_broker;
+pub mod message_grant;
 pub mod operations;
 pub mod session_binding;
 pub mod settlement;

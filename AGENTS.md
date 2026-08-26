@@ -22,8 +22,13 @@ working at once.
 - Keep network listeners on loopback until encrypted transport and enrollment
   are explicitly implemented.
 - Put every new module in the layer that owns it: `src/execution` for what
-  happens to durable state, `src/http` for how it is exposed. Nothing new
-  belongs at the root of `src/`.
+  happens to durable state, and a surface for how it is exposed -- `src/http`
+  and `src/mcp` are peers, both named for a mechanism. A new surface is a new
+  entry in `SOURCE_LAYERS`, not a folder nobody declared. Nothing new belongs at
+  the root of `src/`.
+- A surface may provision a transport; `execution` may not. Whoever starts an
+  endpoint hands the worker a `TurnGrant`, so arranging a turn never means
+  knowing that endpoints can be started.
 - Name a new HTTP route domain in `route_domains!` and nowhere else, appending
   rather than inserting: the list fixes the order operations appear in the
   generated contract. Declare a schema no route body mentions beside the type,

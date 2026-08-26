@@ -243,12 +243,19 @@ const KERNEL_MODULES: [&str; 5] = ["auth", "delivery", "error", "message_commit_
 const EXECUTION_MODULES: [&str; 7] = [
     "controller",
     "invocation",
-    "message_grant_broker",
+    "message_grant",
     "operations",
     "session_binding",
     "settlement",
     "worker",
 ];
+
+/// Every layer that owns modules, as a directory under `src/`.
+///
+/// A surface is named for its mechanism, and there is more than one, so a new
+/// one is a new entry here rather than a folder nobody notices. This list is
+/// what stopped `mcp` from arriving unannounced.
+const SOURCE_LAYERS: [&str; 3] = ["execution", "http", "mcp"];
 
 /// The layer that exposes it. Route domains own handlers; the rest is
 /// composition, shared guards, and the transport beneath them.
@@ -627,7 +634,31 @@ fn the_source_tree_matches_the_declared_layers() {
     assert!(
         stray.is_empty(),
         "these modules sit at the root of src/ rather than in a layer: {stray:?}. Put each \
-         one in `execution` or `http` so the tree keeps showing what depends on what."
+         one in a layer -- `execution`, or a surface -- so the tree keeps showing what \
+         depends on what."
+    );
+
+    // A whole layer must not appear without being declared.
+    let mut layers: Vec<String> = fs::read_dir(&source)
+        .expect("src is readable")
+        .filter_map(|entry| {
+            let path = entry.expect("src entry is readable").path();
+            // `bin` is Cargo's directory for extra binaries, not a layer.
+            let name = path.file_name()?.to_str()?.to_owned();
+            (path.is_dir() && name != "bin").then_some(name)
+        })
+        .collect();
+    layers.sort();
+    let mut expected_layers: Vec<String> = SOURCE_LAYERS
+        .iter()
+        .map(|layer| (*layer).to_owned())
+        .collect();
+    expected_layers.sort();
+    assert_eq!(
+        layers, expected_layers,
+        "the directories under src/ do not match SOURCE_LAYERS. A layer was added or removed \
+         without saying what it is: `execution` decides what happens to durable state, and a \
+         surface exposes it over one mechanism."
     );
 
     let mut expected_execution: Vec<String> =

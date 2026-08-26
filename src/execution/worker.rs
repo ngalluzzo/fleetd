@@ -1,5 +1,6 @@
 //! Continuous harness worker orchestration above the durable controller.
 
+use std::fmt;
 use std::{
     collections::{BTreeSet, HashMap},
     path::PathBuf,
@@ -24,7 +25,7 @@ use crate::{
         ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnGrant,
         ManagedTurnOutcome, TurnResultCapture,
     },
-    execution::message_grant_broker::{MessageGrantBroker, PUBLISH_DURABLE_MESSAGE_GRANT},
+    execution::message_grant::PUBLISH_DURABLE_MESSAGE_GRANT,
     execution::operations::{
         NewPluginGeneration, PluginGenerationDisposition, PluginShutdownOutcome,
         StopPluginGeneration,
@@ -33,7 +34,7 @@ use crate::{
     model::{Invocation, RetryDelivery},
     plugin::{
         Binding, HarnessAcpClient, OpenSession, OpenSessionMode, PluginError, PluginProcess,
-        PluginSpec, PromptBlock, ShutdownOutcome, TurnPolicy,
+        PluginSpec, PromptBlock, ResolvedMcpGrant, ShutdownOutcome, TurnPolicy,
     },
     store::Store,
 };
@@ -213,12 +214,35 @@ impl TurnAdapter for EnvelopeTurnAdapter {
 }
 
 /// Desired state for one serialized local worker seat.
+/// One grant a turn may be given, already provisioned.
+///
+/// The worker arranges turns; it does not know how an endpoint comes to exist,
+/// which is what keeps this layer free of any transport. Whoever starts one
+/// supplies both halves: the authority the controller activates per invocation,
+/// and the descriptor handed to the harness.
+pub struct TurnGrant {
+    pub authority: Arc<dyn ManagedTurnGrant>,
+    pub resolved: ResolvedMcpGrant,
+}
+
+impl fmt::Debug for TurnGrant {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TurnGrant")
+            .field("resolved", &self.resolved)
+            .finish_non_exhaustive()
+    }
+}
+
 pub struct ContinuousWorkerConfig {
     pub agent_id: String,
     pub plugin: PluginSpec,
     pub working_directory: PathBuf,
     pub additional_directories: Vec<PathBuf>,
     pub mcp_grants: Vec<String>,
+    /// Grants already standing up for this run, supplied by whoever started
+    /// them. Empty means a turn is offered none.
+    pub turn_grants: Vec<TurnGrant>,
     /// Explicitly qualified compatibility class. `None` means only the exact
     /// observed profile digest may resume an existing session.
     pub compatibility_digest: Option<String>,
@@ -255,8 +279,6 @@ pub enum ContinuousWorkerError {
     InvalidConfig(String),
     #[error("turn adapter rejected a reserved message: {0}")]
     Adapter(String),
-    #[error("message grant broker failed: {0}")]
-    MessageGrantBroker(#[from] crate::execution::message_grant_broker::MessageGrantBrokerError),
     #[error("failed to safely release an unarmed reservation after {context}: {source}")]
     PreArmSettlement {
         context: String,
@@ -330,28 +352,13 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 "maximum settled turns must be greater than zero".to_owned(),
             ));
         }
-        let broker = if self
-            .config
-            .mcp_grants
-            .iter()
-            .any(|grant| grant == PUBLISH_DURABLE_MESSAGE_GRANT)
-        {
-            Some(MessageGrantBroker::start(self.store.clone()).await?)
-        } else {
-            None
-        };
         let mut report = WorkerReport::default();
-        let outcome = loop {
+        loop {
             if cancellation.is_cancelled() || limit_reached(&report, max_settled_turns) {
                 break Ok(report);
             }
             let exit = self
-                .run_generation(
-                    &cancellation,
-                    max_settled_turns,
-                    &mut report,
-                    broker.as_ref(),
-                )
+                .run_generation(&cancellation, max_settled_turns, &mut report)
                 .await;
             match exit {
                 GenerationExit::Stopped => break Ok(report),
@@ -371,11 +378,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
                     }
                 }
             }
-        };
-        if let Some(broker) = broker {
-            broker.shutdown().await;
         }
-        outcome
     }
 
     async fn run_generation(
@@ -383,7 +386,6 @@ impl<'store> ContinuousHarnessWorker<'store> {
         cancellation: &CancellationToken,
         max_settled_turns: Option<u64>,
         report: &mut WorkerReport,
-        broker: Option<&MessageGrantBroker>,
     ) -> GenerationExit {
         let process = match PluginProcess::start(self.config.plugin.clone()).await {
             Ok(process) => process,
@@ -448,7 +450,6 @@ impl<'store> ContinuousHarnessWorker<'store> {
         let heartbeat = GenerationHeartbeat::start(self.store.clone(), generation_id.clone());
         let context = GenerationContext {
             identity: &generation,
-            broker,
         };
         let mut sessions = HashMap::<LaneIdentity, OpenedSession>::new();
         let exit = self
@@ -531,10 +532,11 @@ impl<'store> ContinuousHarnessWorker<'store> {
             let opened_turn = OpenedTurn {
                 session: opened,
                 generation_id: context.identity.owner_instance_id.clone(),
-                grants: context
-                    .broker
-                    .map(MessageGrantBroker::turn_grant)
-                    .into_iter()
+                grants: self
+                    .config
+                    .turn_grants
+                    .iter()
+                    .map(|grant| Arc::clone(&grant.authority))
                     .collect(),
             };
             if let Some(exit) = self
@@ -770,10 +772,11 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 working_directory,
                 additional_directories,
                 mcp_grants: self.config.mcp_grants.clone(),
-                resolved_mcp_grants: context
-                    .broker
-                    .map(MessageGrantBroker::resolved_grant)
-                    .into_iter()
+                resolved_mcp_grants: self
+                    .config
+                    .turn_grants
+                    .iter()
+                    .map(|grant| grant.resolved.clone())
                     .collect(),
                 profile_digest: context.identity.profile_digest.clone(),
             })
@@ -853,7 +856,6 @@ struct GenerationIdentity {
 
 struct GenerationContext<'a> {
     identity: &'a GenerationIdentity,
-    broker: Option<&'a MessageGrantBroker>,
 }
 
 enum GenerationExit {

@@ -447,7 +447,22 @@ async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
     }
     let store = Store::open_with_message_commit_hints(&args.db).await?;
     let adapter = desired.turn_adapter()?;
-    let worker = ContinuousHarnessWorker::new(&store, desired.into_runtime_config(), adapter)?;
+    let mut config = desired.into_runtime_config();
+    // Whether a turn is offered an MCP endpoint is a deployment decision, so the
+    // binary makes it. The worker is handed the result and never learns that an
+    // endpoint is a thing that can be started.
+    let broker = if config
+        .mcp_grants
+        .iter()
+        .any(|grant| grant == fleetd::execution::message_grant::PUBLISH_DURABLE_MESSAGE_GRANT)
+    {
+        let broker = fleetd::mcp::MessageGrantBroker::start(store.clone()).await?;
+        config.turn_grants.push(broker.turn_grant());
+        Some(broker)
+    } else {
+        None
+    };
+    let worker = ContinuousHarnessWorker::new(&store, config, adapter)?;
     let cancellation = CancellationToken::new();
     let signal = cancellation.clone();
     let signal_task = tokio::spawn(async move {
@@ -461,6 +476,9 @@ async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
         worker.run(cancellation).await
     };
     signal_task.abort();
+    if let Some(broker) = broker {
+        broker.shutdown().await;
+    }
     let report = run?;
     print_json(&report)
 }
@@ -491,6 +509,7 @@ impl WorkerFileConfig {
             working_directory: self.working_directory,
             additional_directories: self.additional_directories,
             mcp_grants: self.mcp_grants,
+            turn_grants: Vec::new(),
             compatibility_digest: self.compatibility_digest,
             lease_duration: std::time::Duration::from_millis(self.lease_duration_ms),
             poll_interval: std::time::Duration::from_millis(self.poll_interval_ms),
