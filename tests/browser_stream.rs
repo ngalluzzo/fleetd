@@ -6,17 +6,19 @@ use std::{
 
 use fleetd::{
     auth::AuthService,
+    http::AppState,
     http::browser_stream_edge::{
         BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse,
         BrowserStreamRedemptionMessageType, BrowserStreamRedemptionRequest,
         BrowserStreamServerFrame,
     },
-    http::{AppState, router},
     model::{CreateAgent, CreateChannel, Message, RegisteredAgent, SendMessage},
     store::Store,
 };
 use futures_util::{SinkExt, StreamExt, future::join_all, stream};
 use serde_json::{Value, json};
+
+mod common;
 use sqlx::{
     Row,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -34,7 +36,7 @@ use tokio_tungstenite::{
 };
 
 struct BrowserDaemon {
-    directory: tempfile::TempDir,
+    _temporary: common::TempStore,
     auth: AuthService,
     client: reqwest::Client,
     operator_token: String,
@@ -45,40 +47,27 @@ struct BrowserDaemon {
 
 impl BrowserDaemon {
     async fn start() -> Self {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let database_path = directory.path().join("fleetd.db");
-        let store = Store::open(&database_path).await.expect("open store");
-        let auth = AuthService::new(store.clone());
-        let operator_path = directory.path().join("operator.token");
-        auth.ensure_operator_credential(&operator_path)
-            .await
-            .expect("provision operator");
-        let operator_token = std::fs::read_to_string(operator_path)
-            .expect("read operator token")
-            .trim()
-            .to_owned();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind daemon");
-        let address = listener.local_addr().expect("bound daemon address");
-        let state = AppState::new(store)
+        let temporary = common::temp_store().await;
+        let auth = AuthService::new(temporary.store.clone());
+        let operator_token =
+            common::bootstrap_operator(&temporary.store, temporary.directory.path()).await;
+        // The edge advertises the origin it is reached on, so the listener has
+        // to be bound before the state that describes it can be built.
+        let (listener, address) = common::bind_loopback().await;
+        let state = AppState::new(temporary.store.clone())
             .with_browser_stream_listener(address)
             .expect("configure browser stream edge");
         assert_eq!(
             state.browser_origin(),
             Some(format!("http://{address}").as_str())
         );
-        let server = tokio::spawn(async move {
-            axum::serve(listener, router(state))
-                .await
-                .expect("serve daemon");
-        });
+        let server = common::spawn_server(listener, state);
         Self {
-            directory,
+            database_path: temporary.database_path.clone(),
+            _temporary: temporary,
             auth,
             client: reqwest::Client::new(),
             operator_token,
-            database_path,
             address,
             server,
         }
@@ -88,22 +77,16 @@ impl BrowserDaemon {
         self.server.abort();
         let _ = (&mut self.server).await;
 
-        let store = Store::open(self.directory.path().join("fleetd.db"))
+        let store = Store::open(&self.database_path)
             .await
             .expect("reopen durable store");
         self.auth = AuthService::new(store.clone());
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("rebind daemon");
-        self.address = listener.local_addr().expect("restarted daemon address");
+        let (listener, address) = common::bind_loopback().await;
+        self.address = address;
         let state = AppState::new(store)
-            .with_browser_stream_listener(self.address)
+            .with_browser_stream_listener(address)
             .expect("reconfigure browser stream edge");
-        self.server = tokio::spawn(async move {
-            axum::serve(listener, router(state))
-                .await
-                .expect("serve restarted daemon");
-        });
+        self.server = common::spawn_server(listener, state);
     }
 
     async fn register(&self, name: &str) -> RegisteredAgent {

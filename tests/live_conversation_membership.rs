@@ -1,8 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use fleetd::{
-    auth::AuthService,
-    http::{AppState, router},
+    http::AppState,
     model::{
         ArmInvocation, ClaimDeliveries, CompleteInvocation, CreateAgent, InvocationBatch,
         InvocationCompletion, Message, MessagePage, RegisteredAgent, SendMessage,
@@ -13,8 +12,10 @@ use futures_util::StreamExt;
 use serde_json::json;
 use sqlx::{Connection, Row, sqlite::SqliteConnectOptions};
 
+mod common;
+
 struct QualificationDaemon {
-    _directory: tempfile::TempDir,
+    _temporary: common::TempStore,
     database_path: PathBuf,
     operator_token: String,
     address: std::net::SocketAddr,
@@ -23,22 +24,13 @@ struct QualificationDaemon {
 
 impl QualificationDaemon {
     async fn start() -> Self {
-        let directory = tempfile::tempdir().expect("qualification directory");
-        let database_path = directory.path().join("fleetd.db");
-        let store = Store::open(&database_path).await.expect("open store");
-        let token_path = directory.path().join("operator.token");
-        AuthService::new(store.clone())
-            .ensure_operator_credential(&token_path)
-            .await
-            .expect("bootstrap operator");
-        let operator_token = std::fs::read_to_string(token_path)
-            .expect("read operator token")
-            .trim()
-            .to_owned();
-        let (address, process) = serve(store).await;
+        let temporary = common::temp_store().await;
+        let operator_token =
+            common::bootstrap_operator(&temporary.store, temporary.directory.path()).await;
+        let (address, process) = common::serve(AppState::new(temporary.store.clone())).await;
         Self {
-            _directory: directory,
-            database_path,
+            database_path: temporary.database_path.clone(),
+            _temporary: temporary,
             operator_token,
             address,
             process: Some(process),
@@ -52,7 +44,7 @@ impl QualificationDaemon {
         let store = Store::open(&self.database_path)
             .await
             .expect("reopen store after restart");
-        let (address, process) = serve(store).await;
+        let (address, process) = common::serve(AppState::new(store)).await;
         self.address = address;
         self.process = Some(process);
     }
@@ -434,19 +426,6 @@ async fn history(
         .json()
         .await
         .expect("history body")
-}
-
-async fn serve(store: Store) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind daemon");
-    let address = listener.local_addr().expect("daemon address");
-    let process = tokio::spawn(async move {
-        axum::serve(listener, router(AppState::new(store)))
-            .await
-            .expect("serve API");
-    });
-    (address, process)
 }
 
 async fn open_stream(

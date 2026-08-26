@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use fleetd::{
     auth::AuthService,
-    http::{AppState, router},
+    http::AppState,
     model::{
         AckDelivery, ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
         Message, SendMessage,
@@ -11,6 +11,8 @@ use fleetd::{
 };
 use futures_util::StreamExt;
 use serde_json::json;
+
+mod common;
 
 #[tokio::test]
 async fn websocket_replays_history_then_delivers_live_messages() {
@@ -66,15 +68,7 @@ async fn websocket_replays_history_then_delivers_live_messages() {
         .await
         .expect("append history");
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind test server");
-    let address = listener.local_addr().expect("server address");
-    let server = tokio::spawn(async move {
-        axum::serve(listener, router(AppState::new(store)))
-            .await
-            .expect("serve API");
-    });
+    let (address, server) = common::serve(AppState::new(store)).await;
 
     let stream_url = format!("ws://{address}/v1/channels/{}/stream?after=0", channel.id);
     let request = authenticated_socket_request(&stream_url, &receiver_credential.token);
@@ -136,18 +130,10 @@ async fn websocket_replays_a_message_committed_by_another_local_process_store() 
         .await
         .expect("create channel");
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind test server");
-    let address = listener.local_addr().expect("server address");
     let state = AppState::new(store)
         .with_external_message_commit_hints(&database_path)
         .expect("bind external message hints");
-    let server = tokio::spawn(async move {
-        axum::serve(listener, router(state))
-            .await
-            .expect("serve API");
-    });
+    let (address, server) = common::serve(state).await;
 
     let stream_url = format!("ws://{address}/v1/channels/{}/stream?after=0", channel.id);
     let (mut socket, _) = tokio_tungstenite::connect_async(authenticated_socket_request(
@@ -211,15 +197,7 @@ async fn streams_do_not_leak_direct_messages_between_other_members() {
         .await
         .expect("create channel");
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind test server");
-    let address = listener.local_addr().expect("server address");
-    let server = tokio::spawn(async move {
-        axum::serve(listener, router(AppState::new(store)))
-            .await
-            .expect("serve API");
-    });
+    let (address, server) = common::serve(AppState::new(store)).await;
 
     let stream_url = format!("ws://{address}/v1/channels/{}/stream?after=0", channel.id);
     let (mut live_socket, _) = tokio_tungstenite::connect_async(authenticated_socket_request(

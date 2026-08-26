@@ -1,16 +1,16 @@
 use std::{net::SocketAddr, time::Duration};
 
 use fleetd::{
-    auth::AuthService,
+    http::AppState,
     http::browser_stream_edge::{
         BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse, BrowserStreamServerFrame,
     },
-    http::{AppState, router},
     model::{CreateAgent, CreateChannel, RegisteredAgent},
-    store::Store,
 };
 use futures_util::{SinkExt, StreamExt, future::join_all, stream};
 use serde_json::json;
+
+mod common;
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
     tungstenite::{
@@ -33,7 +33,7 @@ const GRANT_LIFETIME: Duration = Duration::from_secs(15);
 const CREDENTIAL_REVALIDATION_INTERVAL: Duration = Duration::from_secs(30);
 
 struct BrowserDaemon {
-    _directory: tempfile::TempDir,
+    _temporary: common::TempStore,
     client: reqwest::Client,
     operator_token: String,
     address: SocketAddr,
@@ -42,33 +42,18 @@ struct BrowserDaemon {
 
 impl BrowserDaemon {
     async fn start() -> Self {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let store = Store::open(directory.path().join("fleetd.db"))
-            .await
-            .expect("open store");
-        let auth = AuthService::new(store.clone());
-        let operator_path = directory.path().join("operator.token");
-        auth.ensure_operator_credential(&operator_path)
-            .await
-            .expect("provision operator");
-        let operator_token = std::fs::read_to_string(operator_path)
-            .expect("read operator token")
-            .trim()
-            .to_owned();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind daemon");
-        let address = listener.local_addr().expect("bound daemon address");
-        let state = AppState::new(store)
+        let temporary = common::temp_store().await;
+        let operator_token =
+            common::bootstrap_operator(&temporary.store, temporary.directory.path()).await;
+        // The edge advertises the origin it is reached on, so the listener has
+        // to be bound before the state that describes it can be built.
+        let (listener, address) = common::bind_loopback().await;
+        let state = AppState::new(temporary.store.clone())
             .with_browser_stream_listener(address)
             .expect("configure browser stream edge");
-        let server = tokio::spawn(async move {
-            axum::serve(listener, router(state))
-                .await
-                .expect("serve daemon");
-        });
+        let server = common::spawn_server(listener, state);
         Self {
-            _directory: directory,
+            _temporary: temporary,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()

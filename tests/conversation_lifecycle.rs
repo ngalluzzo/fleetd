@@ -1,6 +1,5 @@
 use fleetd::{
-    auth::AuthService,
-    http::{AppState, router},
+    http::AppState,
     model::{
         ConversationKind, CreateAgent, CreateChannel, CreateChannelMember, CreateMessage,
         MembershipDeliveryMode, OpenDirectConversation, RenameChannel, SendMessage,
@@ -8,6 +7,8 @@ use fleetd::{
     store::Store,
 };
 use serde_json::json;
+
+mod common;
 
 async fn test_store() -> (tempfile::TempDir, Store) {
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -202,7 +203,7 @@ async fn shared_channel_rename_and_archive_preserve_history_and_close_writes() {
 }
 
 struct TestServer {
-    _directory: tempfile::TempDir,
+    _temporary: common::TempStore,
     address: std::net::SocketAddr,
     operator_token: String,
     process: tokio::task::JoinHandle<()>,
@@ -210,30 +211,12 @@ struct TestServer {
 
 impl TestServer {
     async fn start() -> Self {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let store = Store::open(directory.path().join("fleetd.db"))
-            .await
-            .expect("open store");
-        let token_path = directory.path().join("operator.token");
-        AuthService::new(store.clone())
-            .ensure_operator_credential(&token_path)
-            .await
-            .expect("operator credential");
-        let operator_token = std::fs::read_to_string(token_path)
-            .expect("read operator token")
-            .trim()
-            .to_owned();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind server");
-        let address = listener.local_addr().expect("server address");
-        let process = tokio::spawn(async move {
-            axum::serve(listener, router(AppState::new(store)))
-                .await
-                .expect("serve API");
-        });
+        let temporary = common::temp_store().await;
+        let operator_token =
+            common::bootstrap_operator(&temporary.store, temporary.directory.path()).await;
+        let (address, process) = common::serve(AppState::new(temporary.store.clone())).await;
         Self {
-            _directory: directory,
+            _temporary: temporary,
             address,
             operator_token,
             process,
