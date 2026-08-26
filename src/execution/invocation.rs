@@ -9,7 +9,11 @@ use crate::{
         ArmInvocation, ClaimDeliveries, CompleteInvocation, CreateMessage, ExecutionCertainty,
         Invocation, InvocationBatch, InvocationCompletion, InvocationState, Message,
     },
-    store::{Store, insert_message, message_from_row, now_ms},
+    store::{
+        Store,
+        message::{insert_message, message_from_row},
+        now_ms,
+    },
 };
 
 /// Atomically leases eligible deliveries and creates their durable managed

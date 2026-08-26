@@ -1,7 +1,9 @@
 # fleetd agent instructions
 
 Read `VISION.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, and
-`docs/MILESTONES.md` before non-trivial changes.
+`docs/MILESTONES.md` before non-trivial changes. Read `docs/PARALLEL_WORK.md`
+before changing anything generated or shared, and when several agents are
+working at once.
 
 - Keep the kernel limited to agents, channels, membership, and immutable
   messages. Harness and workflow semantics belong in adapters or versioned
@@ -19,6 +21,16 @@ Read `VISION.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, and
 - Put every new module in the layer that owns it: `src/execution` for what
   happens to durable state, `src/http` for how it is exposed. Nothing new
   belongs at the root of `src/`.
+- Never hand-merge a generated artifact. The contract, the generated client, and
+  the served bundle are marked unmergeable; take either side and run
+  `bin/regenerate`, which rebuilds them in the order they depend on each other.
+- Split a module into a directory once it holds more than one concept, giving
+  each concept its own source and its own `impl` block. Reaching a parent's
+  private state from a child module is allowed, so the split costs call sites
+  nothing.
+- Name a new module's source in the boundary assertions by concept, not by file:
+  `tests/crate_boundaries.rs` resolves a module to a file or to every source
+  under a directory, and splitting one must not shrink what it checks.
 - The kernel is `crates/kernel` and holds the only connection pool. Compose
   above it with free functions over `&Store`; never add methods to `Store` or
   reach for the pool from outside.

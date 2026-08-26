@@ -1,0 +1,15 @@
+#!/bin/sh
+# Regenerates every committed derived artifact, in dependency order.
+#
+# Each stage consumes the previous one: the contract is collected from the
+# handlers, the TypeScript client is generated from the contract, and the served
+# bundle is built from the client. Running them out of order produces artifacts
+# that disagree with each other, which `bin/ci` then rejects.
+#
+# This is also how a merge conflict in any of those paths is resolved: they are
+# marked unmergeable in `.gitattributes`, so take either side and run this.
+set -eu
+
+cargo run --quiet --bin export-openapi
+npm run generate
+npm run build

@@ -9,7 +9,7 @@ use sqlx::Row;
 
 use crate::{
     error::FleetError,
-    store::{Store, message_from_row, now_ms},
+    store::{Store, message::message_from_row, now_ms},
 };
 use fleetd_proto::model::{
     BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries, Delivery,

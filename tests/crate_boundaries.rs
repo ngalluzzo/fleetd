@@ -4,7 +4,10 @@
 //! because a boundary that lives only in a document drifts the moment someone
 //! adds a convenient import.
 
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 /// Everything `fleetd-proto` is allowed to depend on.
 ///
@@ -267,6 +270,41 @@ fn above_kernel() -> Vec<String> {
 
 /// Whether a source file names another crate module, written either inline as
 /// `crate::other::Item` or as an entry inside a grouped `use crate::{ .. };`.
+/// Every source file belonging to one module.
+///
+/// A module is a file until it outgrows one, and then it is a directory. These
+/// assertions have to hold either way, so a directory contributes all of its
+/// sources rather than just its `mod.rs` -- otherwise splitting a module would
+/// quietly shrink what is being checked.
+fn module_sources(root: &Path, module: &str) -> Vec<PathBuf> {
+    let file = root.join(format!("{module}.rs"));
+    if file.is_file() {
+        return vec![file];
+    }
+    let directory = root.join(module);
+    let mut sources = Vec::new();
+    collect_sources(&directory, &mut sources);
+    sources.sort();
+    assert!(
+        !sources.is_empty(),
+        "module `{module}` is neither {}.rs nor a directory of sources",
+        file.display()
+    );
+    sources
+}
+
+fn collect_sources(path: &Path, sources: &mut Vec<PathBuf>) {
+    if path.is_dir() {
+        for entry in fs::read_dir(path).expect("module directory is readable") {
+            collect_sources(&entry.expect("module entry is readable").path(), sources);
+        }
+        return;
+    }
+    if path.extension().is_some_and(|extension| extension == "rs") {
+        sources.push(path.to_owned());
+    }
+}
+
 fn references(source: &str, module: &str) -> bool {
     if source.contains(&format!("crate::{module}::")) {
         return true;
@@ -285,18 +323,20 @@ fn references(source: &str, module: &str) -> bool {
 
 #[test]
 fn the_kernel_does_not_depend_on_what_is_layered_above_it() {
+    let kernel = workspace_root().join("crates/kernel/src");
     for module in KERNEL_MODULES {
-        let path = workspace_root().join(format!("crates/kernel/src/{module}.rs"));
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("kernel module {module} at {}", path.display()));
-        for above in EXECUTION_MODULES.iter().chain(["http"].iter()) {
-            assert!(
-                !references(&source, above),
-                "kernel module `{module}` reaches `{above}`, which is layered above it. \
+        for path in module_sources(&kernel, module) {
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|_| panic!("kernel module {module} at {}", path.display()));
+            for above in EXECUTION_MODULES.iter().chain(["http"].iter()) {
+                assert!(
+                    !references(&source, above),
+                    "kernel module `{module}` reaches `{above}`, which is layered above it. \
                  A delivery row transition and the invocation fence settling it belong in \
                  one transaction, but the composition belongs above the kernel — see \
-                 `settlement` and docs/adr/0026-delivery-settlement-composition.md."
-            );
+                     `settlement` and docs/adr/0026-delivery-settlement-composition.md."
+                );
+            }
         }
     }
 }
@@ -346,16 +386,18 @@ fn only_the_kernel_adds_methods_to_the_store() {
 
 #[test]
 fn the_kernel_does_not_speak_http() {
+    let kernel = workspace_root().join("crates/kernel/src");
     for module in KERNEL_MODULES {
-        let path = workspace_root().join(format!("crates/kernel/src/{module}.rs"));
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("kernel module {module} at {}", path.display()));
-        for forbidden in ["axum", "utoipa", "reqwest"] {
-            assert!(
-                !source.contains(forbidden),
-                "kernel module `{module}` references `{forbidden}`. Rendering a domain error \
-                 as a status code is the HTTP layer's decision — see `api::error::ApiError`."
-            );
+        for path in module_sources(&kernel, module) {
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|_| panic!("kernel module {module} at {}", path.display()));
+            for forbidden in ["axum", "utoipa", "reqwest"] {
+                assert!(
+                    !source.contains(forbidden),
+                    "kernel module `{module}` references `{forbidden}`. Rendering a domain error \
+                     as a status code is the HTTP layer's decision — see `api::error::ApiError`."
+                );
+            }
         }
     }
 }

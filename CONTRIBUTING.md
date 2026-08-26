@@ -27,6 +27,11 @@ against `openapi/fleetd-v1.json`, the served bundle against
 `web/` is build output. Edit `apps/conversation-web` and rebuild; the shell and
 its target contract are sources of that app.
 
+Every committed artifact is generated from the one before it, so `bin/regenerate`
+rebuilds them in that order. These paths are also marked unmergeable in
+`.gitattributes`: a conflict there is resolved by regenerating, never by editing
+the generated file. See `docs/PARALLEL_WORK.md`.
+
 `.github/workflows/ci.yml` runs exactly these commands on every pull request.
 A change is not complete until that workflow is green.
 

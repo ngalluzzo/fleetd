@@ -1,0 +1,18 @@
+# Derived artifacts.
+#
+# These are committed on purpose: `bin/ci` verifies each one still matches its
+# source, and the daemon embeds the conversation bundle with `include_str!`. But
+# they are never merged by hand. Git is told to leave a conflict here rather
+# than interleave two regenerated blobs, and the resolution is always to run
+# `bin/regenerate` -- which rebuilds them in dependency order, since each is
+# generated from the one above it.
+openapi/fleetd-v1.json              -merge
+clients/typescript/src/generated/** -merge linguist-generated
+web/conversation/conversation.js    -merge linguist-generated
+web/conversation/conversation.css   -merge linguist-generated
+web/conversation/index.html         -merge linguist-generated
+web/conversation/contract.json      -merge linguist-generated
+
+# Lockfiles are resolved by re-resolving, not by choosing lines.
+Cargo.lock                          -merge
+package-lock.json                   -merge
