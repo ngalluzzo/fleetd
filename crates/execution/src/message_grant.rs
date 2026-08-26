@@ -6,7 +6,7 @@
 //! kind, and the payload.
 //!
 //! Exposing this over a wire is a surface's job, not this module's. The MCP
-//! endpoint lives in `crate::mcp`.
+//! endpoint is a surface in the daemon.
 
 use std::collections::BTreeSet;
 
@@ -17,24 +17,24 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::sync::Mutex;
 
-use crate::{
+use crate::controller::ManagedTurnGrant;
+use fleetd_kernel::{
     error::FleetError,
-    execution::controller::ManagedTurnGrant,
-    model::{CreateMessage, Invocation},
     store::{Store, now_ms},
 };
+use fleetd_proto::model::{CreateMessage, Invocation};
 
 /// Runtime grant name for invocation-scoped durable message publication.
 pub const PUBLISH_DURABLE_MESSAGE_GRANT: &str = "fleet.messaging.send";
 
-pub(crate) const MAX_MESSAGES_PER_INVOCATION: u32 = 8;
+pub const MAX_MESSAGES_PER_INVOCATION: u32 = 8;
 const MAX_OPERATION_ID_BYTES: usize = 128;
 const MAX_AGENT_ID_BYTES: usize = 256;
 const MAX_MESSAGE_KIND_BYTES: usize = 256;
 const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
-pub(crate) struct ActiveMessageGrant {
+struct ActiveMessageGrant {
     invocation_id: String,
     sender_id: String,
     channel_id: String,
@@ -45,7 +45,7 @@ pub(crate) struct ActiveMessageGrant {
     operations: BTreeSet<String>,
 }
 
-pub(crate) struct MessageBrokerInner {
+pub struct MessageBrokerInner {
     store: Store,
     /// Held through the durable append. Revocation therefore waits for every
     /// accepted call to commit or fail before the controller settles the turn.
@@ -57,7 +57,8 @@ impl MessageBrokerInner {
     ///
     /// A surface starts an endpoint over this; it does not assemble it, which is
     /// why the fields stay private.
-    pub(crate) fn new(store: Store) -> Self {
+    #[must_use]
+    pub fn new(store: Store) -> Self {
         Self {
             store,
             active: Mutex::new(None),
@@ -108,7 +109,7 @@ impl ManagedTurnGrant for MessageBrokerInner {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PublishMessageInput {
+pub struct PublishMessageInput {
     /// Stable identifier for this logical send within the current invocation.
     operation_id: String,
     /// Exact peer agent ID. Broadcast and self-send are not permitted.
@@ -120,7 +121,7 @@ pub(crate) struct PublishMessageInput {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
-pub(crate) struct PublishMessageOutput {
+pub struct PublishMessageOutput {
     message_id: String,
     seq: i64,
     created: bool,
@@ -130,7 +131,24 @@ pub(crate) struct PublishMessageOutput {
 }
 
 impl MessageBrokerInner {
-    pub(crate) async fn publish(
+    /// Publishes one message under the armed grant.
+    ///
+    /// The grant fixes the sender, the channel, and the correlation and
+    /// causation the message inherits; the caller chooses only the recipient,
+    /// the kind, and the payload. Repeating an `operation_id` is idempotent and
+    /// does not consume budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns a bounded, caller-safe string when no grant is armed, the grant
+    /// has expired, the recipient is the sender, the per-invocation budget is
+    /// exhausted, the input is out of bounds, or the store rejects the append.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the stored message lacks the correlation or causation the
+    /// grant supplied, which would mean the append did not preserve them.
+    pub async fn publish(
         &self,
         input: PublishMessageInput,
     ) -> Result<PublishMessageOutput, String> {

@@ -3,6 +3,23 @@
 //! These assertions are about the dependency graph, not behavior. They exist
 //! because a boundary that lives only in a document drifts the moment someone
 //! adds a convenient import.
+//!
+//! ## What is no longer checked here
+//!
+//! Four assertions retired when `execution` became a crate, because the build
+//! began holding them:
+//!
+//! - *only the kernel adds methods to `Store`* -- the orphan rule. `impl Store`
+//!   outside `fleetd-kernel` is `error[E0116]`; verified rather than assumed.
+//! - *execution does not depend on the layer that exposes it* -- `http` and
+//!   `mcp` live in the daemon, and `no_workspace_member_builds_against_the_daemon`
+//!   already forbids a member depending on it.
+//! - *the kernel does not speak HTTP* and *the kernel does not depend on what is
+//!   layered above it* -- both are now
+//!   `the_kernel_crate_depends_only_on_storage_crates`: a crate cannot name what
+//!   it does not depend on.
+//!
+//! A text check that survives here does so because nothing else can hold it.
 
 use std::{
     fs,
@@ -236,9 +253,6 @@ fn crate_root_re_exports_modules_only() {
     }
 }
 
-/// The six concepts ARCHITECTURE.md gives the kernel, as modules.
-const KERNEL_MODULES: [&str; 5] = ["auth", "delivery", "error", "message_commit_hint", "store"];
-
 /// The layer that decides what happens to durable state.
 const EXECUTION_MODULES: [&str; 7] = [
     "controller",
@@ -250,12 +264,12 @@ const EXECUTION_MODULES: [&str; 7] = [
     "worker",
 ];
 
-/// Every layer that owns modules, as a directory under `src/`.
+/// Every layer left in the daemon, as a directory under `src/`.
 ///
-/// A surface is named for its mechanism, and there is more than one, so a new
-/// one is a new entry here rather than a folder nobody notices. This list is
-/// what stopped `mcp` from arriving unannounced.
-const SOURCE_LAYERS: [&str; 3] = ["execution", "http", "mcp"];
+/// Both are surfaces, named for a mechanism, which is what having two of them
+/// makes plain. A new surface is a new entry here rather than a folder nobody
+/// notices. `execution` left for `crates/execution`.
+const SOURCE_LAYERS: [&str; 2] = ["http", "mcp"];
 
 /// The layer that exposes it. Route domains own handlers; the rest is
 /// composition, shared guards, and the transport beneath them.
@@ -279,44 +293,14 @@ const HTTP_SUPPORT: [&str; 7] = [
     "surface",
 ];
 
-/// Every module above the kernel, by path within `src/`.
+/// Every surface module still inside the daemon, by path within `src/`.
 fn above_kernel() -> Vec<String> {
-    EXECUTION_MODULES
+    HTTP_ROUTE_DOMAINS
         .iter()
-        .map(|module| format!("execution/{module}"))
-        .chain(
-            HTTP_ROUTE_DOMAINS
-                .iter()
-                .chain(HTTP_SUPPORT.iter())
-                .map(|module| format!("http/{module}")),
-        )
-        .chain(["http/mod".to_owned()])
+        .chain(HTTP_SUPPORT.iter())
+        .map(|module| format!("http/{module}"))
+        .chain(["http/mod".to_owned(), "mcp/mod".to_owned()])
         .collect()
-}
-
-/// Whether a source file names another crate module, written either inline as
-/// `crate::other::Item` or as an entry inside a grouped `use crate::{ .. };`.
-/// Every source file belonging to one module.
-///
-/// A module is a file until it outgrows one, and then it is a directory. These
-/// assertions have to hold either way, so a directory contributes all of its
-/// sources rather than just its `mod.rs` -- otherwise splitting a module would
-/// quietly shrink what is being checked.
-fn module_sources(root: &Path, module: &str) -> Vec<PathBuf> {
-    let file = root.join(format!("{module}.rs"));
-    if file.is_file() {
-        return vec![file];
-    }
-    let directory = root.join(module);
-    let mut sources = Vec::new();
-    collect_sources(&directory, &mut sources);
-    sources.sort();
-    assert!(
-        !sources.is_empty(),
-        "module `{module}` is neither {}.rs nor a directory of sources",
-        file.display()
-    );
-    sources
 }
 
 fn collect_sources(path: &Path, sources: &mut Vec<PathBuf>) {
@@ -331,42 +315,6 @@ fn collect_sources(path: &Path, sources: &mut Vec<PathBuf>) {
     }
 }
 
-fn references(source: &str, module: &str) -> bool {
-    if source.contains(&format!("crate::{module}::")) {
-        return true;
-    }
-    let mut rest = source;
-    while let Some(start) = rest.find("use crate::{") {
-        rest = &rest[start..];
-        let Some(end) = rest.find("};") else { break };
-        if rest[..end].contains(&format!("{module}::")) {
-            return true;
-        }
-        rest = &rest[end + 2..];
-    }
-    false
-}
-
-#[test]
-fn the_kernel_does_not_depend_on_what_is_layered_above_it() {
-    let kernel = workspace_root().join("crates/kernel/src");
-    for module in KERNEL_MODULES {
-        for path in module_sources(&kernel, module) {
-            let source = fs::read_to_string(&path)
-                .unwrap_or_else(|_| panic!("kernel module {module} at {}", path.display()));
-            for above in EXECUTION_MODULES.iter().chain(["http"].iter()) {
-                assert!(
-                    !references(&source, above),
-                    "kernel module `{module}` reaches `{above}`, which is layered above it. \
-                 A delivery row transition and the invocation fence settling it belong in \
-                 one transaction, but the composition belongs above the kernel — see \
-                     `settlement` and docs/adr/0026-delivery-settlement-composition.md."
-                );
-            }
-        }
-    }
-}
-
 /// Every crate above the substrate that could reach a kernel table.
 ///
 /// `Store::pool()` and `Store::begin_immediate()` both hand out an executor that
@@ -374,7 +322,7 @@ fn the_kernel_does_not_depend_on_what_is_layered_above_it() {
 /// `only_the_kernel_writes_kernel_tables`. That makes the list of places it is
 /// checked load-bearing: a new crate above the substrate that is missing here is
 /// unchecked, not compliant.
-const ABOVE_SUBSTRATE_CRATES: [&str; 1] = ["crates/conversation/src"];
+const ABOVE_SUBSTRATE_CRATES: [&str; 2] = ["crates/conversation/src", "crates/execution/src"];
 
 /// Checks the one rule in this file that cannot be made structural.
 ///
@@ -437,39 +385,6 @@ fn only_the_kernel_writes_kernel_tables() {
     }
 }
 
-#[test]
-fn only_the_kernel_adds_methods_to_the_store() {
-    for module in above_kernel() {
-        let path = workspace_root().join(format!("src/{module}.rs"));
-        let source = fs::read_to_string(&path)
-            .unwrap_or_else(|_| panic!("module {module} at {}", path.display()));
-        assert!(
-            !source.contains("impl Store"),
-            "`{module}` adds methods to `Store`, which the kernel owns. Once these layers \
-             are crates that is an orphan-rule error, so compose over `&Store` with a free \
-             function instead."
-        );
-    }
-}
-
-#[test]
-fn the_kernel_does_not_speak_http() {
-    let kernel = workspace_root().join("crates/kernel/src");
-    for module in KERNEL_MODULES {
-        for path in module_sources(&kernel, module) {
-            let source = fs::read_to_string(&path)
-                .unwrap_or_else(|_| panic!("kernel module {module} at {}", path.display()));
-            for forbidden in ["axum", "utoipa", "reqwest"] {
-                assert!(
-                    !source.contains(forbidden),
-                    "kernel module `{module}` references `{forbidden}`. Rendering a domain error \
-                     as a status code is the HTTP layer's decision — see `api::error::ApiError`."
-                );
-            }
-        }
-    }
-}
-
 /// Everything `fleetd-kernel` is allowed to depend on.
 ///
 /// The kernel owns the authoritative store. A web framework, an HTTP client, or
@@ -495,6 +410,49 @@ const KERNEL_ALLOWED_DEPENDENCIES: [&str; 11] = [
 /// had started doing work. This list is why neither is possible rather than
 /// merely discouraged: the crate cannot name what it does not depend on.
 const CONVERSATION_ALLOWED_DEPENDENCIES: [&str; 3] = ["fleetd-kernel", "fleetd-proto", "sqlx"];
+
+/// Everything `fleetd-execution` is allowed to depend on.
+///
+/// This layer decides what happens to durable state. A web framework or an MCP
+/// server here would mean it had started exposing something, which is what the
+/// retired *execution does not speak HTTP* text check used to look for. It is a
+/// fact about the build now: a surface provisions endpoints and hands the worker
+/// a `TurnGrant`.
+const EXECUTION_ALLOWED_DEPENDENCIES: [&str; 13] = [
+    "fleetd-kernel",
+    "fleetd-plugin-host",
+    "fleetd-proto",
+    "futures-util",
+    "schemars",
+    "serde",
+    "serde_json",
+    "sha2",
+    "sqlx",
+    "thiserror",
+    "tokio",
+    "tokio-util",
+    "tracing",
+];
+
+#[test]
+fn the_execution_crate_speaks_no_transport() {
+    let manifest = fs::read_to_string(workspace_root().join("crates/execution/Cargo.toml"))
+        .expect("execution manifest");
+    for table in [
+        "[dependencies]",
+        "[dev-dependencies]",
+        "[build-dependencies]",
+    ] {
+        for dependency in declared_dependencies(&manifest, table) {
+            assert!(
+                EXECUTION_ALLOWED_DEPENDENCIES.contains(&dependency.as_str())
+                    || dependency == "uuid",
+                "fleetd-execution {table} contains `{dependency}`. Deciding what happens to \
+                 durable state must not mean exposing it; see EXECUTION_ALLOWED_DEPENDENCIES."
+            );
+        }
+    }
+}
 
 #[test]
 fn the_conversation_crate_depends_only_on_the_substrate() {
@@ -663,11 +621,12 @@ fn the_source_tree_matches_the_declared_layers() {
 
     let mut expected_execution: Vec<String> =
         EXECUTION_MODULES.iter().map(|m| (*m).to_owned()).collect();
+    expected_execution.push("lib".to_owned());
     expected_execution.sort();
     assert_eq!(
-        rust_module_names(&source.join("execution")),
+        rust_module_names(&workspace_root().join("crates/execution/src")),
         expected_execution,
-        "src/execution does not match EXECUTION_MODULES. A module was added or removed \
+        "crates/execution does not match EXECUTION_MODULES. A module was added or removed \
          without saying which layer owns it."
     );
 
@@ -683,18 +642,4 @@ fn the_source_tree_matches_the_declared_layers() {
         "src/http does not match its declared modules. A route domain belongs in \
          HTTP_ROUTE_DOMAINS and must be merged into a contract; anything else is support."
     );
-}
-
-#[test]
-fn execution_does_not_depend_on_the_layer_that_exposes_it() {
-    for module in EXECUTION_MODULES {
-        let path = workspace_root().join(format!("src/execution/{module}.rs"));
-        let source =
-            fs::read_to_string(&path).unwrap_or_else(|_| panic!("execution module {module}"));
-        assert!(
-            !references(&source, "http"),
-            "execution module `{module}` reaches the HTTP layer. Deciding what happens to \
-             durable state must not depend on how it is exposed."
-        );
-    }
 }

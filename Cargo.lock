@@ -857,6 +857,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "fleetd-conversation",
+ "fleetd-execution",
  "fleetd-kernel",
  "fleetd-plugin-host",
  "fleetd-proto",
@@ -921,6 +922,26 @@ dependencies = [
  "fleetd-kernel",
  "fleetd-proto",
  "sqlx",
+]
+
+[[package]]
+name = "fleetd-execution"
+version = "0.1.0"
+dependencies = [
+ "fleetd-kernel",
+ "fleetd-plugin-host",
+ "fleetd-proto",
+ "futures-util",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

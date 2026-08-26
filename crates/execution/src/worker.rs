@@ -15,29 +15,28 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::execution::invocation;
-use crate::execution::operations;
-use crate::execution::session_binding;
-use crate::execution::settlement;
+use crate::invocation;
+use crate::operations;
+use crate::session_binding;
+use crate::settlement;
 use crate::{
-    error::FleetError,
-    execution::controller::{
+    controller::{
         ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnGrant,
         ManagedTurnOutcome, TurnResultCapture,
     },
-    execution::message_grant::PUBLISH_DURABLE_MESSAGE_GRANT,
-    execution::operations::{
+    message_grant::PUBLISH_DURABLE_MESSAGE_GRANT,
+    operations::{
         NewPluginGeneration, PluginGenerationDisposition, PluginShutdownOutcome,
         StopPluginGeneration,
     },
-    execution::session_binding::{AcquireSessionBinding, SessionAcquisitionMode},
-    model::{Invocation, RetryDelivery},
-    plugin::{
-        Binding, HarnessAcpClient, OpenSession, OpenSessionMode, PluginError, PluginProcess,
-        PluginSpec, PromptBlock, ResolvedMcpGrant, ShutdownOutcome, TurnPolicy,
-    },
-    store::Store,
+    session_binding::{AcquireSessionBinding, SessionAcquisitionMode},
 };
+use fleetd_kernel::{error::FleetError, store::Store};
+use fleetd_plugin_host::{
+    Binding, HarnessAcpClient, OpenSession, OpenSessionMode, PluginError, PluginProcess,
+    PluginSpec, PromptBlock, ResolvedMcpGrant, ShutdownOutcome, TurnPolicy,
+};
+use fleetd_proto::model::{Invocation, RetryDelivery};
 
 const MAX_LEASE_DURATION_MS: u64 = 3_600_000;
 const MAX_POLL_INTERVAL_MS: u64 = 60_000;
@@ -483,7 +482,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
             let reservation = match invocation::reserve_invocations_by_kind(
                 self.store,
                 &self.config.agent_id,
-                crate::model::ClaimDeliveries {
+                fleetd_proto::model::ClaimDeliveries {
                     limit: 1,
                     lease_duration_ms: duration_ms(self.config.lease_duration)
                         .expect("validated lease duration"),

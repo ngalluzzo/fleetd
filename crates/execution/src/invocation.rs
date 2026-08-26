@@ -3,17 +3,17 @@ use std::collections::BTreeSet;
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::{
+use fleetd_kernel::{
     error::FleetError,
-    model::{
-        ArmInvocation, ClaimDeliveries, CompleteInvocation, CreateMessage, ExecutionCertainty,
-        Invocation, InvocationBatch, InvocationCompletion, InvocationState, Message,
-    },
     store::{
         Store,
         message::{insert_message, message_from_row},
         now_ms,
     },
+};
+use fleetd_proto::model::{
+    ArmInvocation, ClaimDeliveries, CompleteInvocation, CreateMessage, ExecutionCertainty,
+    Invocation, InvocationBatch, InvocationCompletion, InvocationState, Message,
 };
 
 /// Atomically leases eligible deliveries and creates their durable managed
@@ -70,8 +70,8 @@ async fn reserve_invocations_filtered(
     input: ClaimDeliveries,
     message_kinds: Option<&BTreeSet<String>>,
 ) -> Result<InvocationBatch, FleetError> {
-    crate::delivery::validate_claim(&input)?;
-    crate::delivery::ensure_agent(store, agent_id).await?;
+    fleetd_kernel::delivery::validate_claim(&input)?;
+    fleetd_kernel::delivery::ensure_agent(store, agent_id).await?;
     let now = now_ms();
     let lease_duration = i64::try_from(input.lease_duration_ms)
         .map_err(|_| FleetError::Invalid("lease duration is too large".to_owned()))?;
@@ -82,7 +82,7 @@ async fn reserve_invocations_filtered(
     let message_kinds_json = message_kinds.map(serde_json::to_string).transpose()?;
     let mut transaction = store.begin_immediate().await?;
     recover_expired_invocations(&mut transaction, agent_id, now).await?;
-    crate::delivery::lease_claimable(
+    fleetd_kernel::delivery::lease_claimable(
         &mut transaction,
         agent_id,
         &lease_token,
@@ -258,11 +258,8 @@ pub(crate) async fn complete_invocation_transaction(
 ) -> Result<(InvocationCompletion, bool), FleetError> {
     validate_completion(invocation_id, input)?;
     if !allow_active_session_binding {
-        crate::execution::session_binding::ensure_invocation_not_active_on_session(
-            transaction,
-            invocation_id,
-        )
-        .await?;
+        crate::session_binding::ensure_invocation_not_active_on_session(transaction, invocation_id)
+            .await?;
     }
     let row = invocation_with_delivery(transaction, agent_id, invocation_id).await?;
     validate_static_fence(&row, &input.lease_token, &input.fence_token)?;
@@ -434,7 +431,7 @@ async fn park_expired_armed_invocation(
     let lease_token: String = row.try_get("lease_token")?;
     let attempt: i64 = row.try_get("attempt")?;
     let reason = format!("invocation {invocation_id} lease expired after dispatch was armed");
-    if !crate::delivery::block_expired_lease(
+    if !fleetd_kernel::delivery::block_expired_lease(
         transaction,
         agent_id,
         message_seq,
@@ -448,7 +445,7 @@ async fn park_expired_armed_invocation(
             "expired invocation delivery changed during recovery".to_owned(),
         ));
     }
-    crate::delivery::record_block(
+    fleetd_kernel::delivery::record_block(
         transaction,
         message_seq,
         agent_id,
@@ -476,7 +473,7 @@ async fn park_expired_armed_invocation(
             "expired invocation changed during recovery".to_owned(),
         ));
     }
-    crate::execution::session_binding::mark_expired_session_turn_uncertain(
+    crate::session_binding::mark_expired_session_turn_uncertain(
         transaction,
         &invocation_id,
         &reason,
@@ -523,7 +520,7 @@ pub(crate) async fn terminalize_invocation(
     reason: &str,
     now: i64,
 ) -> Result<(), FleetError> {
-    crate::execution::session_binding::ensure_bound_turn_allows_delivery_settlement(
+    crate::session_binding::ensure_bound_turn_allows_delivery_settlement(
         transaction,
         agent_id,
         message_id,
@@ -699,7 +696,7 @@ async fn acknowledge_invocation_delivery(
     now: i64,
 ) -> Result<(), FleetError> {
     let message_seq: i64 = row.try_get("message_seq")?;
-    if !crate::delivery::acknowledge_leased_seq(
+    if !fleetd_kernel::delivery::acknowledge_leased_seq(
         transaction,
         agent_id,
         message_seq,

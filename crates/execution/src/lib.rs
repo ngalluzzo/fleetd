@@ -6,7 +6,12 @@
 //! what bounded evidence is kept afterwards.
 //!
 //! It composes over `&Store` and never extends it, so the direction of the
-//! dependency is visible at every call site.
+//! dependency is visible at every call site. The orphan rule now enforces that:
+//! `Store` belongs to another crate, so a method on it cannot be written here.
+//!
+//! Nothing in this crate exposes anything. A surface provisions transports and
+//! hands the worker a [`worker::TurnGrant`], which is why no web framework
+//! appears in this crate's dependencies.
 
 pub mod controller;
 pub mod invocation;

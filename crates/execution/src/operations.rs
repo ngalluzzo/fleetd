@@ -11,14 +11,14 @@ pub use fleetd_proto::operations::{
     PluginShutdownOutcome,
 };
 
-use crate::{
+use fleetd_kernel::{
     error::FleetError,
-    model::ExecutionCertainty,
-    plugin::{
-        Binding, DescribeResult, PluginIdentity, PluginInterface, SessionPersistence, TurnTerminal,
-    },
     store::{Store, now_ms},
 };
+use fleetd_plugin_host::{
+    Binding, DescribeResult, PluginIdentity, PluginInterface, SessionPersistence, TurnTerminal,
+};
+use fleetd_proto::model::ExecutionCertainty;
 
 const MAX_EVIDENCE_JSON_BYTES: usize = 1024 * 1024;
 const MAX_REASON_BYTES: usize = 4_096;

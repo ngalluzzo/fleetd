@@ -1,0 +1,35 @@
+[package]
+name = "fleetd-execution"
+version = "0.1.0"
+edition = "2024"
+description = "What happens to fleetd's durable state: fences, sessions, and the worker loop"
+license = "MIT"
+
+# This layer decides what happens to durable state. It composes over the kernel
+# and drives harness processes; it does not expose anything. There is no web
+# framework and no MCP server in this list, which is why "execution does not
+# speak a transport" is now a fact about the build rather than a rule a test
+# reads the source to check. A surface provisions endpoints and hands this layer
+# a `TurnGrant`.
+[dependencies]
+fleetd-kernel = { path = "../kernel" }
+fleetd-plugin-host = { path = "../plugin-host" }
+fleetd-proto = { path = "../proto" }
+futures-util = "0.3"
+schemars = "1.2.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

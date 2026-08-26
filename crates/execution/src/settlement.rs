@@ -11,21 +11,20 @@
 
 use uuid::Uuid;
 
-use crate::{
+use crate::invocation::{
+    ensure_retry_is_safe, recover_expired_invocations, terminalize_invocation,
+};
+use fleetd_kernel::{
     delivery::{
         blocked_delivery_by_id, blocked_delivery_by_lease, ensure_agent, insert_block_record,
         lease_claimable, leased_batch, mark_acknowledged, mark_blocked, mark_retry, settle_miss,
         validate_block, validate_claim, validate_retry, validate_token,
     },
     error::FleetError,
-    execution::invocation::{
-        ensure_retry_is_safe, recover_expired_invocations, terminalize_invocation,
-    },
-    model::{
-        BlockDelivery, BlockedDelivery, ClaimBatch, ClaimDeliveries, ExecutionCertainty,
-        RetryDelivery,
-    },
     store::{Store, now_ms},
+};
+use fleetd_proto::model::{
+    BlockDelivery, BlockedDelivery, ClaimBatch, ClaimDeliveries, ExecutionCertainty, RetryDelivery,
 };
 
 /// Atomically leases the oldest eligible entries from one agent inbox.

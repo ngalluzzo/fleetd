@@ -11,13 +11,15 @@ pub use fleetd_proto::session::{
 };
 
 use crate::{
+    invocation::{arm_invocation_transaction, complete_invocation_transaction},
+    operations::begin_invocation_observation,
+};
+use fleetd_kernel::{
     error::FleetError,
-    execution::invocation::{arm_invocation_transaction, complete_invocation_transaction},
-    execution::operations::begin_invocation_observation,
-    model::{ArmInvocation, CompleteInvocation, Invocation, InvocationCompletion},
-    plugin::{Binding, SessionPersistence},
     store::{Store, now_ms},
 };
+use fleetd_plugin_host::{Binding, SessionPersistence};
+use fleetd_proto::model::{ArmInvocation, CompleteInvocation, Invocation, InvocationCompletion};
 
 const MAX_ID_BYTES: usize = 256;
 const MAX_LANE_KEY_BYTES: usize = 4_096;
@@ -50,7 +52,7 @@ pub async fn acquire_session_binding(
     input: AcquireSessionBinding,
 ) -> Result<SessionAcquisition, FleetError> {
     validate_acquisition(agent_id, &input)?;
-    crate::delivery::ensure_agent(store, agent_id).await?;
+    fleetd_kernel::delivery::ensure_agent(store, agent_id).await?;
     let directories_json = serde_json::to_string(&input.additional_directories)?;
     let now = now_ms();
     let mut transaction = store.begin_immediate().await?;

@@ -9,17 +9,24 @@ as text. The difference is worth reading off this list:
     crates/proto          wire types crossing any boundary          (crate)
     crates/kernel         the substrate, migrations, the only pool  (crate)
     crates/conversation   a read model over the substrate           (crate)
+    crates/execution      what happens to durable state             (crate)
     crates/plugin-host    child-process lifecycle and ACP client    (crate)
-    src/execution         what happens to durable state             (module)
-    src/http              how it is exposed                         (module)
-    src/{main,cli}.rs     the binary
+    src/http              a surface: the versioned HTTP contract    (module)
+    src/mcp               a surface: invocation-scoped publishing   (module)
+    src/{main,cli}.rs     the binary, which wires the surfaces
 
 A module boundary is a convention a test checks after the fact. A crate boundary
 is a compile error: `fleetd-kernel` does not depend on `fleetd-conversation`, so
-the substrate cannot name its own projection, and `fleetd-conversation` does not
-depend on a web framework, so it cannot render itself. Neither needs asserting.
-Moving `execution` and `http` to crates would retire five of those text checks;
-until then the list above says which boundaries are real.
+the substrate cannot name its own projection, and neither `fleetd-conversation`
+nor `fleetd-execution` depends on a web framework, so neither can expose
+anything. Making `execution` a crate retired four text checks outright -- see the
+note at the top of `tests/crate_boundaries.rs` for what now holds each.
+
+The surfaces are still modules of the daemon, so what keeps them apart is still a
+test reading source. They are named for their mechanism on purpose: HTTP and MCP
+are two ways to reach the same decisions, not two domains, and `execution` knows
+about neither. A surface provisions a transport and hands the worker a
+`TurnGrant`; nothing below a surface can start a listener.
 
 Dependencies run downward only. `execution` composes over the kernel and never
 extends it; `http` composes over `execution`; neither reaches back. Nothing
