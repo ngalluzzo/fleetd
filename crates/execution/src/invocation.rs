@@ -909,12 +909,7 @@ fn invocation_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Invocation, Flee
 }
 
 fn invocation_state(state: &str) -> Result<InvocationState, FleetError> {
-    match state {
-        "reserved" => Ok(InvocationState::Reserved),
-        "dispatch_armed" => Ok(InvocationState::DispatchArmed),
-        "terminal" => Ok(InvocationState::Terminal),
-        _ => Err(invalid_stored_state("invocation", state)),
-    }
+    InvocationState::parse(state).ok_or_else(|| invalid_stored_state("invocation", state))
 }
 
 fn invalid_stored_state(entity: &str, value: &str) -> FleetError {

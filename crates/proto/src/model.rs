@@ -369,6 +369,91 @@ pub enum InvocationState {
     Terminal,
 }
 
+impl InvocationState {
+    /// Every variant, so `parse` can invert `as_str` without a second table.
+    ///
+    /// A new variant has to appear here to survive a storage round trip; the
+    /// tests at the end of this module fail while it is missing.
+    pub const ALL: [Self; 3] = [Self::Reserved, Self::DispatchArmed, Self::Terminal];
+
+    /// Returns the exact stored representation of this variant.
+    ///
+    /// `Serialize` produces the same spelling, and a test pins the two
+    /// together: a durable row and a wire frame carry one vocabulary, not two.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Reserved => "reserved",
+            Self::DispatchArmed => "dispatch_armed",
+            Self::Terminal => "terminal",
+        }
+    }
+
+    /// Reads back the representation `as_str` produced.
+    ///
+    /// Returns `None` for anything else, leaving the caller to say what an
+    /// unreadable stored value means to it.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .find(|variant| variant.as_str() == value)
+            .cloned()
+    }
+}
+
+/// Durable inbox state exposed to the operator without lease credentials.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryState {
+    Pending,
+    Leased,
+    Blocked,
+    Acknowledged,
+    Dead,
+}
+
+impl DeliveryState {
+    /// Every variant, so `parse` can invert `as_str` without a second table.
+    ///
+    /// A new variant has to appear here to survive a storage round trip; the
+    /// tests at the end of this module fail while it is missing.
+    pub const ALL: [Self; 5] = [
+        Self::Pending,
+        Self::Leased,
+        Self::Blocked,
+        Self::Acknowledged,
+        Self::Dead,
+    ];
+
+    /// Returns the exact stored representation of this variant.
+    ///
+    /// `Serialize` produces the same spelling, and a test pins the two
+    /// together: a durable row and a wire frame carry one vocabulary, not two.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Leased => "leased",
+            Self::Blocked => "blocked",
+            Self::Acknowledged => "acknowledged",
+            Self::Dead => "dead",
+        }
+    }
+
+    /// Reads back the representation `as_str` produced.
+    ///
+    /// Returns `None` for anything else, leaving the caller to say what an
+    /// unreadable stored value means to it.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.as_str() == value)
+    }
+}
+
 /// What fleetd can prove about an invocation's external execution.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -482,7 +567,10 @@ const fn default_lease_duration_ms() -> u64 {
 mod tests {
     use serde_json::Value;
 
-    use super::{ConversationKind, ExecutionCertainty, MembershipDeliveryMode};
+    use super::{
+        ConversationKind, DeliveryState, ExecutionCertainty, InvocationState,
+        MembershipDeliveryMode,
+    };
 
     #[test]
     fn stored_spelling_matches_the_wire_spelling() {
@@ -502,6 +590,22 @@ mod tests {
                 "the stored and wire spellings of {variant:?} diverged",
             );
             assert_eq!(ConversationKind::parse(variant.as_str()), Some(variant));
+        }
+        for variant in InvocationState::ALL {
+            assert_eq!(
+                serde_json::to_value(&variant).expect("serialize invocation state"),
+                Value::String(variant.as_str().to_owned()),
+                "the stored and wire spellings of {variant:?} diverged",
+            );
+            assert_eq!(InvocationState::parse(variant.as_str()), Some(variant));
+        }
+        for variant in DeliveryState::ALL {
+            assert_eq!(
+                serde_json::to_value(variant).expect("serialize delivery state"),
+                Value::String(variant.as_str().to_owned()),
+                "the stored and wire spellings of {variant:?} diverged",
+            );
+            assert_eq!(DeliveryState::parse(variant.as_str()), Some(variant));
         }
         for variant in MembershipDeliveryMode::ALL {
             assert_eq!(
@@ -525,6 +629,9 @@ mod tests {
         assert_eq!(ConversationKind::parse("group"), None);
         assert_eq!(MembershipDeliveryMode::parse("streamonly"), None);
         assert_eq!(MembershipDeliveryMode::parse("Inbox"), None);
+        assert_eq!(DeliveryState::parse("Leased"), None);
+        assert_eq!(DeliveryState::parse("expired"), None);
+        assert_eq!(InvocationState::parse("armed"), None);
     }
 
     #[test]
@@ -551,5 +658,23 @@ mod tests {
             }
         }
         assert_eq!(MembershipDeliveryMode::ALL.len(), 2);
+        for variant in DeliveryState::ALL {
+            match variant {
+                DeliveryState::Pending
+                | DeliveryState::Leased
+                | DeliveryState::Blocked
+                | DeliveryState::Acknowledged
+                | DeliveryState::Dead => {}
+            }
+        }
+        assert_eq!(DeliveryState::ALL.len(), 5);
+        for variant in InvocationState::ALL {
+            match variant {
+                InvocationState::Reserved
+                | InvocationState::DispatchArmed
+                | InvocationState::Terminal => {}
+            }
+        }
+        assert_eq!(InvocationState::ALL.len(), 3);
     }
 }

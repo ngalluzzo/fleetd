@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 
 pub use fleetd_proto::operations::{
-    InvocationEventCounts, InvocationObservation, ObservedPluginInterface, PluginGeneration,
-    PluginGenerationDisposition, PluginGenerationHealth, PluginGenerationState,
-    PluginShutdownOutcome,
+    AgentSeat, AgentSeatReason, AgentSeatState, InvocationEventCounts, InvocationObservation,
+    ObservedPluginInterface, PluginGeneration, PluginGenerationDisposition, PluginGenerationHealth,
+    PluginGenerationState, PluginShutdownOutcome,
 };
 
 use fleetd_kernel::{
@@ -18,7 +18,8 @@ use fleetd_kernel::{
 use fleetd_plugin_host::{
     Binding, DescribeResult, PluginIdentity, PluginInterface, SessionPersistence, TurnTerminal,
 };
-use fleetd_proto::model::ExecutionCertainty;
+use fleetd_proto::model::{DeliveryState, ExecutionCertainty, InvocationState};
+use fleetd_proto::session::SessionBindingState;
 
 const MAX_EVIDENCE_JSON_BYTES: usize = 1024 * 1024;
 const MAX_REASON_BYTES: usize = 4_096;
@@ -764,6 +765,239 @@ fn observation_from_row(
             .map(|value| serde_json::from_str(&value))
             .transpose()?,
     })
+}
+
+/// Projects the current seat for every agent, or one named agent.
+///
+/// A seat joins the worker generation, the native-session lane, the managed
+/// invocation, and the delivery it came from. The point is that an interrupted
+/// seat is visible in one read: recovering one is a separate operation, and
+/// without this an operator has to correlate four endpoints to find it.
+///
+/// # Errors
+///
+/// Returns an error when durable rows cannot be read or decoded.
+pub async fn list_agent_seats(
+    store: &Store,
+    agent_id: Option<&str>,
+) -> Result<Vec<AgentSeat>, FleetError> {
+    let rows = sqlx::query(agent_seat_select())
+        .bind(agent_id)
+        .bind(agent_id)
+        .fetch_all(store.pool())
+        .await?;
+    let now = now_ms();
+    rows.iter()
+        .map(|row| agent_seat_from_row(row, now))
+        .collect()
+}
+
+/// Reads one stored state through the codec that owns its spelling.
+///
+/// The three states a seat projects are stored as text in three different
+/// tables. Each enum knows its own spelling, so this only has to say which
+/// column failed.
+fn stored_state<T>(
+    stored: Option<String>,
+    parse: impl Fn(&str) -> Option<T>,
+    column: &str,
+) -> Result<Option<T>, FleetError> {
+    stored
+        .map(|value| parse(&value).ok_or_else(|| invalid_stored(column, &value)))
+        .transpose()
+}
+
+fn agent_seat_from_row(row: &sqlx::sqlite::SqliteRow, now: i64) -> Result<AgentSeat, FleetError> {
+    let generation_health = generation_health_from_seat_row(row)?;
+    let session_state = stored_state(
+        row.try_get("session_state")?,
+        SessionBindingState::parse,
+        "session binding state",
+    )?;
+    let invocation_state = stored_state(
+        row.try_get("invocation_state")?,
+        InvocationState::parse,
+        "invocation state",
+    )?;
+    let delivery_state = stored_state(
+        row.try_get("delivery_state")?,
+        DeliveryState::parse,
+        "delivery state",
+    )?;
+    let lease_expires_at_ms: Option<i64> = row.try_get("lease_expires_at_ms")?;
+    let delivery_lease_expires_at_ms: Option<i64> = row.try_get("delivery_lease_expires_at_ms")?;
+    let lease_expired = lease_expires_at_ms.is_some_and(|expiry| expiry <= now)
+        || (delivery_state == Some(DeliveryState::Leased)
+            && delivery_lease_expires_at_ms.is_some_and(|expiry| expiry <= now));
+    let (state, reason) = seat_state(
+        session_state,
+        invocation_state.as_ref(),
+        generation_health,
+        lease_expired,
+    );
+    Ok(AgentSeat {
+        agent_id: row.try_get("agent_id")?,
+        state,
+        reason,
+        generation_id: row.try_get("generation_id")?,
+        generation_health,
+        binding_id: row.try_get("binding_id")?,
+        binding_generation: row
+            .try_get::<Option<i64>, _>("binding_generation")?
+            .map(|value| to_u64(value, "binding generation"))
+            .transpose()?,
+        owner_epoch: row
+            .try_get::<Option<i64>, _>("owner_epoch")?
+            .map(|value| to_u64(value, "owner epoch"))
+            .transpose()?,
+        session_state,
+        invocation_id: row.try_get("invocation_id")?,
+        invocation_state,
+        source_message_id: row.try_get("source_message_id")?,
+        delivery_state,
+        lease_expires_at_ms,
+        lease_expired,
+        last_progress_at_ms: row
+            .try_get::<Option<i64>, _>("last_event_at_ms")?
+            .or(row.try_get("observation_updated_at_ms")?)
+            .or(row.try_get("dispatch_armed_at_ms")?)
+            .or(row.try_get("reserved_at_ms")?),
+        unresolved_block_id: row.try_get("unresolved_block_id")?,
+    })
+}
+
+/// Decides the seat state and the exact evidence responsible for it.
+///
+/// Ordered most-urgent first: an uncertain session needs an operator before
+/// anything else can use the lane, and an armed attempt whose lease or worker
+/// is gone is interrupted rather than working.
+fn seat_state(
+    session_state: Option<SessionBindingState>,
+    invocation_state: Option<&InvocationState>,
+    generation_health: Option<PluginGenerationHealth>,
+    lease_expired: bool,
+) -> (AgentSeatState, AgentSeatReason) {
+    let working = generation_health == Some(PluginGenerationHealth::Active);
+    match (session_state, invocation_state) {
+        (Some(SessionBindingState::Uncertain), _) => (
+            AgentSeatState::RecoveryRequired,
+            AgentSeatReason::UncertainSession,
+        ),
+        (_, Some(InvocationState::DispatchArmed)) if lease_expired => (
+            AgentSeatState::Interrupted,
+            AgentSeatReason::ArmedLeaseExpired,
+        ),
+        (_, Some(InvocationState::DispatchArmed)) if !working => (
+            AgentSeatState::Interrupted,
+            AgentSeatReason::ArmedGenerationUnavailable,
+        ),
+        (_, Some(InvocationState::DispatchArmed)) => {
+            (AgentSeatState::Working, AgentSeatReason::ActiveInvocation)
+        }
+        (_, Some(InvocationState::Reserved)) if !working => (
+            AgentSeatState::Interrupted,
+            AgentSeatReason::ReservedGenerationUnavailable,
+        ),
+        (_, Some(InvocationState::Reserved)) => {
+            (AgentSeatState::Working, AgentSeatReason::ReservedInvocation)
+        }
+        _ => match generation_health {
+            Some(PluginGenerationHealth::Active) => match session_state {
+                Some(SessionBindingState::Opening) => {
+                    (AgentSeatState::Working, AgentSeatReason::OpeningSession)
+                }
+                Some(SessionBindingState::Active) => {
+                    (AgentSeatState::Idle, AgentSeatReason::ReadySession)
+                }
+                _ => (AgentSeatState::Idle, AgentSeatReason::Ready),
+            },
+            Some(PluginGenerationHealth::Stale) => {
+                (AgentSeatState::Offline, AgentSeatReason::GenerationStale)
+            }
+            Some(PluginGenerationHealth::Stopped) => {
+                (AgentSeatState::Offline, AgentSeatReason::GenerationStopped)
+            }
+            None if session_state.is_some_and(|state| state != SessionBindingState::Retired) => (
+                AgentSeatState::Interrupted,
+                AgentSeatReason::SessionWithoutWorker,
+            ),
+            None => (AgentSeatState::Unmanaged, AgentSeatReason::NoWorkerObserved),
+        },
+    }
+}
+
+fn generation_health_from_seat_row(
+    row: &sqlx::sqlite::SqliteRow,
+) -> Result<Option<PluginGenerationHealth>, FleetError> {
+    let Some(state) = row.try_get::<Option<String>, _>("generation_state")? else {
+        return Ok(None);
+    };
+    let state = parse_generation_state(&state)?;
+    let last_heartbeat_at_ms = row.try_get("last_heartbeat_at_ms")?;
+    let heartbeat_interval_ms =
+        to_u64(row.try_get("heartbeat_interval_ms")?, "heartbeat interval")?;
+    Ok(Some(generation_health(
+        state,
+        last_heartbeat_at_ms,
+        heartbeat_interval_ms,
+    )))
+}
+
+const fn agent_seat_select() -> &'static str {
+    r"
+    SELECT a.id AS agent_id,
+           g.id AS generation_id, g.state AS generation_state,
+           g.last_heartbeat_at_ms, g.heartbeat_interval_ms,
+           s.binding_id, s.binding_generation, s.owner_epoch,
+           s.state AS session_state,
+           i.id AS invocation_id, i.state AS invocation_state,
+           i.lease_expires_at_ms, i.reserved_at_ms, i.dispatch_armed_at_ms,
+           source.id AS source_message_id,
+           o.updated_at_ms AS observation_updated_at_ms, o.last_event_at_ms,
+           d.state AS delivery_state,
+           d.lease_expires_at_ms AS delivery_lease_expires_at_ms,
+           b.id AS unresolved_block_id
+    FROM agents a
+    LEFT JOIN session_bindings s ON s.rowid = (
+        SELECT candidate.rowid
+        FROM session_bindings candidate
+        WHERE candidate.agent_id = a.id
+        ORDER BY CASE WHEN candidate.state = 'retired' THEN 1 ELSE 0 END,
+                 candidate.updated_at_ms DESC, candidate.binding_id,
+                 candidate.binding_generation DESC
+        LIMIT 1
+    )
+    LEFT JOIN invocations i ON i.id = COALESCE(
+        s.active_invocation_id,
+        (
+            SELECT candidate.id
+            FROM invocations candidate
+            WHERE candidate.agent_id = a.id AND candidate.state != 'terminal'
+            ORDER BY candidate.reserved_at_ms DESC, candidate.id DESC
+            LIMIT 1
+        )
+    )
+    LEFT JOIN invocation_observations o ON o.invocation_id = i.id
+    LEFT JOIN plugin_generations g ON g.id = COALESCE(
+        o.generation_id,
+        (
+            SELECT candidate.id
+            FROM plugin_generations candidate
+            WHERE candidate.agent_id = a.id
+            ORDER BY candidate.started_at_ms DESC, candidate.id
+            LIMIT 1
+        )
+    )
+    LEFT JOIN messages source ON source.seq = i.message_seq
+    LEFT JOIN agent_deliveries d
+      ON d.message_seq = i.message_seq AND d.agent_id = i.agent_id
+    LEFT JOIN delivery_blocks b
+      ON b.message_seq = d.message_seq AND b.agent_id = d.agent_id
+     AND b.resolved_at_ms IS NULL
+    WHERE (? IS NULL OR a.id = ?)
+    ORDER BY a.created_at_ms, a.id
+    LIMIT 500
+    "
 }
 
 fn event_digest(event_seq: i64, observed_at_ms: i64, classification: &str, raw: &[u8]) -> String {

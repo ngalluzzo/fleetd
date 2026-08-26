@@ -1292,14 +1292,8 @@ fn positive_u64(label: &str, value: i64) -> Result<u64, FleetError> {
 }
 
 fn parse_state(value: &str) -> Result<SessionBindingState, FleetError> {
-    match value {
-        "opening" => Ok(SessionBindingState::Opening),
-        "ready" => Ok(SessionBindingState::Ready),
-        "active" => Ok(SessionBindingState::Active),
-        "uncertain" => Ok(SessionBindingState::Uncertain),
-        "retired" => Ok(SessionBindingState::Retired),
-        _ => Err(invalid_stored("session binding state is invalid")),
-    }
+    SessionBindingState::parse(value)
+        .ok_or_else(|| invalid_stored("session binding state is invalid"))
 }
 
 /// The four columns that identify one binding generation under one owner.

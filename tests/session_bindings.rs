@@ -4,7 +4,7 @@ use fleetd::execution::session_binding;
 use fleetd::execution::settlement;
 use fleetd::{
     error::FleetError,
-    execution::operations::NewPluginGeneration,
+    execution::operations::{AgentSeatReason, AgentSeatState, NewPluginGeneration},
     execution::session_binding::{
         AcquireSessionBinding, SessionAcquisitionMode, SessionBinding, SessionBindingState,
     },
@@ -120,6 +120,36 @@ async fn reap_expired_invocation(store: &Store, agent_id: &str) -> BlockedDelive
     cancellation.cancel();
     reaper.await.expect("stop daemon recovery sweep");
     block
+}
+
+/// The seat is what makes an interrupted attempt visible: one read says the
+/// agent needs recovery and names the block an operator has to resolve.
+async fn assert_seat_needs_recovery(
+    store: &Store,
+    agent_id: &str,
+    invocation_id: &str,
+    block_id: i64,
+) {
+    let seat = operations::list_agent_seats(store, Some(agent_id))
+        .await
+        .expect("project the interrupted seat")
+        .pop()
+        .expect("one agent seat");
+    assert_eq!(seat.state, AgentSeatState::RecoveryRequired);
+    assert_eq!(seat.reason, AgentSeatReason::UncertainSession);
+    assert_eq!(seat.invocation_id.as_deref(), Some(invocation_id));
+    assert_eq!(seat.unresolved_block_id, Some(block_id));
+    assert!(seat.lease_expired);
+}
+
+async fn assert_seat_no_longer_needs_recovery(store: &Store, agent_id: &str) {
+    let seat = operations::list_agent_seats(store, Some(agent_id))
+        .await
+        .expect("project the recovered seat")
+        .pop()
+        .expect("one agent seat");
+    assert_ne!(seat.state, AgentSeatState::RecoveryRequired);
+    assert_eq!(seat.unresolved_block_id, None);
 }
 
 async fn generation(store: &Store, agent_id: &str) -> String {
@@ -650,6 +680,8 @@ async fn daemon_recovery_parks_an_orphaned_turn_and_resolution_restores_the_seat
             .len(),
         1
     );
+    assert_seat_needs_recovery(&reopened, &agent_id, &invocation_id, block.block_id).await;
+
     let adoption = session_binding::acquire_session_binding(
         &reopened,
         &agent_id,
@@ -696,6 +728,8 @@ async fn daemon_recovery_parks_an_orphaned_turn_and_resolution_restores_the_seat
     .expect("acquire a fresh seat after resolution");
     assert_eq!(replacement.session.binding.binding_generation, 2);
     assert_eq!(replacement.mode, SessionAcquisitionMode::Create);
+
+    assert_seat_no_longer_needs_recovery(&reopened, &agent_id).await;
 }
 
 #[tokio::test]

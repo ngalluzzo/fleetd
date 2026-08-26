@@ -21,6 +21,7 @@ struct AgentQuery {
 
 pub(super) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::default()
+        .routes(routes!(list_agent_seats))
         .routes(routes!(list_plugin_generations))
         .routes(routes!(list_invocation_observations))
         .routes(routes!(list_session_bindings))
@@ -113,5 +114,32 @@ async fn list_session_bindings(
             query.agent.as_deref(),
         )
         .await?,
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/agent-seats",
+    operation_id = "listAgentSeats",
+    tag = "operations",
+    summary = "List current agent-seat state",
+    description = "Operator-only. Projects each stable agent identity as unmanaged, idle, working, interrupted, recovery-required, or offline from exact durable generation, session, invocation, progress, and delivery evidence. Lease and fence credentials are never returned.",
+    security(("bearerAuth" = [])),
+    params(AgentQuery),
+    responses(
+        (status = 200, description = "Current credential-free agent-seat projections", body = [fleetd_execution::operations::AgentSeat]),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn list_agent_seats(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<AgentQuery>,
+) -> Result<Json<Vec<fleetd_execution::operations::AgentSeat>>, ApiError> {
+    require_operator(&principal)?;
+    Ok(Json(
+        fleetd_execution::operations::list_agent_seats(&state.store, query.agent.as_deref()).await?,
     ))
 }

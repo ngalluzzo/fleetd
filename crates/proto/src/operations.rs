@@ -7,7 +7,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::{harness_acp::SessionPersistence, model::ExecutionCertainty};
+use crate::{
+    harness_acp::SessionPersistence,
+    model::{DeliveryState, ExecutionCertainty, InvocationState},
+    session::SessionBindingState,
+};
 
 /// One exact operational interface observed on a plugin generation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
@@ -149,6 +153,66 @@ pub struct PluginGeneration {
     pub stop_reason: Option<String>,
     pub shutdown_outcome: Option<PluginShutdownOutcome>,
     pub shutdown_exit_code: Option<i32>,
+}
+
+/// Current operator-facing state of one durable agent seat.
+///
+/// Derived from evidence rather than stored, so unlike the enums the substrate
+/// persists this needs no string codec: it is only ever serialised outward.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSeatState {
+    Unmanaged,
+    Idle,
+    Working,
+    Interrupted,
+    RecoveryRequired,
+    Offline,
+}
+
+/// The exact durable evidence responsible for a projected seat state.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSeatReason {
+    NoWorkerObserved,
+    Ready,
+    ReadySession,
+    OpeningSession,
+    ReservedInvocation,
+    ActiveInvocation,
+    ReservedGenerationUnavailable,
+    ArmedGenerationUnavailable,
+    ArmedLeaseExpired,
+    UncertainSession,
+    SessionWithoutWorker,
+    GenerationStale,
+    GenerationStopped,
+}
+
+/// Credential-free operational projection of one stable agent identity.
+///
+/// Joins the current worker generation, the native-session lane, the managed
+/// invocation, and the delivery it came from, so an operator can see a seat that
+/// needs recovery without correlating four endpoints by hand.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+pub struct AgentSeat {
+    pub agent_id: String,
+    pub state: AgentSeatState,
+    pub reason: AgentSeatReason,
+    pub generation_id: Option<String>,
+    pub generation_health: Option<PluginGenerationHealth>,
+    pub binding_id: Option<String>,
+    pub binding_generation: Option<u64>,
+    pub owner_epoch: Option<u64>,
+    pub session_state: Option<SessionBindingState>,
+    pub invocation_id: Option<String>,
+    pub invocation_state: Option<InvocationState>,
+    pub source_message_id: Option<String>,
+    pub delivery_state: Option<DeliveryState>,
+    pub lease_expires_at_ms: Option<i64>,
+    pub lease_expired: bool,
+    pub last_progress_at_ms: Option<i64>,
+    pub unresolved_block_id: Option<i64>,
 }
 
 /// Fixed-size event counters retained for one managed invocation.

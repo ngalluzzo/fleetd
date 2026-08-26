@@ -16,6 +16,47 @@ pub enum SessionBindingState {
     Retired,
 }
 
+impl SessionBindingState {
+    /// Every variant, so `parse` can invert `as_str` without a second table.
+    ///
+    /// A new variant has to appear here to survive a storage round trip; the
+    /// tests at the end of this module fail while it is missing.
+    pub const ALL: [Self; 5] = [
+        Self::Opening,
+        Self::Ready,
+        Self::Active,
+        Self::Uncertain,
+        Self::Retired,
+    ];
+
+    /// Returns the exact stored representation of this variant.
+    ///
+    /// `Serialize` produces the same spelling, and a test pins the two
+    /// together: a durable row and a wire frame carry one vocabulary, not two.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Opening => "opening",
+            Self::Ready => "ready",
+            Self::Active => "active",
+            Self::Uncertain => "uncertain",
+            Self::Retired => "retired",
+        }
+    }
+
+    /// Reads back the representation `as_str` produced.
+    ///
+    /// Returns `None` for anything else, leaving the caller to say what an
+    /// unreadable stored value means to it.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.as_str() == value)
+    }
+}
+
 /// Exact desired lane and runtime compatibility used to acquire ownership.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -68,4 +109,46 @@ pub struct SessionBinding {
 pub struct SessionAcquisition {
     pub session: SessionBinding,
     pub mode: SessionAcquisitionMode,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::SessionBindingState;
+
+    #[test]
+    fn stored_spelling_matches_the_wire_spelling() {
+        for variant in SessionBindingState::ALL {
+            assert_eq!(
+                serde_json::to_value(variant).expect("serialize session state"),
+                Value::String(variant.as_str().to_owned()),
+                "the stored and wire spellings of {variant:?} diverged",
+            );
+            assert_eq!(SessionBindingState::parse(variant.as_str()), Some(variant));
+        }
+    }
+
+    #[test]
+    fn unreadable_values_do_not_parse() {
+        assert_eq!(SessionBindingState::parse("Opening"), None);
+        assert_eq!(SessionBindingState::parse("quiescent"), None);
+        assert_eq!(SessionBindingState::parse(""), None);
+    }
+
+    #[test]
+    fn all_lists_every_variant() {
+        // Adding a variant makes this match non-exhaustive, and the count below
+        // then fails until `ALL` learns about it too.
+        for variant in SessionBindingState::ALL {
+            match variant {
+                SessionBindingState::Opening
+                | SessionBindingState::Ready
+                | SessionBindingState::Active
+                | SessionBindingState::Uncertain
+                | SessionBindingState::Retired => {}
+            }
+        }
+        assert_eq!(SessionBindingState::ALL.len(), 5);
+    }
 }

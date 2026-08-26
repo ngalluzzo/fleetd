@@ -30,6 +30,46 @@ export type Agent = {
 };
 
 /**
+ * Credential-free operational projection of one stable agent identity.
+ *
+ * Joins the current worker generation, the native-session lane, the managed
+ * invocation, and the delivery it came from, so an operator can see a seat that
+ * needs recovery without correlating four endpoints by hand.
+ */
+export type AgentSeat = {
+    agent_id: string;
+    binding_generation?: number | null;
+    binding_id?: string | null;
+    delivery_state?: null | DeliveryState;
+    generation_health?: null | PluginGenerationHealth;
+    generation_id?: string | null;
+    invocation_id?: string | null;
+    invocation_state?: null | InvocationState;
+    last_progress_at_ms?: number | null;
+    lease_expired: boolean;
+    lease_expires_at_ms?: number | null;
+    owner_epoch?: number | null;
+    reason: AgentSeatReason;
+    session_state?: null | SessionBindingState;
+    source_message_id?: string | null;
+    state: AgentSeatState;
+    unresolved_block_id?: number | null;
+};
+
+/**
+ * The exact durable evidence responsible for a projected seat state.
+ */
+export type AgentSeatReason = 'no_worker_observed' | 'ready' | 'ready_session' | 'opening_session' | 'reserved_invocation' | 'active_invocation' | 'reserved_generation_unavailable' | 'armed_generation_unavailable' | 'armed_lease_expired' | 'uncertain_session' | 'session_without_worker' | 'generation_stale' | 'generation_stopped';
+
+/**
+ * Current operator-facing state of one durable agent seat.
+ *
+ * Derived from evidence rather than stored, so unlike the enums the substrate
+ * persists this needs no string codec: it is only ever serialised outward.
+ */
+export type AgentSeatState = 'unmanaged' | 'idle' | 'working' | 'interrupted' | 'recovery_required' | 'offline';
+
+/**
  * Input for the write-ahead fence immediately before effectful dispatch.
  */
 export type ArmInvocation = {
@@ -241,6 +281,11 @@ export type Delivery = {
     lease_expires_at_ms: number;
     message: Message;
 };
+
+/**
+ * Durable inbox state exposed to the operator without lease credentials.
+ */
+export type DeliveryState = 'pending' | 'leased' | 'blocked' | 'acknowledged' | 'dead';
 
 /**
  * Stable JSON envelope returned for fleetd domain errors.
@@ -567,6 +612,44 @@ export type GetOpenApiDocumentResponses = {
      */
     200: unknown;
 };
+
+export type ListAgentSeatsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Limit results to one agent ID.
+         */
+        agent?: string;
+    };
+    url: '/v1/agent-seats';
+};
+
+export type ListAgentSeatsErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ListAgentSeatsError = ListAgentSeatsErrors[keyof ListAgentSeatsErrors];
+
+export type ListAgentSeatsResponses = {
+    /**
+     * Current credential-free agent-seat projections
+     */
+    200: Array<AgentSeat>;
+};
+
+export type ListAgentSeatsResponse = ListAgentSeatsResponses[keyof ListAgentSeatsResponses];
 
 export type ListAgentsData = {
     body?: never;

@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "1.3.0"
+    "version": "1.4.0"
   },
   "paths": {
     "/health": {
@@ -48,6 +48,77 @@
             }
           }
         }
+      }
+    },
+    "/v1/agent-seats": {
+      "get": {
+        "tags": [
+          "operations"
+        ],
+        "summary": "List current agent-seat state",
+        "description": "Operator-only. Projects each stable agent identity as unmanaged, idle, working, interrupted, recovery-required, or offline from exact durable generation, session, invocation, progress, and delivery evidence. Lease and fence credentials are never returned.",
+        "operationId": "listAgentSeats",
+        "parameters": [
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Limit results to one agent ID.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current credential-free agent-seat projections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgentSeat"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/v1/agents": {
@@ -2784,6 +2855,162 @@
           }
         }
       },
+      "AgentSeat": {
+        "type": "object",
+        "description": "Credential-free operational projection of one stable agent identity.\n\nJoins the current worker generation, the native-session lane, the managed\ninvocation, and the delivery it came from, so an operator can see a seat that\nneeds recovery without correlating four endpoints by hand.",
+        "required": [
+          "agent_id",
+          "state",
+          "reason",
+          "lease_expired"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "binding_generation": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "binding_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "delivery_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DeliveryState"
+              }
+            ]
+          },
+          "generation_health": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PluginGenerationHealth"
+              }
+            ]
+          },
+          "generation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invocation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "invocation_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/InvocationState"
+              }
+            ]
+          },
+          "last_progress_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "lease_expired": {
+            "type": "boolean"
+          },
+          "lease_expires_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "owner_epoch": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "reason": {
+            "$ref": "#/components/schemas/AgentSeatReason"
+          },
+          "session_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SessionBindingState"
+              }
+            ]
+          },
+          "source_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/AgentSeatState"
+          },
+          "unresolved_block_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "AgentSeatReason": {
+        "type": "string",
+        "description": "The exact durable evidence responsible for a projected seat state.",
+        "enum": [
+          "no_worker_observed",
+          "ready",
+          "ready_session",
+          "opening_session",
+          "reserved_invocation",
+          "active_invocation",
+          "reserved_generation_unavailable",
+          "armed_generation_unavailable",
+          "armed_lease_expired",
+          "uncertain_session",
+          "session_without_worker",
+          "generation_stale",
+          "generation_stopped"
+        ]
+      },
+      "AgentSeatState": {
+        "type": "string",
+        "description": "Current operator-facing state of one durable agent seat.\n\nDerived from evidence rather than stored, so unlike the enums the substrate\npersists this needs no string codec: it is only ever serialised outward.",
+        "enum": [
+          "unmanaged",
+          "idle",
+          "working",
+          "interrupted",
+          "recovery_required",
+          "offline"
+        ]
+      },
       "ArmInvocation": {
         "type": "object",
         "description": "Input for the write-ahead fence immediately before effectful dispatch.",
@@ -3298,6 +3525,17 @@
             "$ref": "#/components/schemas/Message"
           }
         }
+      },
+      "DeliveryState": {
+        "type": "string",
+        "description": "Durable inbox state exposed to the operator without lease credentials.",
+        "enum": [
+          "pending",
+          "leased",
+          "blocked",
+          "acknowledged",
+          "dead"
+        ]
       },
       "ErrorResponse": {
         "type": "object",
