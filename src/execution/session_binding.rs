@@ -97,8 +97,7 @@ pub async fn record_session_opened(
 ) -> Result<SessionBinding, FleetError> {
     validate_binding(binding)?;
     validate_bounded("session reference", session_ref, MAX_SESSION_REF_BYTES)?;
-    let generation = as_i64("binding generation", binding.binding_generation)?;
-    let owner_epoch = as_i64("owner epoch", binding.owner_epoch)?;
+    let fence = OwnerFence::new(agent_id, binding)?;
     let now = now_ms();
     let mut transaction = store.begin_immediate().await?;
     let row = exact_binding_row(&mut transaction, agent_id, binding).await?;
@@ -106,23 +105,17 @@ pub async fn record_session_opened(
     let state: String = row.try_get("state")?;
     match state.as_str() {
         "opening" => {
-            let updated = sqlx::query(
-                r"
-                UPDATE session_bindings
-                SET state = 'ready', session_ref = ?, opened_at_ms = ?, updated_at_ms = ?
-                WHERE binding_id = ? AND binding_generation = ? AND agent_id = ?
-                  AND owner_epoch = ? AND state = 'opening'
-                ",
-            )
-            .bind(session_ref)
-            .bind(now)
-            .bind(now)
-            .bind(&binding.binding_id)
-            .bind(generation)
-            .bind(agent_id)
-            .bind(owner_epoch)
-            .execute(&mut *transaction)
-            .await?;
+            let statement = OwnerFence::update(
+                "state = 'ready', session_ref = ?, opened_at_ms = ?, updated_at_ms = ?",
+                "state = 'opening'",
+            );
+            let updated = sqlx::query(&statement)
+                .bind(session_ref)
+                .bind(now)
+                .bind(now)
+                .bind_fence(fence)
+                .execute(&mut *transaction)
+                .await?;
             require_one(
                 updated.rows_affected(),
                 "session binding changed while opening",
@@ -301,8 +294,7 @@ pub async fn retire_session_binding(
 ) -> Result<SessionBinding, FleetError> {
     validate_binding(binding)?;
     validate_bounded("retirement reason", reason, MAX_REASON_BYTES)?;
-    let generation = as_i64("binding generation", binding.binding_generation)?;
-    let owner_epoch = as_i64("owner epoch", binding.owner_epoch)?;
+    let fence = OwnerFence::new(agent_id, binding)?;
     let now = now_ms();
     let mut transaction = store.begin_immediate().await?;
     let row = exact_binding_row(&mut transaction, agent_id, binding).await?;
@@ -324,24 +316,18 @@ pub async fn retire_session_binding(
             ));
         }
     } else {
-        let updated = sqlx::query(
-            r"
-            UPDATE session_bindings
-            SET state = 'retired', active_invocation_id = NULL,
-                retired_reason = ?, retired_at_ms = ?, updated_at_ms = ?
-            WHERE binding_id = ? AND binding_generation = ? AND agent_id = ?
-              AND owner_epoch = ? AND state != 'active' AND state != 'retired'
-            ",
-        )
-        .bind(reason)
-        .bind(now)
-        .bind(now)
-        .bind(&binding.binding_id)
-        .bind(generation)
-        .bind(agent_id)
-        .bind(owner_epoch)
-        .execute(&mut *transaction)
-        .await?;
+        let statement = OwnerFence::update(
+            "state = 'retired', active_invocation_id = NULL, \
+             retired_reason = ?, retired_at_ms = ?, updated_at_ms = ?",
+            "state != 'active' AND state != 'retired'",
+        );
+        let updated = sqlx::query(&statement)
+            .bind(reason)
+            .bind(now)
+            .bind(now)
+            .bind_fence(fence)
+            .execute(&mut *transaction)
+            .await?;
         require_one(
             updated.rows_affected(),
             "session binding changed during retirement",
@@ -660,32 +646,24 @@ async fn rotate_binding(
     now: i64,
     reason: &str,
 ) -> Result<SessionAcquisition, FleetError> {
+    let fence = OwnerFence::new(agent_id, &existing.binding)?;
     let generation = existing
         .binding
         .binding_generation
         .checked_add(1)
         .ok_or_else(|| FleetError::Conflict("binding generation overflowed".to_owned()))?;
-    let updated = sqlx::query(
-        r"
-        UPDATE session_bindings
-        SET state = 'retired', active_invocation_id = NULL,
-            retired_reason = ?, retired_at_ms = ?, updated_at_ms = ?
-        WHERE binding_id = ? AND binding_generation = ? AND agent_id = ?
-          AND owner_epoch = ? AND state IN ('opening', 'ready')
-        ",
-    )
-    .bind(reason)
-    .bind(now)
-    .bind(now)
-    .bind(&existing.binding.binding_id)
-    .bind(as_i64(
-        "binding generation",
-        existing.binding.binding_generation,
-    )?)
-    .bind(agent_id)
-    .bind(as_i64("owner epoch", existing.binding.owner_epoch)?)
-    .execute(&mut **transaction)
-    .await?;
+    let statement = OwnerFence::update(
+        "state = 'retired', active_invocation_id = NULL, \
+         retired_reason = ?, retired_at_ms = ?, updated_at_ms = ?",
+        "state IN ('opening', 'ready')",
+    );
+    let updated = sqlx::query(&statement)
+        .bind(reason)
+        .bind(now)
+        .bind(now)
+        .bind_fence(fence)
+        .execute(&mut **transaction)
+        .await?;
     require_one(
         updated.rows_affected(),
         "session binding changed during rotation",
@@ -708,31 +686,23 @@ async fn adopt_binding(
     owner_instance_id: &str,
     now: i64,
 ) -> Result<SessionAcquisition, FleetError> {
+    let fence = OwnerFence::new(&existing.agent_id, &existing.binding)?;
     let owner_epoch = existing
         .binding
         .owner_epoch
         .checked_add(1)
         .ok_or_else(|| FleetError::Conflict("owner epoch overflowed".to_owned()))?;
-    let updated = sqlx::query(
-        r"
-        UPDATE session_bindings
-        SET owner_epoch = ?, owner_instance_id = ?, updated_at_ms = ?
-        WHERE binding_id = ? AND binding_generation = ? AND agent_id = ?
-          AND owner_epoch = ? AND state = 'ready'
-        ",
-    )
-    .bind(as_i64("owner epoch", owner_epoch)?)
-    .bind(owner_instance_id)
-    .bind(now)
-    .bind(&existing.binding.binding_id)
-    .bind(as_i64(
-        "binding generation",
-        existing.binding.binding_generation,
-    )?)
-    .bind(&existing.agent_id)
-    .bind(as_i64("owner epoch", existing.binding.owner_epoch)?)
-    .execute(&mut **transaction)
-    .await?;
+    let statement = OwnerFence::update(
+        "owner_epoch = ?, owner_instance_id = ?, updated_at_ms = ?",
+        "state = 'ready'",
+    );
+    let updated = sqlx::query(&statement)
+        .bind(as_i64("owner epoch", owner_epoch)?)
+        .bind(owner_instance_id)
+        .bind(now)
+        .bind_fence(fence)
+        .execute(&mut **transaction)
+        .await?;
     require_one(
         updated.rows_affected(),
         "session binding changed during adoption",
@@ -760,6 +730,7 @@ async fn activate_binding_turn(
     binding: &Binding,
     now: i64,
 ) -> Result<(), FleetError> {
+    let fence = OwnerFence::new(agent_id, binding)?;
     let existing = sqlx::query(
         r"
         SELECT binding_id, binding_generation, owner_epoch, state
@@ -770,11 +741,9 @@ async fn activate_binding_turn(
     .fetch_optional(&mut **transaction)
     .await?;
     if let Some(existing) = existing {
-        let same = existing.try_get::<String, _>("binding_id")? == binding.binding_id
-            && existing.try_get::<i64, _>("binding_generation")?
-                == as_i64("binding generation", binding.binding_generation)?
-            && existing.try_get::<i64, _>("owner_epoch")?
-                == as_i64("owner epoch", binding.owner_epoch)?
+        let same = existing.try_get::<String, _>("binding_id")? == fence.binding_id
+            && existing.try_get::<i64, _>("binding_generation")? == fence.binding_generation
+            && existing.try_get::<i64, _>("owner_epoch")? == fence.owner_epoch
             && existing.try_get::<String, _>("state")? == "active";
         if !same {
             return Err(FleetError::Conflict(
@@ -791,28 +760,22 @@ async fn activate_binding_turn(
         ",
     )
     .bind(invocation_id)
-    .bind(&binding.binding_id)
-    .bind(as_i64("binding generation", binding.binding_generation)?)
-    .bind(as_i64("owner epoch", binding.owner_epoch)?)
+    .bind(fence.binding_id)
+    .bind(fence.binding_generation)
+    .bind(fence.owner_epoch)
     .bind(now)
     .execute(&mut **transaction)
     .await?;
-    let updated = sqlx::query(
-        r"
-        UPDATE session_bindings
-        SET state = 'active', active_invocation_id = ?, updated_at_ms = ?
-        WHERE binding_id = ? AND binding_generation = ? AND agent_id = ?
-          AND owner_epoch = ? AND state = 'ready' AND active_invocation_id IS NULL
-        ",
-    )
-    .bind(invocation_id)
-    .bind(now)
-    .bind(&binding.binding_id)
-    .bind(as_i64("binding generation", binding.binding_generation)?)
-    .bind(agent_id)
-    .bind(as_i64("owner epoch", binding.owner_epoch)?)
-    .execute(&mut **transaction)
-    .await?;
+    let statement = OwnerFence::update(
+        "state = 'active', active_invocation_id = ?, updated_at_ms = ?",
+        "state = 'ready' AND active_invocation_id IS NULL",
+    );
+    let updated = sqlx::query(&statement)
+        .bind(invocation_id)
+        .bind(now)
+        .bind_fence(fence)
+        .execute(&mut **transaction)
+        .await?;
     require_one(
         updated.rows_affected(),
         "session binding changed while turn was armed",
@@ -863,25 +826,19 @@ async fn settle_quiescent_turn(
         turn_updated.rows_affected(),
         "session turn changed during completion",
     )?;
-    let binding_updated = sqlx::query(
-        r"
-        UPDATE session_bindings
-        SET state = 'ready', active_invocation_id = NULL,
-            last_quiescent_invocation_id = ?, session_persistence = ?, updated_at_ms = ?
-        WHERE binding_id = ? AND binding_generation = ? AND agent_id = ?
-          AND owner_epoch = ? AND state = 'active' AND active_invocation_id = ?
-        ",
-    )
-    .bind(invocation_id)
-    .bind(persistence_name)
-    .bind(now)
-    .bind(&binding.binding_id)
-    .bind(as_i64("binding generation", binding.binding_generation)?)
-    .bind(agent_id)
-    .bind(as_i64("owner epoch", binding.owner_epoch)?)
-    .bind(invocation_id)
-    .execute(&mut **transaction)
-    .await?;
+    let statement = OwnerFence::update(
+        "state = 'ready', active_invocation_id = NULL, \
+         last_quiescent_invocation_id = ?, session_persistence = ?, updated_at_ms = ?",
+        "state = 'active' AND active_invocation_id = ?",
+    );
+    let binding_updated = sqlx::query(&statement)
+        .bind(invocation_id)
+        .bind(persistence_name)
+        .bind(now)
+        .bind_fence(OwnerFence::new(agent_id, binding)?)
+        .bind(invocation_id)
+        .execute(&mut **transaction)
+        .await?;
     require_one(
         binding_updated.rows_affected(),
         "session binding changed during completion",
@@ -912,23 +869,17 @@ async fn mark_turn_uncertain(
         turn_updated.rows_affected(),
         "session turn changed while fencing uncertainty",
     )?;
-    let binding_updated = sqlx::query(
-        r"
-        UPDATE session_bindings
-        SET state = 'uncertain', uncertain_reason = ?, updated_at_ms = ?
-        WHERE binding_id = ? AND binding_generation = ? AND agent_id = ?
-          AND owner_epoch = ? AND state = 'active' AND active_invocation_id = ?
-        ",
-    )
-    .bind(reason)
-    .bind(now)
-    .bind(&binding.binding_id)
-    .bind(as_i64("binding generation", binding.binding_generation)?)
-    .bind(agent_id)
-    .bind(as_i64("owner epoch", binding.owner_epoch)?)
-    .bind(invocation_id)
-    .execute(&mut **transaction)
-    .await?;
+    let statement = OwnerFence::update(
+        "state = 'uncertain', uncertain_reason = ?, updated_at_ms = ?",
+        "state = 'active' AND active_invocation_id = ?",
+    );
+    let binding_updated = sqlx::query(&statement)
+        .bind(reason)
+        .bind(now)
+        .bind_fence(OwnerFence::new(agent_id, binding)?)
+        .bind(invocation_id)
+        .execute(&mut **transaction)
+        .await?;
     require_one(
         binding_updated.rows_affected(),
         "session binding changed while fencing uncertainty",
@@ -1235,6 +1186,68 @@ fn parse_state(value: &str) -> Result<SessionBindingState, FleetError> {
         "uncertain" => Ok(SessionBindingState::Uncertain),
         "retired" => Ok(SessionBindingState::Retired),
         _ => Err(invalid_stored("session binding state is invalid")),
+    }
+}
+
+/// The four columns that identify one binding generation under one owner.
+///
+/// Every write to `session_bindings` has to match all four, so that a stale
+/// generation or a superseded owner epoch cannot change a row. The predicate
+/// text and the bind order are declared once here because `binding_generation`
+/// and `owner_epoch` are both `i64`: transposing them at a call site would
+/// compile cleanly and quietly widen what the statement is allowed to touch.
+#[derive(Clone, Copy)]
+struct OwnerFence<'a> {
+    binding_id: &'a str,
+    binding_generation: i64,
+    agent_id: &'a str,
+    owner_epoch: i64,
+}
+
+impl<'a> OwnerFence<'a> {
+    /// The predicate whose four placeholders `bind_fence` fills, in order.
+    const PREDICATE: &'static str =
+        "binding_id = ? AND binding_generation = ? AND agent_id = ? AND owner_epoch = ?";
+
+    /// Reads the fence off the binding the caller was handed.
+    ///
+    /// Taking the whole `Binding` is deliberate: a caller that has just
+    /// computed a *new* generation or owner epoch cannot reach one from here,
+    /// so it cannot accidentally fence a write on the value it is introducing.
+    fn new(agent_id: &'a str, binding: &'a Binding) -> Result<Self, FleetError> {
+        Ok(Self {
+            binding_id: &binding.binding_id,
+            binding_generation: as_i64("binding generation", binding.binding_generation)?,
+            agent_id,
+            owner_epoch: as_i64("owner epoch", binding.owner_epoch)?,
+        })
+    }
+
+    /// Builds `UPDATE session_bindings SET {set} WHERE <fence> AND {state}`.
+    ///
+    /// Placeholders bind in three groups, in this order: whatever `set` needs,
+    /// then the four fence columns, then whatever `state` needs.
+    fn update(set: &str, state: &str) -> String {
+        format!(
+            "UPDATE session_bindings SET {set} WHERE {predicate} AND {state}",
+            predicate = Self::PREDICATE
+        )
+    }
+}
+
+/// Binds an [`OwnerFence`] where its placeholders appear in the statement.
+trait FencedQuery<'q> {
+    fn bind_fence(self, fence: OwnerFence<'q>) -> Self;
+}
+
+impl<'q> FencedQuery<'q>
+    for sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>
+{
+    fn bind_fence(self, fence: OwnerFence<'q>) -> Self {
+        self.bind(fence.binding_id)
+            .bind(fence.binding_generation)
+            .bind(fence.agent_id)
+            .bind(fence.owner_epoch)
     }
 }
 
