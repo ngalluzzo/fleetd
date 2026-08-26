@@ -81,39 +81,15 @@ impl Store {
         let message_kinds_json = message_kinds.map(serde_json::to_string).transpose()?;
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         recover_expired_invocations(&mut transaction, agent_id, now).await?;
-        sqlx::query(
-            r"
-            UPDATE agent_deliveries
-            SET state = 'leased', attempt = attempt + 1,
-                lease_token = ?, lease_expires_at_ms = ?
-            WHERE rowid IN (
-                SELECT d.rowid
-                FROM agent_deliveries d
-                JOIN messages m ON m.seq = d.message_seq
-                WHERE d.agent_id = ?
-                  AND d.available_at_ms <= ?
-                  AND (
-                    d.state = 'pending'
-                    OR (d.state = 'leased' AND d.lease_expires_at_ms <= ?)
-                  )
-                  AND (
-                    ? IS NULL
-                    OR m.kind IN (SELECT value FROM json_each(?))
-                  )
-                ORDER BY d.message_seq
-                LIMIT ?
-            )
-            ",
+        crate::delivery::lease_claimable(
+            &mut transaction,
+            agent_id,
+            &lease_token,
+            lease_expires_at_ms,
+            now,
+            input.limit,
+            message_kinds_json.as_deref(),
         )
-        .bind(&lease_token)
-        .bind(lease_expires_at_ms)
-        .bind(agent_id)
-        .bind(now)
-        .bind(now)
-        .bind(&message_kinds_json)
-        .bind(&message_kinds_json)
-        .bind(i64::from(input.limit))
-        .execute(&mut *transaction)
         .await?;
         let rows = sqlx::query(
             r"
@@ -456,43 +432,29 @@ async fn park_expired_armed_invocation(
     let lease_token: String = row.try_get("lease_token")?;
     let attempt: i64 = row.try_get("attempt")?;
     let reason = format!("invocation {invocation_id} lease expired after dispatch was armed");
-    let result = sqlx::query(
-        r"
-        UPDATE agent_deliveries
-        SET state = 'blocked', lease_token = NULL, lease_expires_at_ms = NULL,
-            last_error = ?, last_settled_lease_token = ?,
-            last_settlement = 'blocked', acknowledged_at_ms = NULL
-        WHERE message_seq = ? AND agent_id = ? AND state = 'leased'
-          AND lease_token = ? AND lease_expires_at_ms <= ?
-        ",
+    if !crate::delivery::block_expired_lease(
+        transaction,
+        agent_id,
+        message_seq,
+        &lease_token,
+        &reason,
+        now,
     )
-    .bind(&reason)
-    .bind(&lease_token)
-    .bind(message_seq)
-    .bind(agent_id)
-    .bind(&lease_token)
-    .bind(now)
-    .execute(&mut **transaction)
-    .await?;
-    if result.rows_affected() != 1 {
+    .await?
+    {
         return Err(FleetError::Conflict(
             "expired invocation delivery changed during recovery".to_owned(),
         ));
     }
-    sqlx::query(
-        r"
-        INSERT INTO delivery_blocks (
-            message_seq, agent_id, attempt, lease_token, reason, blocked_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        ",
+    crate::delivery::record_block(
+        transaction,
+        message_seq,
+        agent_id,
+        attempt,
+        &lease_token,
+        &reason,
+        now,
     )
-    .bind(message_seq)
-    .bind(agent_id)
-    .bind(attempt)
-    .bind(&lease_token)
-    .bind(&reason)
-    .bind(now)
-    .execute(&mut **transaction)
     .await?;
     let result = sqlx::query(
         r"
@@ -735,25 +697,15 @@ async fn acknowledge_invocation_delivery(
     now: i64,
 ) -> Result<(), FleetError> {
     let message_seq: i64 = row.try_get("message_seq")?;
-    let result = sqlx::query(
-        r"
-        UPDATE agent_deliveries
-        SET state = 'acknowledged', lease_token = NULL, lease_expires_at_ms = NULL,
-            last_settled_lease_token = ?, last_settlement = 'acknowledged',
-            acknowledged_at_ms = ?
-        WHERE message_seq = ? AND agent_id = ? AND state = 'leased'
-          AND lease_token = ? AND lease_expires_at_ms > ?
-        ",
+    if !crate::delivery::acknowledge_leased_seq(
+        transaction,
+        agent_id,
+        message_seq,
+        lease_token,
+        now,
     )
-    .bind(lease_token)
-    .bind(now)
-    .bind(message_seq)
-    .bind(agent_id)
-    .bind(lease_token)
-    .bind(now)
-    .execute(&mut **transaction)
-    .await?;
-    if result.rows_affected() != 1 {
+    .await?
+    {
         return Err(FleetError::LeaseConflict(
             "invocation no longer owns its input delivery".to_owned(),
         ));

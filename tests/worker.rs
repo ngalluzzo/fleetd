@@ -2,6 +2,7 @@
 
 use std::{path::PathBuf, time::Duration};
 
+use fleetd::settlement;
 use fleetd::{
     model::{
         ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, ExecutionCertainty,
@@ -280,17 +281,16 @@ async fn worker_skips_earlier_unaccepted_delivery_without_leasing_it() {
         .expect("one accepted invocation");
     assert_eq!(invocation.message.id, accepted.id);
 
-    let skipped_claim = fixture
-        .store
-        .claim_deliveries(
-            &fixture.receiver_id,
-            ClaimDeliveries {
-                limit: 1,
-                lease_duration_ms: 10_000,
-            },
-        )
-        .await
-        .expect("claim skipped delivery through the unfiltered kernel API");
+    let skipped_claim = settlement::claim_deliveries(
+        &fixture.store,
+        &fixture.receiver_id,
+        ClaimDeliveries {
+            limit: 1,
+            lease_duration_ms: 10_000,
+        },
+    )
+    .await
+    .expect("claim skipped delivery through the unfiltered kernel API");
     assert_eq!(skipped_claim.deliveries.len(), 1);
     assert_eq!(skipped_claim.deliveries[0].message.id, skipped.id);
     assert_eq!(skipped_claim.deliveries[0].attempt, 1);

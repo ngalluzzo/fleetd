@@ -23,6 +23,7 @@ pub mod message_grant_broker;
 pub mod operations;
 mod operator_surface;
 pub mod session_binding;
+pub mod settlement;
 pub mod store;
 mod stream_grant_broker;
 mod web_surface;

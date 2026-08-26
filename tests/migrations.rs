@@ -1,3 +1,4 @@
+use fleetd::settlement;
 use fleetd::{
     model::{
         ArmInvocation, BlockDelivery, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
@@ -336,17 +337,17 @@ async fn assert_managed_blocking_works_after_migration(
         )
         .await
         .expect("arm invocation after migration");
-    let (blocked, was_created) = store
-        .block_delivery(
-            recipient_id,
-            message_id,
-            BlockDelivery {
-                lease_token: invocation.lease_token.clone(),
-                reason: "migration smoke test".to_owned(),
-            },
-        )
-        .await
-        .expect("block delivery after migration");
+    let (blocked, was_created) = settlement::block_delivery(
+        store,
+        recipient_id,
+        message_id,
+        BlockDelivery {
+            lease_token: invocation.lease_token.clone(),
+            reason: "migration smoke test".to_owned(),
+        },
+    )
+    .await
+    .expect("block delivery after migration");
     assert!(was_created);
     assert_eq!(
         store

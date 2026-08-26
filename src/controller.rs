@@ -6,6 +6,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use crate::settlement;
 use crate::{
     error::FleetError,
     model::{
@@ -363,17 +364,16 @@ impl<'store> ManagedHarnessController<'store> {
                 &reason,
             )
             .await?;
-        let (blocked, _created) = self
-            .store
-            .block_delivery(
-                &invocation.agent_id,
-                &invocation.message.id,
-                BlockDelivery {
-                    lease_token: invocation.lease_token.clone(),
-                    reason,
-                },
-            )
-            .await?;
+        let (blocked, _created) = settlement::block_delivery(
+            self.store,
+            &invocation.agent_id,
+            &invocation.message.id,
+            BlockDelivery {
+                lease_token: invocation.lease_token.clone(),
+                reason,
+            },
+        )
+        .await?;
         Ok(blocked)
     }
 }

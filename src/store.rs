@@ -88,6 +88,24 @@ impl Store {
         Ok(store)
     }
 
+    /// Begins an immediate write transaction against the authoritative store.
+    ///
+    /// Callers above the kernel compose their own work into this transaction so
+    /// that state the kernel owns and state they own commit together.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the transaction cannot be started.
+    pub async fn begin_immediate(&self) -> Result<sqlx::Transaction<'_, sqlx::Sqlite>, FleetError> {
+        Ok(self.pool.begin_with("BEGIN IMMEDIATE").await?)
+    }
+
+    /// Returns the read handle for queries the kernel does not itself model.
+    #[must_use]
+    pub fn pool(&self) -> &sqlx::SqlitePool {
+        &self.pool
+    }
+
     pub(crate) fn notify_message_commit(&self, created: bool) {
         if created && let Some(notifier) = &self.message_commit_notifier {
             notifier.notify();

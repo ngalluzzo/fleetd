@@ -14,6 +14,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::settlement;
 use crate::{
     controller::{
         ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnGrant,
@@ -805,18 +806,18 @@ impl<'store> ContinuousHarnessWorker<'store> {
         context: String,
         retry_after_ms: u64,
     ) -> Result<(), ContinuousWorkerError> {
-        self.store
-            .retry_delivery(
-                &invocation.agent_id,
-                &invocation.message.id,
-                RetryDelivery {
-                    lease_token: invocation.lease_token.clone(),
-                    retry_after_ms,
-                    error: Some(bounded(context.clone())),
-                },
-            )
-            .await
-            .map_err(|source| ContinuousWorkerError::PreArmSettlement { context, source })
+        settlement::retry_delivery(
+            self.store,
+            &invocation.agent_id,
+            &invocation.message.id,
+            RetryDelivery {
+                lease_token: invocation.lease_token.clone(),
+                retry_after_ms,
+                error: Some(bounded(context.clone())),
+            },
+        )
+        .await
+        .map_err(|source| ContinuousWorkerError::PreArmSettlement { context, source })
     }
 }
 

@@ -1,3 +1,4 @@
+use fleetd::settlement;
 use fleetd::{
     error::FleetError,
     model::{
@@ -107,8 +108,7 @@ async fn concurrent_reservers_create_one_lease_and_one_invocation() {
     assert_eq!(invocations[0].message, message);
     assert_eq!(invocations[0].delivery_attempt, 1);
 
-    let raw_claim = store
-        .claim_deliveries(&receiver.id, reservation(1, 10_000))
+    let raw_claim = settlement::claim_deliveries(&store, &receiver.id, reservation(1, 10_000))
         .await
         .expect("raw claim while reservation is live");
     assert!(raw_claim.deliveries.is_empty());
@@ -180,8 +180,7 @@ async fn a_crash_after_dispatch_is_parked_instead_of_reexecuted() {
     let reopened = Store::open(directory.path().join("fleetd.db"))
         .await
         .expect("reopen store");
-    let raw_claim = reopened
-        .claim_deliveries(&receiver.id, reservation(1, 10_000))
+    let raw_claim = settlement::claim_deliveries(&reopened, &receiver.id, reservation(1, 10_000))
         .await
         .expect("claim runs managed recovery");
     assert!(raw_claim.deliveries.is_empty());
@@ -240,18 +239,18 @@ async fn assert_armed_invocation_cannot_retry(
         .await
         .expect_err("wrong fence must fail");
     assert!(matches!(bad_fence, FleetError::LeaseConflict(_)));
-    let unsafe_retry = store
-        .retry_delivery(
-            agent_id,
-            message_id,
-            RetryDelivery {
-                lease_token: invocation.lease_token.clone(),
-                retry_after_ms: 0,
-                error: Some("transport disappeared".to_owned()),
-            },
-        )
-        .await
-        .expect_err("armed invocation cannot use ordinary retry");
+    let unsafe_retry = settlement::retry_delivery(
+        store,
+        agent_id,
+        message_id,
+        RetryDelivery {
+            lease_token: invocation.lease_token.clone(),
+            retry_after_ms: 0,
+            error: Some("transport disappeared".to_owned()),
+        },
+    )
+    .await
+    .expect_err("armed invocation cannot use ordinary retry");
     assert!(matches!(unsafe_retry, FleetError::Conflict(_)));
 }
 
@@ -259,25 +258,24 @@ async fn assert_armed_invocation_cannot_retry(
 async fn delivery_settlement_terminalizes_the_matching_invocation() {
     let (_directory, store, _sender, receiver, message) = fixture().await;
     let unarmed = reserve_one(&store, &receiver.id, 10_000).await;
-    store
-        .retry_delivery(
-            &receiver.id,
-            &message.id,
-            RetryDelivery {
-                lease_token: unarmed.lease_token.clone(),
-                retry_after_ms: 0,
-                error: Some("failed before dispatch".to_owned()),
-            },
-        )
-        .await
-        .expect("retry unarmed invocation");
+    settlement::retry_delivery(
+        &store,
+        &receiver.id,
+        &message.id,
+        RetryDelivery {
+            lease_token: unarmed.lease_token.clone(),
+            retry_after_ms: 0,
+            error: Some("failed before dispatch".to_owned()),
+        },
+    )
+    .await
+    .expect("retry unarmed invocation");
     let armed = reserve_one(&store, &receiver.id, 10_000).await;
     store
         .arm_invocation(&receiver.id, &armed.id, arm_input(&armed))
         .await
         .expect("arm second invocation");
-    store
-        .acknowledge_delivery(&receiver.id, &message.id, &armed.lease_token)
+    settlement::acknowledge_delivery(&store, &receiver.id, &message.id, &armed.lease_token)
         .await
         .expect("acknowledge known result");
 
@@ -357,13 +355,12 @@ async fn completion_atomically_publishes_one_result_and_acknowledges_the_input()
         Some(completed.result.id.as_str())
     );
 
-    let input_is_settled = store
-        .claim_deliveries(&receiver.id, reservation(1, 10_000))
-        .await
-        .expect("claim completed input");
+    let input_is_settled =
+        settlement::claim_deliveries(&store, &receiver.id, reservation(1, 10_000))
+            .await
+            .expect("claim completed input");
     assert!(input_is_settled.deliveries.is_empty());
-    let result_delivery = store
-        .claim_deliveries(&sender.id, reservation(1, 10_000))
+    let result_delivery = settlement::claim_deliveries(&store, &sender.id, reservation(1, 10_000))
         .await
         .expect("claim result delivery");
     assert_eq!(result_delivery.deliveries.len(), 1);

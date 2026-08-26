@@ -19,6 +19,7 @@ use super::{
     AppState,
     guard::{require_bound_agent, require_operator},
 };
+use crate::settlement;
 
 pub(super) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::default()
@@ -56,7 +57,9 @@ async fn claim_deliveries(
     Json(input): Json<ClaimDeliveries>,
 ) -> Result<Json<crate::model::ClaimBatch>, FleetError> {
     require_bound_agent(&principal, &agent_id)?;
-    Ok(Json(state.store.claim_deliveries(&agent_id, input).await?))
+    Ok(Json(
+        settlement::claim_deliveries(&state.store, &agent_id, input).await?,
+    ))
 }
 
 #[utoipa::path(
@@ -89,9 +92,7 @@ async fn acknowledge_delivery(
     Json(input): Json<AckDelivery>,
 ) -> Result<StatusCode, FleetError> {
     require_bound_agent(&principal, &agent_id)?;
-    state
-        .store
-        .acknowledge_delivery(&agent_id, &message_id, &input.lease_token)
+    settlement::acknowledge_delivery(&state.store, &agent_id, &message_id, &input.lease_token)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -126,10 +127,7 @@ async fn retry_delivery(
     Json(input): Json<RetryDelivery>,
 ) -> Result<StatusCode, FleetError> {
     require_bound_agent(&principal, &agent_id)?;
-    state
-        .store
-        .retry_delivery(&agent_id, &message_id, input)
-        .await?;
+    settlement::retry_delivery(&state.store, &agent_id, &message_id, input).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -164,10 +162,8 @@ async fn block_delivery(
     Json(input): Json<BlockDelivery>,
 ) -> Result<(StatusCode, Json<crate::model::BlockedDelivery>), FleetError> {
     require_bound_agent(&principal, &agent_id)?;
-    let (blocked, created) = state
-        .store
-        .block_delivery(&agent_id, &message_id, input)
-        .await?;
+    let (blocked, created) =
+        settlement::block_delivery(&state.store, &agent_id, &message_id, input).await?;
     let status = if created {
         StatusCode::CREATED
     } else {

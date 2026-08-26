@@ -1,3 +1,4 @@
+use fleetd::settlement;
 use fleetd::{
     error::FleetError,
     model::{
@@ -99,10 +100,14 @@ async fn membership_delivery_modes_control_only_the_delivery_snapshot() {
     let worker_direct = claim_all(&store, &worker.id).await;
     assert_eq!(worker_direct.deliveries.len(), 1);
     assert_eq!(worker_direct.deliveries[0].message, direct_to_worker);
-    store
-        .acknowledge_delivery(&worker.id, &direct_to_worker.id, &worker_direct.lease_token)
-        .await
-        .expect("ack direct worker delivery");
+    settlement::acknowledge_delivery(
+        &store,
+        &worker.id,
+        &direct_to_worker.id,
+        &worker_direct.lease_token,
+    )
+    .await
+    .expect("ack direct worker delivery");
 
     let broadcast = append_text(&store, &channel.id, &sender.id, None, "mixed broadcast").await;
     assert!(claim_all(&store, &human.id).await.deliveries.is_empty());
@@ -361,16 +366,16 @@ async fn message_idempotency_is_concurrent_durable_and_conflict_detecting() {
     assert_eq!(first.message, second.message);
     assert_ne!(first.created, second.created);
 
-    let delivery = store
-        .claim_deliveries(
-            &weaver.id,
-            fleetd::model::ClaimDeliveries {
-                limit: 10,
-                lease_duration_ms: 10_000,
-            },
-        )
-        .await
-        .expect("claim recipient delivery");
+    let delivery = settlement::claim_deliveries(
+        &store,
+        &weaver.id,
+        fleetd::model::ClaimDeliveries {
+            limit: 10,
+            lease_duration_ms: 10_000,
+        },
+    )
+    .await
+    .expect("claim recipient delivery");
     assert_eq!(delivery.deliveries.len(), 1);
     assert_eq!(delivery.deliveries[0].message, first.message);
 
@@ -489,16 +494,16 @@ fn exact_member(agent_id: &str, delivery_mode: MembershipDeliveryMode) -> Create
 }
 
 async fn claim_all(store: &Store, agent_id: &str) -> fleetd::model::ClaimBatch {
-    store
-        .claim_deliveries(
-            agent_id,
-            ClaimDeliveries {
-                limit: 100,
-                lease_duration_ms: 10_000,
-            },
-        )
-        .await
-        .expect("claim deliveries")
+    settlement::claim_deliveries(
+        store,
+        agent_id,
+        ClaimDeliveries {
+            limit: 100,
+            lease_duration_ms: 10_000,
+        },
+    )
+    .await
+    .expect("claim deliveries")
 }
 
 #[tokio::test]

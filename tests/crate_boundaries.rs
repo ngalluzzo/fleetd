@@ -214,3 +214,92 @@ fn crate_root_re_exports_modules_only() {
         );
     }
 }
+
+/// The six concepts ARCHITECTURE.md gives the kernel, as modules.
+const KERNEL_MODULES: [&str; 6] = [
+    "auth",
+    "delivery",
+    "error",
+    "message_commit_hint",
+    "model",
+    "store",
+];
+
+/// Everything layered above the kernel.
+const ABOVE_KERNEL: [&str; 9] = [
+    "api",
+    "controller",
+    "invocation",
+    "message_grant_broker",
+    "operations",
+    "session_binding",
+    "settlement",
+    "stream_grant_broker",
+    "worker",
+];
+
+/// Whether a source file names another crate module, written either inline as
+/// `crate::other::Item` or as an entry inside a grouped `use crate::{ .. };`.
+fn references(source: &str, module: &str) -> bool {
+    if source.contains(&format!("crate::{module}::")) {
+        return true;
+    }
+    let mut rest = source;
+    while let Some(start) = rest.find("use crate::{") {
+        rest = &rest[start..];
+        let Some(end) = rest.find("};") else { break };
+        if rest[..end].contains(&format!("{module}::")) {
+            return true;
+        }
+        rest = &rest[end + 2..];
+    }
+    false
+}
+
+#[test]
+fn the_kernel_does_not_depend_on_what_is_layered_above_it() {
+    for module in KERNEL_MODULES {
+        let path = workspace_root().join(format!("src/{module}.rs"));
+        let Ok(source) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for above in ABOVE_KERNEL {
+            assert!(
+                !references(&source, above),
+                "kernel module `{module}` reaches `{above}`, which is layered above it. \
+                 A delivery row transition and the invocation fence settling it belong in \
+                 one transaction, but the composition belongs above the kernel — see \
+                 `settlement` and docs/adr/0026-delivery-settlement-composition.md."
+            );
+        }
+    }
+}
+
+#[test]
+fn only_the_kernel_writes_kernel_tables() {
+    const KERNEL_TABLES: [&str; 7] = [
+        "agents",
+        "auth_credentials",
+        "agent_deliveries",
+        "channel_members",
+        "channels",
+        "delivery_blocks",
+        "messages",
+    ];
+    for module in ABOVE_KERNEL {
+        let path = workspace_root().join(format!("src/{module}.rs"));
+        let Ok(source) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for table in KERNEL_TABLES {
+            for verb in ["INSERT INTO", "UPDATE", "DELETE FROM"] {
+                assert!(
+                    !source.contains(&format!("{verb} {table}")),
+                    "`{module}` writes the kernel table `{table}` directly (`{verb}`). The \
+                     delivery and message state machines live in the kernel; call the \
+                     transactional function it exposes so one module owns each transition."
+                );
+            }
+        }
+    }
+}

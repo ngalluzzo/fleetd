@@ -1,11 +1,17 @@
+//! The durable delivery row and its state machine.
+//!
+//! Every transition a delivery row can make lives here, and only here. What
+//! else belongs in the same commit — terminalizing an invocation fence, for
+//! instance — is the caller\'s decision, so these return whether the row moved
+//! rather than committing on their own.
+
 use sqlx::Row;
-use uuid::Uuid;
 
 use crate::{
     error::FleetError,
     model::{
-        BlockDelivery, BlockResolution, BlockedDelivery, ClaimBatch, ClaimDeliveries, Delivery,
-        ExecutionCertainty, ResolveDeliveryBlock, RetryDelivery,
+        BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries, Delivery,
+        ResolveDeliveryBlock, RetryDelivery,
     },
     store::{Store, message_from_row, now_ms},
 };
@@ -16,322 +22,6 @@ const MAX_RETRY_DELAY_MS: u64 = 86_400_000;
 const MAX_ERROR_LENGTH: usize = 4_096;
 
 impl Store {
-    /// Atomically leases the oldest eligible entries from one agent inbox.
-    ///
-    /// Expired leases are eligible for a later attempt. An empty batch is a
-    /// successful result and means no delivery was currently claimable.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid bounds, an unknown agent, or a persistence
-    /// failure.
-    pub async fn claim_deliveries(
-        &self,
-        agent_id: &str,
-        input: ClaimDeliveries,
-    ) -> Result<ClaimBatch, FleetError> {
-        validate_claim(&input)?;
-        let now = now_ms();
-        let lease_duration = i64::try_from(input.lease_duration_ms)
-            .map_err(|_| FleetError::Invalid("lease duration is too large".to_owned()))?;
-        let lease_expires_at_ms = now
-            .checked_add(lease_duration)
-            .ok_or_else(|| FleetError::Invalid("lease expiry overflowed".to_owned()))?;
-        let lease_token = Uuid::new_v4().to_string();
-        ensure_agent(&self.pool, agent_id).await?;
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        crate::invocation::recover_expired_invocations(&mut transaction, agent_id, now).await?;
-        sqlx::query(
-            r"
-            UPDATE agent_deliveries
-            SET state = 'leased',
-                attempt = attempt + 1,
-                lease_token = ?,
-                lease_expires_at_ms = ?
-            WHERE rowid IN (
-                SELECT rowid
-                FROM agent_deliveries
-                WHERE agent_id = ?
-                  AND available_at_ms <= ?
-                  AND (
-                    state = 'pending'
-                    OR (state = 'leased' AND lease_expires_at_ms <= ?)
-                  )
-                ORDER BY message_seq
-                LIMIT ?
-            )
-            ",
-        )
-        .bind(&lease_token)
-        .bind(lease_expires_at_ms)
-        .bind(agent_id)
-        .bind(now)
-        .bind(now)
-        .bind(i64::from(input.limit))
-        .execute(&mut *transaction)
-        .await?;
-        let rows = sqlx::query(
-            r"
-            SELECT m.seq, m.id, m.channel_id, m.sender_id, m.recipient_id,
-                   m.kind, m.payload_json, m.correlation_id, m.causation_id,
-                   m.created_at_ms, d.attempt, d.lease_expires_at_ms, d.last_error
-            FROM agent_deliveries d
-            JOIN messages m ON m.seq = d.message_seq
-            WHERE d.agent_id = ? AND d.state = 'leased' AND d.lease_token = ?
-            ORDER BY m.seq
-            ",
-        )
-        .bind(agent_id)
-        .bind(&lease_token)
-        .fetch_all(&mut *transaction)
-        .await?;
-        let deliveries = rows
-            .iter()
-            .map(delivery_from_row)
-            .collect::<Result<_, _>>()?;
-        transaction.commit().await?;
-        Ok(ClaimBatch {
-            lease_token,
-            lease_expires_at_ms,
-            deliveries,
-        })
-    }
-
-    /// Acknowledges successful processing under the active lease.
-    ///
-    /// Repeating an acknowledgement with the same token is idempotent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the delivery is unknown, the lease is expired or
-    /// owned by another worker, or persistence fails.
-    pub async fn acknowledge_delivery(
-        &self,
-        agent_id: &str,
-        message_id: &str,
-        lease_token: &str,
-    ) -> Result<(), FleetError> {
-        validate_token(lease_token)?;
-        let now = now_ms();
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let result = sqlx::query(
-            r"
-            UPDATE agent_deliveries
-            SET state = 'acknowledged',
-                lease_token = NULL,
-                lease_expires_at_ms = NULL,
-                last_settled_lease_token = ?,
-                last_settlement = 'acknowledged',
-                acknowledged_at_ms = ?
-            WHERE agent_id = ?
-              AND message_seq = (SELECT seq FROM messages WHERE id = ?)
-              AND state = 'leased'
-              AND lease_token = ?
-              AND lease_expires_at_ms > ?
-            ",
-        )
-        .bind(lease_token)
-        .bind(now)
-        .bind(agent_id)
-        .bind(message_id)
-        .bind(lease_token)
-        .bind(now)
-        .execute(&mut *transaction)
-        .await?;
-        if result.rows_affected() == 1 {
-            crate::invocation::terminalize_invocation(
-                &mut transaction,
-                agent_id,
-                message_id,
-                lease_token,
-                ExecutionCertainty::OutcomeKnown,
-                "acknowledged",
-                now,
-            )
-            .await?;
-            transaction.commit().await?;
-            return Ok(());
-        }
-        transaction.rollback().await?;
-        settle_miss(
-            &self.pool,
-            agent_id,
-            message_id,
-            lease_token,
-            "acknowledged",
-        )
-        .await
-    }
-
-    /// Releases a failed delivery for a later attempt under the active lease.
-    ///
-    /// Repeating a retry with the same token is idempotent and never disturbs a
-    /// newer lease.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid bounds, an unknown delivery, an expired or
-    /// foreign lease, or a persistence failure.
-    pub async fn retry_delivery(
-        &self,
-        agent_id: &str,
-        message_id: &str,
-        input: RetryDelivery,
-    ) -> Result<(), FleetError> {
-        validate_retry(&input)?;
-        let now = now_ms();
-        let retry_delay = i64::try_from(input.retry_after_ms)
-            .map_err(|_| FleetError::Invalid("retry delay is too large".to_owned()))?;
-        let available_at_ms = now
-            .checked_add(retry_delay)
-            .ok_or_else(|| FleetError::Invalid("retry time overflowed".to_owned()))?;
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        crate::invocation::ensure_retry_is_safe(
-            &mut transaction,
-            agent_id,
-            message_id,
-            &input.lease_token,
-        )
-        .await?;
-        let result = sqlx::query(
-            r"
-            UPDATE agent_deliveries
-            SET state = 'pending',
-                available_at_ms = ?,
-                lease_token = NULL,
-                lease_expires_at_ms = NULL,
-                last_error = ?,
-                last_settled_lease_token = ?,
-                last_settlement = 'retry',
-                acknowledged_at_ms = NULL
-            WHERE agent_id = ?
-              AND message_seq = (SELECT seq FROM messages WHERE id = ?)
-              AND state = 'leased'
-              AND lease_token = ?
-              AND lease_expires_at_ms > ?
-            ",
-        )
-        .bind(available_at_ms)
-        .bind(&input.error)
-        .bind(&input.lease_token)
-        .bind(agent_id)
-        .bind(message_id)
-        .bind(&input.lease_token)
-        .bind(now)
-        .execute(&mut *transaction)
-        .await?;
-        if result.rows_affected() == 1 {
-            crate::invocation::terminalize_invocation(
-                &mut transaction,
-                agent_id,
-                message_id,
-                &input.lease_token,
-                ExecutionCertainty::NotStarted,
-                "retry",
-                now,
-            )
-            .await?;
-            transaction.commit().await?;
-            return Ok(());
-        }
-        transaction.rollback().await?;
-        settle_miss(
-            &self.pool,
-            agent_id,
-            message_id,
-            &input.lease_token,
-            "retry",
-        )
-        .await
-    }
-
-    /// Parks an ambiguously executed delivery under its active lease.
-    ///
-    /// Repeating the same block operation after a lost response returns the
-    /// original block record. Blocked deliveries are never automatically
-    /// claimable, including after the former lease expiry.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid evidence, an unknown delivery, an expired
-    /// or foreign lease, conflicting replay, or a persistence failure.
-    pub async fn block_delivery(
-        &self,
-        agent_id: &str,
-        message_id: &str,
-        input: BlockDelivery,
-    ) -> Result<(BlockedDelivery, bool), FleetError> {
-        validate_block(&input)?;
-        let now = now_ms();
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let result = sqlx::query(
-            r"
-            UPDATE agent_deliveries
-            SET state = 'blocked',
-                lease_token = NULL,
-                lease_expires_at_ms = NULL,
-                last_error = ?,
-                last_settled_lease_token = ?,
-                last_settlement = 'blocked',
-                acknowledged_at_ms = NULL
-            WHERE agent_id = ?
-              AND message_seq = (SELECT seq FROM messages WHERE id = ?)
-              AND state = 'leased'
-              AND lease_token = ?
-              AND lease_expires_at_ms > ?
-            ",
-        )
-        .bind(&input.reason)
-        .bind(&input.lease_token)
-        .bind(agent_id)
-        .bind(message_id)
-        .bind(&input.lease_token)
-        .bind(now)
-        .execute(&mut *transaction)
-        .await?;
-        if result.rows_affected() == 1 {
-            let block_id =
-                insert_block_record(&mut transaction, agent_id, message_id, &input, now).await?;
-            crate::invocation::terminalize_invocation(
-                &mut transaction,
-                agent_id,
-                message_id,
-                &input.lease_token,
-                ExecutionCertainty::OutcomeUnknown,
-                "blocked",
-                now,
-            )
-            .await?;
-            let blocked = blocked_delivery_by_id(&mut transaction, block_id).await?;
-            transaction.commit().await?;
-            return Ok((blocked, true));
-        }
-        let existing =
-            blocked_delivery_by_lease(&mut transaction, agent_id, message_id, &input.lease_token)
-                .await?;
-        if let Some((blocked, reason)) = existing {
-            if reason != input.reason {
-                return Err(FleetError::Conflict(
-                    "lease was already blocked with different evidence".to_owned(),
-                ));
-            }
-            transaction.commit().await?;
-            return Ok((blocked, false));
-        }
-        transaction.rollback().await?;
-        settle_miss(
-            &self.pool,
-            agent_id,
-            message_id,
-            &input.lease_token,
-            "blocked",
-        )
-        .await?;
-        Err(FleetError::LeaseConflict(
-            "blocked settlement evidence is missing".to_owned(),
-        ))
-    }
-
     /// Lists unresolved blocked deliveries for operator review.
     ///
     /// # Errors
@@ -427,7 +117,7 @@ pub(crate) fn validate_claim(input: &ClaimDeliveries) -> Result<(), FleetError> 
     Ok(())
 }
 
-fn validate_retry(input: &RetryDelivery) -> Result<(), FleetError> {
+pub(crate) fn validate_retry(input: &RetryDelivery) -> Result<(), FleetError> {
     validate_token(&input.lease_token)?;
     if input.retry_after_ms > MAX_RETRY_DELAY_MS {
         return Err(FleetError::Invalid(format!(
@@ -446,7 +136,7 @@ fn validate_retry(input: &RetryDelivery) -> Result<(), FleetError> {
     Ok(())
 }
 
-fn validate_block(input: &BlockDelivery) -> Result<(), FleetError> {
+pub(crate) fn validate_block(input: &BlockDelivery) -> Result<(), FleetError> {
     validate_token(&input.lease_token)?;
     validate_evidence("block reason", Some(&input.reason))
 }
@@ -482,7 +172,7 @@ fn validate_evidence(label: &str, value: Option<&str>) -> Result<(), FleetError>
     Ok(())
 }
 
-fn validate_token(lease_token: &str) -> Result<(), FleetError> {
+pub(crate) fn validate_token(lease_token: &str) -> Result<(), FleetError> {
     if lease_token.trim().is_empty() {
         return Err(FleetError::Invalid(
             "lease token must not be empty".to_owned(),
@@ -508,7 +198,7 @@ pub(crate) async fn ensure_agent(
     Ok(())
 }
 
-async fn settle_miss(
+pub(crate) async fn settle_miss(
     pool: &sqlx::SqlitePool,
     agent_id: &str,
     message_id: &str,
@@ -545,7 +235,7 @@ async fn settle_miss(
     ))
 }
 
-async fn insert_block_record(
+pub(crate) async fn insert_block_record(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     message_id: &str,
@@ -578,7 +268,7 @@ async fn insert_block_record(
     Ok(result.last_insert_rowid())
 }
 
-async fn blocked_delivery_by_id(
+pub(crate) async fn blocked_delivery_by_id(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     block_id: i64,
 ) -> Result<BlockedDelivery, FleetError> {
@@ -595,7 +285,7 @@ async fn blocked_delivery_by_id(
         })
 }
 
-async fn blocked_delivery_by_lease(
+pub(crate) async fn blocked_delivery_by_lease(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     message_id: &str,
@@ -750,11 +440,326 @@ const fn resolution_name(resolution: &BlockResolution) -> &'static str {
     }
 }
 
-fn delivery_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Delivery, FleetError> {
+pub(crate) fn delivery_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Delivery, FleetError> {
     Ok(Delivery {
         message: message_from_row(row)?,
         attempt: row.try_get("attempt")?,
         lease_expires_at_ms: row.try_get("lease_expires_at_ms")?,
         last_error: row.try_get("last_error")?,
     })
+}
+
+/// Leases the oldest eligible rows in one agent inbox.
+///
+/// Expired leases are eligible for a later attempt. `message_kinds_json` is a
+/// JSON array restricting the lease to exact message kinds; `None` leases any
+/// claimable row.
+///
+/// # Errors
+///
+/// Returns an error when the update cannot be applied.
+pub(crate) async fn lease_claimable(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    agent_id: &str,
+    lease_token: &str,
+    lease_expires_at_ms: i64,
+    now: i64,
+    limit: u32,
+    message_kinds_json: Option<&str>,
+) -> Result<(), FleetError> {
+    sqlx::query(
+        r"
+        UPDATE agent_deliveries
+        SET state = 'leased', attempt = attempt + 1,
+            lease_token = ?, lease_expires_at_ms = ?
+        WHERE rowid IN (
+            SELECT d.rowid
+            FROM agent_deliveries d
+            JOIN messages m ON m.seq = d.message_seq
+            WHERE d.agent_id = ?
+              AND d.available_at_ms <= ?
+              AND (
+                d.state = 'pending'
+                OR (d.state = 'leased' AND d.lease_expires_at_ms <= ?)
+              )
+              AND (
+                ? IS NULL
+                OR m.kind IN (SELECT value FROM json_each(?))
+              )
+            ORDER BY d.message_seq
+            LIMIT ?
+        )
+        ",
+    )
+    .bind(lease_token)
+    .bind(lease_expires_at_ms)
+    .bind(agent_id)
+    .bind(now)
+    .bind(now)
+    .bind(message_kinds_json)
+    .bind(message_kinds_json)
+    .bind(i64::from(limit))
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+/// Reads the deliveries currently held under one lease token.
+///
+/// # Errors
+///
+/// Returns an error when stored rows cannot be read or decoded.
+pub(crate) async fn leased_batch(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    agent_id: &str,
+    lease_token: &str,
+) -> Result<Vec<Delivery>, FleetError> {
+    let rows = sqlx::query(
+        r"
+        SELECT m.seq, m.id, m.channel_id, m.sender_id, m.recipient_id,
+               m.kind, m.payload_json, m.correlation_id, m.causation_id,
+               m.created_at_ms, d.attempt, d.lease_expires_at_ms, d.last_error
+        FROM agent_deliveries d
+        JOIN messages m ON m.seq = d.message_seq
+        WHERE d.agent_id = ? AND d.state = 'leased' AND d.lease_token = ?
+        ORDER BY m.seq
+        ",
+    )
+    .bind(agent_id)
+    .bind(lease_token)
+    .fetch_all(&mut **transaction)
+    .await?;
+    rows.iter().map(delivery_from_row).collect()
+}
+
+/// Moves one leased row to `acknowledged`.
+///
+/// Returns whether the row transitioned. A `false` result means the lease is
+/// expired, foreign, or already settled, and the caller must not commit.
+///
+/// # Errors
+///
+/// Returns an error when the update cannot be applied.
+pub(crate) async fn mark_acknowledged(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    agent_id: &str,
+    message_id: &str,
+    lease_token: &str,
+    now: i64,
+) -> Result<bool, FleetError> {
+    let result = sqlx::query(
+        r"
+        UPDATE agent_deliveries
+        SET state = 'acknowledged',
+            lease_token = NULL,
+            lease_expires_at_ms = NULL,
+            last_settled_lease_token = ?,
+            last_settlement = 'acknowledged',
+            acknowledged_at_ms = ?
+        WHERE agent_id = ?
+          AND message_seq = (SELECT seq FROM messages WHERE id = ?)
+          AND state = 'leased'
+          AND lease_token = ?
+          AND lease_expires_at_ms > ?
+        ",
+    )
+    .bind(lease_token)
+    .bind(now)
+    .bind(agent_id)
+    .bind(message_id)
+    .bind(lease_token)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Releases one leased row for a later attempt.
+///
+/// Returns whether the row transitioned.
+///
+/// # Errors
+///
+/// Returns an error when the update cannot be applied.
+pub(crate) async fn mark_retry(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    agent_id: &str,
+    message_id: &str,
+    input: &RetryDelivery,
+    available_at_ms: i64,
+    now: i64,
+) -> Result<bool, FleetError> {
+    let result = sqlx::query(
+        r"
+        UPDATE agent_deliveries
+        SET state = 'pending',
+            available_at_ms = ?,
+            lease_token = NULL,
+            lease_expires_at_ms = NULL,
+            last_error = ?,
+            last_settled_lease_token = ?,
+            last_settlement = 'retry',
+            acknowledged_at_ms = NULL
+        WHERE agent_id = ?
+          AND message_seq = (SELECT seq FROM messages WHERE id = ?)
+          AND state = 'leased'
+          AND lease_token = ?
+          AND lease_expires_at_ms > ?
+        ",
+    )
+    .bind(available_at_ms)
+    .bind(&input.error)
+    .bind(&input.lease_token)
+    .bind(agent_id)
+    .bind(message_id)
+    .bind(&input.lease_token)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Parks one leased row so it never becomes automatically claimable again.
+///
+/// Returns whether the row transitioned.
+///
+/// # Errors
+///
+/// Returns an error when the update cannot be applied.
+pub(crate) async fn mark_blocked(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    agent_id: &str,
+    message_id: &str,
+    input: &BlockDelivery,
+    now: i64,
+) -> Result<bool, FleetError> {
+    let result = sqlx::query(
+        r"
+        UPDATE agent_deliveries
+        SET state = 'blocked',
+            lease_token = NULL,
+            lease_expires_at_ms = NULL,
+            last_error = ?,
+            last_settled_lease_token = ?,
+            last_settlement = 'blocked',
+            acknowledged_at_ms = NULL
+        WHERE agent_id = ?
+          AND message_seq = (SELECT seq FROM messages WHERE id = ?)
+          AND state = 'leased'
+          AND lease_token = ?
+          AND lease_expires_at_ms > ?
+        ",
+    )
+    .bind(&input.reason)
+    .bind(&input.lease_token)
+    .bind(agent_id)
+    .bind(message_id)
+    .bind(&input.lease_token)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Blocks the row an armed lease held, keyed by sequence.
+///
+/// Returns whether the row transitioned.
+///
+/// # Errors
+///
+/// Returns an error when the update cannot be applied.
+pub(crate) async fn block_expired_lease(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    agent_id: &str,
+    message_seq: i64,
+    lease_token: &str,
+    reason: &str,
+    now: i64,
+) -> Result<bool, FleetError> {
+    let result = sqlx::query(
+        r"
+        UPDATE agent_deliveries
+        SET state = 'blocked', lease_token = NULL, lease_expires_at_ms = NULL,
+            last_error = ?, last_settled_lease_token = ?,
+            last_settlement = 'blocked', acknowledged_at_ms = NULL
+        WHERE message_seq = ? AND agent_id = ? AND state = 'leased'
+          AND lease_token = ? AND lease_expires_at_ms <= ?
+        ",
+    )
+    .bind(reason)
+    .bind(lease_token)
+    .bind(message_seq)
+    .bind(agent_id)
+    .bind(lease_token)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Records block evidence for a row identified by sequence.
+///
+/// # Errors
+///
+/// Returns an error when the insert cannot be applied.
+pub(crate) async fn record_block(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    message_seq: i64,
+    agent_id: &str,
+    attempt: i64,
+    lease_token: &str,
+    reason: &str,
+    blocked_at_ms: i64,
+) -> Result<(), FleetError> {
+    sqlx::query(
+        r"
+        INSERT INTO delivery_blocks (
+            message_seq, agent_id, attempt, lease_token, reason, blocked_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ",
+    )
+    .bind(message_seq)
+    .bind(agent_id)
+    .bind(attempt)
+    .bind(lease_token)
+    .bind(reason)
+    .bind(blocked_at_ms)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(())
+}
+
+/// Moves one leased row to `acknowledged`, keyed by sequence.
+///
+/// Returns whether the row transitioned.
+///
+/// # Errors
+///
+/// Returns an error when the update cannot be applied.
+pub(crate) async fn acknowledge_leased_seq(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    agent_id: &str,
+    message_seq: i64,
+    lease_token: &str,
+    now: i64,
+) -> Result<bool, FleetError> {
+    let result = sqlx::query(
+        r"
+        UPDATE agent_deliveries
+        SET state = 'acknowledged', lease_token = NULL, lease_expires_at_ms = NULL,
+            last_settled_lease_token = ?, last_settlement = 'acknowledged',
+            acknowledged_at_ms = ?
+        WHERE message_seq = ? AND agent_id = ? AND state = 'leased'
+          AND lease_token = ? AND lease_expires_at_ms > ?
+        ",
+    )
+    .bind(lease_token)
+    .bind(now)
+    .bind(message_seq)
+    .bind(agent_id)
+    .bind(lease_token)
+    .bind(now)
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() == 1)
 }

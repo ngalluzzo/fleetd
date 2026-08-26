@@ -1,3 +1,4 @@
+use fleetd::settlement;
 use fleetd::{
     error::FleetError,
     model::{
@@ -327,28 +328,26 @@ async fn compatible_adoption_increments_epoch_and_fences_the_stale_owner() {
         armed.session.active_invocation_id.as_deref(),
         Some(fixture.invocation.id.as_str())
     );
-    let direct_ack = fixture
-        .store
-        .acknowledge_delivery(
-            &fixture.receiver.id,
-            &fixture.invocation.message.id,
-            &fixture.invocation.lease_token,
-        )
-        .await
-        .expect_err("generic acknowledgement must not bypass a bound turn");
+    let direct_ack = settlement::acknowledge_delivery(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.message.id,
+        &fixture.invocation.lease_token,
+    )
+    .await
+    .expect_err("generic acknowledgement must not bypass a bound turn");
     assert!(matches!(direct_ack, FleetError::Conflict(_)));
-    let direct_block = fixture
-        .store
-        .block_delivery(
-            &fixture.receiver.id,
-            &fixture.invocation.message.id,
-            BlockDelivery {
-                lease_token: fixture.invocation.lease_token.clone(),
-                reason: "generic block attempted before binding fence".to_owned(),
-            },
-        )
-        .await
-        .expect_err("generic block must not bypass a bound turn");
+    let direct_block = settlement::block_delivery(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.message.id,
+        BlockDelivery {
+            lease_token: fixture.invocation.lease_token.clone(),
+            reason: "generic block attempted before binding fence".to_owned(),
+        },
+    )
+    .await
+    .expect_err("generic block must not bypass a bound turn");
     assert!(matches!(direct_block, FleetError::Conflict(_)));
     assert!(
         fixture

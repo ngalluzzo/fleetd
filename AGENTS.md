@@ -16,6 +16,9 @@ Read `VISION.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, and
   authenticated principal, not caller-supplied identity fields.
 - Keep network listeners on loopback until encrypted transport and enrollment
   are explicitly implemented.
+- Keep every delivery row transition in the kernel and compose it with the
+  invocation fence above the kernel. Nothing layered above may write a kernel
+  table directly.
 - Reach a type through the module that owns it. The crate root re-exports
   modules, never individual items; a flat root list is a conflict magnet that
   every change has to edit.

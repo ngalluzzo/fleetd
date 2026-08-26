@@ -35,6 +35,13 @@ those rows with bounded leases and explicitly acknowledge, release, or park
 them. WebSockets are notification hints; the leased inbox is the work
 guarantee. See [ADR 0002](adr/0002-at-least-once-agent-inbox.md).
 
+The kernel owns every transition a delivery row can make and commits none of
+them. Settlement composes one kernel transition with the invocation fence
+terminalizing in the same transaction, because a delivery acknowledged without
+its invocation terminalized is exactly the crash the fence exists to prevent.
+That composition is layered above the kernel, so the kernel depends on nothing
+above it. See [ADR 0026](adr/0026-delivery-settlement-composition.md).
+
 An active worker parks a delivery when an external outcome is ambiguous.
 Parked work does not become claimable when a lease expires; only the operator
 can requeue or abandon the exact block record. See
