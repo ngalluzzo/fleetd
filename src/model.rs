@@ -48,16 +48,39 @@ pub struct RegisteredAgent {
     pub credential: IssuedCredential,
 }
 
+/// The durable conversation lifecycle selected by fleetd.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationKind {
+    /// A named conversation whose permanent membership may grow.
+    #[default]
+    Shared,
+    /// A one-to-one conversation with one immutable exact participant pair.
+    Direct,
+}
+
+impl ConversationKind {
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Shared => "shared",
+            Self::Direct => "direct",
+        }
+    }
+}
+
 /// A durable conversation shared by a bounded set of agents.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct Channel {
     pub id: String,
     pub name: String,
+    pub kind: ConversationKind,
     pub metadata: Value,
     pub created_at_ms: i64,
+    pub archived_at_ms: Option<i64>,
 }
 
-/// Input for creating a channel and its initial membership.
+/// Input for creating a shared channel and its initial membership.
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateChannel {
@@ -116,6 +139,36 @@ pub struct AddMember {
     pub agent_id: String,
     #[serde(default)]
     pub delivery_mode: MembershipDeliveryMode,
+}
+
+/// Input for idempotently opening a one-to-one direct conversation.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpenDirectConversation {
+    /// Exactly two distinct participants. Their delivery modes become
+    /// immutable with the direct conversation.
+    pub members: Vec<CreateChannelMember>,
+}
+
+/// Input for renaming a shared channel.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RenameChannel {
+    pub name: String,
+}
+
+/// One conversation with bounded participant and recency metadata for clients.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
+pub struct ConversationSummary {
+    pub id: String,
+    pub name: String,
+    pub kind: ConversationKind,
+    pub metadata: Value,
+    pub created_at_ms: i64,
+    pub archived_at_ms: Option<i64>,
+    pub members: Vec<ChannelMember>,
+    pub latest_message_seq: Option<i64>,
+    pub latest_message_at_ms: Option<i64>,
 }
 
 /// An immutable message envelope in the global event sequence.

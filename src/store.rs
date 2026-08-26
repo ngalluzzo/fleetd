@@ -12,8 +12,9 @@ use crate::{
     error::FleetError,
     message_commit_hint::MessageCommitNotifier,
     model::{
-        Agent, Channel, ChannelMember, CreateAgent, CreateChannel, CreateChannelMember,
-        CreateMessage, MembershipDeliveryMode, Message, MessagePage,
+        Agent, Channel, ChannelMember, ConversationKind, ConversationSummary, CreateAgent,
+        CreateChannel, CreateChannelMember, CreateMessage, MembershipDeliveryMode, Message,
+        MessagePage, OpenDirectConversation,
     },
 };
 
@@ -23,6 +24,13 @@ const MAX_IDEMPOTENCY_KEY_LENGTH: usize = 256;
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppendMessageResult {
     pub message: Message,
+    pub created: bool,
+}
+
+/// The durable result of opening one exact direct-conversation pair.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenDirectConversationResult {
+    pub conversation: ConversationSummary,
     pub created: bool,
 }
 
@@ -189,8 +197,10 @@ impl Store {
         let channel = Channel {
             id: Uuid::new_v4().to_string(),
             name,
+            kind: ConversationKind::Shared,
             metadata,
             created_at_ms: now_ms(),
+            archived_at_ms: None,
         };
         let metadata_json = serde_json::to_string(&channel.metadata)?;
         let result = sqlx::query(
@@ -229,11 +239,142 @@ impl Store {
     /// Returns an error when the stored rows cannot be read or decoded.
     pub async fn list_channels(&self) -> Result<Vec<Channel>, FleetError> {
         let rows = sqlx::query(
-            "SELECT id, name, metadata_json, created_at_ms FROM channels ORDER BY created_at_ms, id",
+            r"
+            SELECT id, name, conversation_kind, metadata_json, created_at_ms, archived_at_ms
+            FROM channels
+            ORDER BY created_at_ms, id
+            ",
         )
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(channel_from_row).collect()
+    }
+
+    /// Lists the common presentation projection for shared and direct conversations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when durable rows cannot be decoded.
+    pub async fn list_conversations(
+        &self,
+        include_archived: bool,
+    ) -> Result<Vec<ConversationSummary>, FleetError> {
+        let rows = sqlx::query(
+            r"
+            SELECT c.id, c.name, c.conversation_kind, c.metadata_json,
+                   c.created_at_ms, c.archived_at_ms,
+                   (
+                       SELECT m.seq FROM messages m
+                       WHERE m.channel_id = c.id
+                       ORDER BY m.seq DESC LIMIT 1
+                   ) AS latest_message_seq,
+                   (
+                       SELECT m.created_at_ms FROM messages m
+                       WHERE m.channel_id = c.id
+                       ORDER BY m.seq DESC LIMIT 1
+                   ) AS latest_message_at_ms
+            FROM channels c
+            WHERE ? OR c.archived_at_ms IS NULL
+            ORDER BY c.created_at_ms, c.id
+            ",
+        )
+        .bind(include_archived)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut conversations = Vec::with_capacity(rows.len());
+        for row in rows {
+            let channel = channel_from_row(&row)?;
+            conversations.push(ConversationSummary {
+                members: self.list_channel_members(&channel.id).await?,
+                id: channel.id,
+                name: channel.name,
+                kind: channel.kind,
+                metadata: channel.metadata,
+                created_at_ms: channel.created_at_ms,
+                archived_at_ms: channel.archived_at_ms,
+                latest_message_seq: row.try_get("latest_message_seq")?,
+                latest_message_at_ms: row.try_get("latest_message_at_ms")?,
+            });
+        }
+        Ok(conversations)
+    }
+
+    /// Idempotently opens the direct conversation for one exact participant pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless exactly two distinct known agents are supplied,
+    /// or when an existing pair was opened with different immutable modes.
+    pub async fn open_direct_conversation(
+        &self,
+        input: OpenDirectConversation,
+    ) -> Result<OpenDirectConversationResult, FleetError> {
+        let members = validate_direct_members(input.members)?;
+        let pair_key = direct_pair_key(&members[0].agent_id, &members[1].agent_id);
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        for member in &members {
+            ensure_exists(&mut transaction, "agents", "agent", &member.agent_id).await?;
+        }
+        let (channel, created) =
+            open_direct_in_transaction(&mut transaction, &pair_key, &members).await?;
+        transaction.commit().await?;
+        Ok(OpenDirectConversationResult {
+            conversation: self.conversation_summary(&channel.id).await?,
+            created,
+        })
+    }
+
+    /// Renames an active shared channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid name, unknown channel, direct
+    /// conversation, archived channel, or duplicate shared-channel name.
+    pub async fn rename_channel(
+        &self,
+        channel_id: &str,
+        name: String,
+    ) -> Result<Channel, FleetError> {
+        validate_name("channel", &name)?;
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let row = channel_row(&mut transaction, channel_id).await?;
+        let channel = channel_from_row(&row)?;
+        require_mutable_shared_channel(&channel)?;
+        let result = sqlx::query("UPDATE channels SET name = ? WHERE id = ?")
+            .bind(&name)
+            .bind(channel_id)
+            .execute(&mut *transaction)
+            .await;
+        map_unique_conflict(result, "channel name")?;
+        transaction.commit().await?;
+        Ok(Channel { name, ..channel })
+    }
+
+    /// Archives a shared channel without deleting its membership or history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown channel or direct conversation.
+    pub async fn archive_channel(&self, channel_id: &str) -> Result<Channel, FleetError> {
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let row = channel_row(&mut transaction, channel_id).await?;
+        let mut channel = channel_from_row(&row)?;
+        if channel.kind != ConversationKind::Shared {
+            return Err(FleetError::Conflict(
+                "direct conversations cannot be archived".to_owned(),
+            ));
+        }
+        if channel.archived_at_ms.is_none() {
+            let archived_at_ms = now_ms();
+            sqlx::query("UPDATE channels SET archived_at_ms = ? WHERE id = ?")
+                .bind(archived_at_ms)
+                .bind(channel_id)
+                .execute(&mut *transaction)
+                .await?;
+            channel.archived_at_ms = Some(archived_at_ms);
+        }
+        transaction.commit().await?;
+        Ok(channel)
     }
 
     /// Adds an agent to a channel. Repeating the operation is harmless.
@@ -260,7 +401,8 @@ impl Store {
         delivery_mode: MembershipDeliveryMode,
     ) -> Result<(), FleetError> {
         let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        ensure_exists(&mut transaction, "channels", "channel", channel_id).await?;
+        let channel = channel_from_row(&channel_row(&mut transaction, channel_id).await?)?;
+        require_mutable_shared_channel(&channel)?;
         ensure_exists(&mut transaction, "agents", "agent", agent_id).await?;
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT delivery_mode FROM channel_members WHERE channel_id = ? AND agent_id = ?",
@@ -293,6 +435,49 @@ impl Store {
         .await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    async fn conversation_summary(
+        &self,
+        channel_id: &str,
+    ) -> Result<ConversationSummary, FleetError> {
+        let row = sqlx::query(
+            r"
+            SELECT c.id, c.name, c.conversation_kind, c.metadata_json,
+                   c.created_at_ms, c.archived_at_ms,
+                   (
+                       SELECT m.seq FROM messages m
+                       WHERE m.channel_id = c.id
+                       ORDER BY m.seq DESC LIMIT 1
+                   ) AS latest_message_seq,
+                   (
+                       SELECT m.created_at_ms FROM messages m
+                       WHERE m.channel_id = c.id
+                       ORDER BY m.seq DESC LIMIT 1
+                   ) AS latest_message_at_ms
+            FROM channels c
+            WHERE c.id = ?
+            ",
+        )
+        .bind(channel_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| FleetError::NotFound {
+            entity: "channel",
+            id: channel_id.to_owned(),
+        })?;
+        let channel = channel_from_row(&row)?;
+        Ok(ConversationSummary {
+            members: self.list_channel_members(channel_id).await?,
+            id: channel.id,
+            name: channel.name,
+            kind: channel.kind,
+            metadata: channel.metadata,
+            created_at_ms: channel.created_at_ms,
+            archived_at_ms: channel.archived_at_ms,
+            latest_message_seq: row.try_get("latest_message_seq")?,
+            latest_message_at_ms: row.try_get("latest_message_at_ms")?,
+        })
     }
 
     /// Lists the exact immutable memberships for one channel.
@@ -538,7 +723,12 @@ pub(crate) async fn insert_message(
     channel_id: &str,
     input: CreateMessage,
 ) -> Result<Message, FleetError> {
-    ensure_exists(transaction, "channels", "channel", channel_id).await?;
+    let channel = channel_from_row(&channel_row(transaction, channel_id).await?)?;
+    if channel.archived_at_ms.is_some() {
+        return Err(FleetError::Conflict(format!(
+            "channel is archived: {channel_id}"
+        )));
+    }
     ensure_member(transaction, channel_id, &input.sender_id).await?;
     if let Some(recipient_id) = &input.recipient_id {
         ensure_member(transaction, channel_id, recipient_id).await?;
@@ -681,6 +871,169 @@ async fn ensure_exists(
     Ok(())
 }
 
+async fn channel_row(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    channel_id: &str,
+) -> Result<sqlx::sqlite::SqliteRow, FleetError> {
+    sqlx::query(
+        r"
+        SELECT id, name, conversation_kind, metadata_json, created_at_ms, archived_at_ms
+        FROM channels
+        WHERE id = ?
+        ",
+    )
+    .bind(channel_id)
+    .fetch_optional(&mut **transaction)
+    .await?
+    .ok_or_else(|| FleetError::NotFound {
+        entity: "channel",
+        id: channel_id.to_owned(),
+    })
+}
+
+fn require_mutable_shared_channel(channel: &Channel) -> Result<(), FleetError> {
+    if channel.kind != ConversationKind::Shared {
+        return Err(FleetError::Conflict(
+            "direct conversation membership and name are immutable".to_owned(),
+        ));
+    }
+    if channel.archived_at_ms.is_some() {
+        return Err(FleetError::Conflict(format!(
+            "channel is archived: {}",
+            channel.id
+        )));
+    }
+    Ok(())
+}
+
+fn direct_pair_key(first_agent_id: &str, second_agent_id: &str) -> String {
+    format!("{first_agent_id}:{second_agent_id}")
+}
+
+fn validate_direct_members(
+    mut members: Vec<CreateChannelMember>,
+) -> Result<Vec<CreateChannelMember>, FleetError> {
+    if members.len() != 2 {
+        return Err(FleetError::Invalid(
+            "direct conversation requires exactly two participants".to_owned(),
+        ));
+    }
+    members.sort_by(|left, right| left.agent_id.cmp(&right.agent_id));
+    if members[0].agent_id == members[1].agent_id {
+        return Err(FleetError::Invalid(
+            "direct conversation participants must be distinct".to_owned(),
+        ));
+    }
+    Ok(members)
+}
+
+async fn open_direct_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    pair_key: &str,
+    members: &[CreateChannelMember],
+) -> Result<(Channel, bool), FleetError> {
+    let existing = sqlx::query(
+        r"
+        SELECT id, name, conversation_kind, metadata_json, created_at_ms, archived_at_ms
+        FROM channels
+        WHERE direct_pair_key = ?
+        ",
+    )
+    .bind(pair_key)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    if let Some(row) = existing {
+        let channel = channel_from_row(&row)?;
+        ensure_direct_modes_match(transaction, &channel.id, members).await?;
+        return Ok((channel, false));
+    }
+    Ok((
+        insert_direct_conversation(transaction, pair_key, members).await?,
+        true,
+    ))
+}
+
+async fn ensure_direct_modes_match(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    channel_id: &str,
+    members: &[CreateChannelMember],
+) -> Result<(), FleetError> {
+    let existing: Vec<(String, String)> = sqlx::query_as(
+        r"
+        SELECT agent_id, delivery_mode
+        FROM channel_members
+        WHERE channel_id = ?
+        ORDER BY agent_id
+        ",
+    )
+    .bind(channel_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let requested: Vec<_> = members
+        .iter()
+        .map(|member| {
+            (
+                member.agent_id.clone(),
+                member.delivery_mode.as_str().to_owned(),
+            )
+        })
+        .collect();
+    if existing != requested {
+        return Err(FleetError::Conflict(
+            "direct conversation participant delivery modes are immutable".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+async fn insert_direct_conversation(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    pair_key: &str,
+    members: &[CreateChannelMember],
+) -> Result<Channel, FleetError> {
+    let created_at_ms = now_ms();
+    let channel = Channel {
+        id: Uuid::new_v4().to_string(),
+        name: format!("direct-{}", Uuid::new_v4()),
+        kind: ConversationKind::Direct,
+        metadata: serde_json::json!({}),
+        created_at_ms,
+        archived_at_ms: None,
+    };
+    sqlx::query(
+        r"
+        INSERT INTO channels (
+            id, name, conversation_kind, direct_pair_key,
+            metadata_json, created_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ",
+    )
+    .bind(&channel.id)
+    .bind(&channel.name)
+    .bind(channel.kind.as_str())
+    .bind(pair_key)
+    .bind(serde_json::to_string(&channel.metadata)?)
+    .bind(channel.created_at_ms)
+    .execute(&mut **transaction)
+    .await?;
+    for member in members {
+        sqlx::query(
+            r"
+            INSERT INTO channel_members (
+                channel_id, agent_id, joined_at_ms, delivery_mode
+            ) VALUES (?, ?, ?, ?)
+            ",
+        )
+        .bind(&channel.id)
+        .bind(&member.agent_id)
+        .bind(created_at_ms)
+        .bind(member.delivery_mode.as_str())
+        .execute(&mut **transaction)
+        .await?;
+    }
+    Ok(channel)
+}
+
 async fn ensure_member(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     channel_id: &str,
@@ -712,11 +1065,22 @@ fn agent_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Agent, FleetError> {
 }
 
 fn channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Channel, FleetError> {
+    let kind = match row.try_get::<String, _>("conversation_kind")?.as_str() {
+        "shared" => ConversationKind::Shared,
+        "direct" => ConversationKind::Direct,
+        value => {
+            return Err(FleetError::Invalid(format!(
+                "stored channel has unknown conversation kind: {value}"
+            )));
+        }
+    };
     Ok(Channel {
         id: row.try_get("id")?,
         name: row.try_get("name")?,
+        kind,
         metadata: parse_json(&row.try_get::<String, _>("metadata_json")?)?,
         created_at_ms: row.try_get("created_at_ms")?,
+        archived_at_ms: row.try_get("archived_at_ms")?,
     })
 }
 

@@ -52,6 +52,27 @@ Credential rotation is the single mechanism that revokes an agent's access;
 after rotation every request fails with 401, including inbox claims and
 settlement.
 
+## Conversation lifecycle
+
+The durable channel substrate has two lifecycle kinds. A `shared` channel has
+an operator-selected name and permanent membership that may grow. A `direct`
+conversation has exactly two distinct participants and is identified by that
+unordered pair. Opening the same pair again is idempotent and concurrency-safe;
+it returns the existing conversation. The two initial delivery modes are
+immutable, just like every other membership delivery mode.
+
+Shared channels may be renamed and archived. Archive is an idempotent, one-way
+transition: membership and immutable history remain readable, while new
+messages, renames, and member additions conflict. Direct conversations cannot
+be renamed, archived, or extended with another member.
+
+`GET /v1/conversations` returns a common bounded projection for both kinds,
+including exact member identities and delivery modes plus the latest message
+sequence and timestamp. Archived shared channels are omitted by default and
+may be included explicitly. These lifecycle and discovery operations require
+the operator principal; message history and streaming retain their existing
+principal-relative membership rules.
+
 Each membership has one immutable delivery mode. `inbox` preserves the leased
 work guarantee: direct and broadcast append snapshot a delivery row under the
 existing rules. `stream_only` remains fully addressable and retains identical

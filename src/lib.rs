@@ -39,11 +39,11 @@ pub use message_grant_broker::{
 };
 pub use model::{
     AckDelivery, AddMember, Agent, ArmInvocation, BlockDelivery, BlockResolution, BlockedDelivery,
-    Channel, ChannelMember, ClaimBatch, ClaimDeliveries, CompleteInvocation, CreateAgent,
-    CreateChannel, CreateChannelMember, CreateMessage, Delivery, ExecutionCertainty, Invocation,
-    InvocationBatch, InvocationCompletion, InvocationState, IssuedCredential,
-    MembershipDeliveryMode, Message, MessagePage, RegisteredAgent, ResolveDeliveryBlock,
-    RetryDelivery, SendMessage,
+    Channel, ChannelMember, ClaimBatch, ClaimDeliveries, CompleteInvocation, ConversationKind,
+    ConversationSummary, CreateAgent, CreateChannel, CreateChannelMember, CreateMessage, Delivery,
+    ExecutionCertainty, Invocation, InvocationBatch, InvocationCompletion, InvocationState,
+    IssuedCredential, MembershipDeliveryMode, Message, MessagePage, OpenDirectConversation,
+    RegisteredAgent, RenameChannel, ResolveDeliveryBlock, RetryDelivery, SendMessage,
 };
 pub use operations::{
     InvocationEventCounts, InvocationObservation, NewPluginGeneration, ObservedPluginInterface,
@@ -64,7 +64,7 @@ pub use session_binding::{
     AcquireSessionBinding, BoundInvocation, SessionAcquisition, SessionAcquisitionMode,
     SessionBinding, SessionBindingState,
 };
-pub use store::{AppendMessageResult, Store};
+pub use store::{AppendMessageResult, OpenDirectConversationResult, Store};
 pub use worker::{
     ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError, EnvelopeTurnAdapter,
     InboundAcceptance, PreparedTurn, TurnAdapter, WorkerReport,

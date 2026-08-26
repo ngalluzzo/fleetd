@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "1.2.0"
+    "version": "1.3.0"
   },
   "paths": {
     "/health": {
@@ -1281,6 +1281,202 @@
         ]
       }
     },
+    "/v1/channels/{channel_id}": {
+      "patch": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "Rename a shared channel",
+        "description": "Operator-only. Direct conversation names are derived from their participants; archived channels are immutable.",
+        "operationId": "renameChannel",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "Shared channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameChannel"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Renamed channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Channel"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid channel name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Channel not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Direct, archived, or duplicate channel name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/channels/{channel_id}/archive": {
+      "post": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "Archive a shared channel",
+        "description": "Operator-only and idempotent. Archive is one-way, retains permanent membership and immutable history, and rejects new messages.",
+        "operationId": "archiveChannel",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "Shared channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Archived channel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Channel"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Channel not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Direct conversations cannot be archived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1/channels/{channel_id}/members": {
       "get": {
         "tags": [
@@ -1898,6 +2094,77 @@
         ]
       }
     },
+    "/v1/conversations": {
+      "get": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "List shared and direct conversations",
+        "description": "Operator-only. Returns one bounded presentation projection for both conversation kinds. Archived shared channels are omitted unless explicitly requested.",
+        "operationId": "listConversations",
+        "parameters": [
+          {
+            "name": "include_archived",
+            "in": "query",
+            "description": "Include archived shared channels. Defaults to false.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conversation summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConversationSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1/delivery-blocks": {
       "get": {
         "tags": [
@@ -2046,6 +2313,113 @@
           },
           "409": {
             "description": "Block changed or was resolved differently",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/direct-conversations": {
+      "post": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "Open a one-to-one direct conversation",
+        "description": "Operator-only. Exactly two distinct participants are required. The exact unordered pair is created atomically or returned idempotently; participant delivery modes are immutable.",
+        "operationId": "openDirectConversation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenDirectConversation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing exact-pair conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationSummary"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Direct conversation created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid participant pair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Participant not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Existing pair uses different immutable delivery modes",
             "content": {
               "application/json": {
                 "schema": {
@@ -2655,16 +3029,27 @@
         "required": [
           "id",
           "name",
+          "kind",
           "metadata",
           "created_at_ms"
         ],
         "properties": {
+          "archived_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
           "created_at_ms": {
             "type": "integer",
             "format": "int64"
           },
           "id": {
             "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ConversationKind"
           },
           "metadata": {},
           "name": {
@@ -2767,6 +3152,69 @@
         },
         "additionalProperties": false
       },
+      "ConversationKind": {
+        "type": "string",
+        "description": "The durable conversation lifecycle selected by fleetd.",
+        "enum": [
+          "shared",
+          "direct"
+        ]
+      },
+      "ConversationSummary": {
+        "type": "object",
+        "description": "One conversation with bounded participant and recency metadata for clients.",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "metadata",
+          "created_at_ms",
+          "members"
+        ],
+        "properties": {
+          "archived_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ConversationKind"
+          },
+          "latest_message_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "latest_message_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelMember"
+            }
+          },
+          "metadata": {},
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "CreateAgent": {
         "type": "object",
         "description": "Input for registering an agent.",
@@ -2782,7 +3230,7 @@
       },
       "CreateChannel": {
         "type": "object",
-        "description": "Input for creating a channel and its initial membership.",
+        "description": "Input for creating a shared channel and its initial membership.",
         "required": [
           "name"
         ],
@@ -3325,6 +3773,23 @@
           }
         }
       },
+      "OpenDirectConversation": {
+        "type": "object",
+        "description": "Input for idempotently opening a one-to-one direct conversation.",
+        "required": [
+          "members"
+        ],
+        "properties": {
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreateChannelMember"
+            },
+            "description": "Exactly two distinct participants. Their delivery modes become\nimmutable with the direct conversation."
+          }
+        },
+        "additionalProperties": false
+      },
       "PluginGeneration": {
         "type": "object",
         "description": "Durable operator read model for one ready plugin generation.",
@@ -3531,6 +3996,19 @@
             "$ref": "#/components/schemas/IssuedCredential"
           }
         }
+      },
+      "RenameChannel": {
+        "type": "object",
+        "description": "Input for renaming a shared channel.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "ResolveDeliveryBlock": {
         "type": "object",

@@ -80,6 +80,26 @@ The response deliberately omits opaque agent metadata and credential state.
 Delivery mode affects only durable inbox snapshot creation, never message
 visibility or cursor replay.
 
+## Conversation lifecycle
+
+`POST /v1/channels` creates an active `shared` conversation. Operators rename
+one through `PATCH /v1/channels/{channel_id}` and archive one idempotently
+through `POST /v1/channels/{channel_id}/archive`. Archive preserves membership
+and history but closes the conversation to new messages and membership writes.
+
+`POST /v1/direct-conversations` accepts exactly two distinct
+`CreateChannelMember` values. The unordered agent pair is a durable unique key:
+the first open returns `201 Created`, while the same pair and exact delivery
+modes return the existing conversation with `200 OK`, including under
+concurrent requests. Direct membership, delivery modes, and identity are fixed;
+direct conversations cannot use the shared rename, archive, or add-member
+operations.
+
+`GET /v1/conversations` is the operator discovery surface for both kinds. Its
+`ConversationSummary` includes the durable channel fields, bounded member
+projections, and optional latest-message sequence and timestamp. It omits
+archived shared channels unless `include_archived=true` is supplied.
+
 ## WebSocket stream
 
 `GET /v1/channels/{channel_id}/stream` is an HTTP WebSocket upgrade, not a

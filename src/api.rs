@@ -31,8 +31,8 @@ use crate::{
     message_commit_hint::{MessageCommitHintBridge, MessageCommitWake},
     model::{
         AckDelivery, AddMember, ArmInvocation, BlockDelivery, ClaimDeliveries, CompleteInvocation,
-        CreateAgent, CreateChannel, CreateMessage, Message, ResolveDeliveryBlock, RetryDelivery,
-        SendMessage,
+        CreateAgent, CreateChannel, CreateMessage, Message, OpenDirectConversation, RenameChannel,
+        ResolveDeliveryBlock, RetryDelivery, SendMessage,
     },
     store::{Store, now_ms},
     stream_grant_broker::{StreamGrantBroker, StreamGrantBrokerError},
@@ -44,7 +44,7 @@ const BEARER_AUTH: &str = "bearerAuth";
 #[openapi(
     info(
         title = "fleetd API",
-        version = "1.2.0",
+        version = "1.3.0",
         description = "Versioned control-plane contract for cooperating software agents."
     ),
     tags(
@@ -213,6 +213,8 @@ fn protected_contract() -> OpenApiRouter<AppState> {
         .routes(routes!(create_agent, list_agents))
         .routes(routes!(rotate_agent_credential))
         .routes(routes!(create_channel, list_channels))
+        .routes(routes!(list_conversations, open_direct_conversation))
+        .routes(routes!(rename_channel, archive_channel))
         .routes(routes!(add_member, list_channel_members))
         .routes(routes!(append_message, list_messages))
         .routes(routes!(issue_browser_stream_grant))
@@ -416,6 +418,138 @@ async fn list_channels(
 ) -> Result<Json<Vec<crate::model::Channel>>, FleetError> {
     require_operator(&principal)?;
     Ok(Json(state.store.list_channels().await?))
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+struct ConversationQuery {
+    /// Include archived shared channels. Defaults to false.
+    #[serde(default)]
+    include_archived: bool,
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/conversations",
+    operation_id = "listConversations",
+    tag = "channels",
+    summary = "List shared and direct conversations",
+    description = "Operator-only. Returns one bounded presentation projection for both conversation kinds. Archived shared channels are omitted unless explicitly requested.",
+    security(("bearerAuth" = [])),
+    params(ConversationQuery),
+    responses(
+        (status = 200, description = "Conversation summaries", body = [crate::model::ConversationSummary]),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn list_conversations(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Query(query): Query<ConversationQuery>,
+) -> Result<Json<Vec<crate::model::ConversationSummary>>, FleetError> {
+    require_operator(&principal)?;
+    Ok(Json(
+        state
+            .store
+            .list_conversations(query.include_archived)
+            .await?,
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/direct-conversations",
+    operation_id = "openDirectConversation",
+    tag = "channels",
+    summary = "Open a one-to-one direct conversation",
+    description = "Operator-only. Exactly two distinct participants are required. The exact unordered pair is created atomically or returned idempotently; participant delivery modes are immutable.",
+    security(("bearerAuth" = [])),
+    request_body = OpenDirectConversation,
+    responses(
+        (status = 200, description = "Existing exact-pair conversation", body = crate::model::ConversationSummary),
+        (status = 201, description = "Direct conversation created", body = crate::model::ConversationSummary),
+        (status = 400, description = "Invalid participant pair", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 404, description = "Participant not found", body = ErrorResponse),
+        (status = 409, description = "Existing pair uses different immutable delivery modes", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn open_direct_conversation(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Json(input): Json<OpenDirectConversation>,
+) -> Result<(StatusCode, Json<crate::model::ConversationSummary>), FleetError> {
+    require_operator(&principal)?;
+    let result = state.store.open_direct_conversation(input).await?;
+    let status = if result.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(result.conversation)))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/v1/channels/{channel_id}",
+    operation_id = "renameChannel",
+    tag = "channels",
+    summary = "Rename a shared channel",
+    description = "Operator-only. Direct conversation names are derived from their participants; archived channels are immutable.",
+    security(("bearerAuth" = [])),
+    params(("channel_id" = String, Path, description = "Shared channel ID")),
+    request_body = RenameChannel,
+    responses(
+        (status = 200, description = "Renamed channel", body = crate::model::Channel),
+        (status = 400, description = "Invalid channel name", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 404, description = "Channel not found", body = ErrorResponse),
+        (status = 409, description = "Direct, archived, or duplicate channel name", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn rename_channel(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path(channel_id): Path<String>,
+    Json(input): Json<RenameChannel>,
+) -> Result<Json<crate::model::Channel>, FleetError> {
+    require_operator(&principal)?;
+    Ok(Json(
+        state.store.rename_channel(&channel_id, input.name).await?,
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/v1/channels/{channel_id}/archive",
+    operation_id = "archiveChannel",
+    tag = "channels",
+    summary = "Archive a shared channel",
+    description = "Operator-only and idempotent. Archive is one-way, retains permanent membership and immutable history, and rejects new messages.",
+    security(("bearerAuth" = [])),
+    params(("channel_id" = String, Path, description = "Shared channel ID")),
+    responses(
+        (status = 200, description = "Archived channel", body = crate::model::Channel),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Operator credential required", body = ErrorResponse),
+        (status = 404, description = "Channel not found", body = ErrorResponse),
+        (status = 409, description = "Direct conversations cannot be archived", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn archive_channel(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path(channel_id): Path<String>,
+) -> Result<Json<crate::model::Channel>, FleetError> {
+    require_operator(&principal)?;
+    Ok(Json(state.store.archive_channel(&channel_id).await?))
 }
 
 #[utoipa::path(

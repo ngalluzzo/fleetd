@@ -6,6 +6,77 @@ use serde_json::json;
 use sqlx::{Connection, sqlite::SqliteConnectOptions};
 
 #[tokio::test]
+async fn conversation_lifecycle_migration_preserves_channels_as_active_shared_conversations() {
+    let mut connection = sqlx::SqliteConnection::connect(":memory:")
+        .await
+        .expect("open in-memory database");
+    sqlx::raw_sql(
+        r#"
+        CREATE TABLE channels (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            metadata_json TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL
+        );
+        CREATE TABLE channel_members (
+            channel_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            joined_at_ms INTEGER NOT NULL,
+            delivery_mode TEXT NOT NULL DEFAULT 'inbox',
+            PRIMARY KEY (channel_id, agent_id)
+        );
+        INSERT INTO channels (id, name, metadata_json, created_at_ms)
+        VALUES ('legacy-channel', 'legacy', '{"opaque":true}', 11);
+        "#,
+    )
+    .execute(&mut connection)
+    .await
+    .expect("create pre-0010 state");
+
+    sqlx::raw_sql(include_str!(
+        "../migrations/0010_conversation_lifecycle.sql"
+    ))
+    .execute(&mut connection)
+    .await
+    .expect("apply conversation lifecycle migration");
+
+    let migrated: (String, Option<String>, Option<i64>) = sqlx::query_as(
+        r"
+        SELECT conversation_kind, direct_pair_key, archived_at_ms
+        FROM channels
+        WHERE id = 'legacy-channel'
+        ",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .expect("read migrated channel");
+    assert_eq!(migrated, ("shared".to_owned(), None, None));
+
+    sqlx::query(
+        r"
+        INSERT INTO channels (
+            id, name, metadata_json, created_at_ms,
+            conversation_kind, direct_pair_key
+        ) VALUES ('direct-a', 'direct-a', '{}', 12, 'direct', 'a:b')
+        ",
+    )
+    .execute(&mut connection)
+    .await
+    .expect("insert first direct pair");
+    let duplicate_pair = sqlx::query(
+        r"
+        INSERT INTO channels (
+            id, name, metadata_json, created_at_ms,
+            conversation_kind, direct_pair_key
+        ) VALUES ('direct-b', 'direct-b', '{}', 13, 'direct', 'a:b')
+        ",
+    )
+    .execute(&mut connection)
+    .await;
+    assert!(duplicate_pair.is_err(), "exact direct pair must be unique");
+}
+
+#[tokio::test]
 async fn membership_delivery_migration_preserves_existing_rows_and_deliveries() {
     let mut connection = sqlx::SqliteConnection::connect(":memory:")
         .await
