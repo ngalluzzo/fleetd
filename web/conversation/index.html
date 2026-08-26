@@ -120,9 +120,25 @@
         <nav class="channel-navigation" aria-labelledby="channels-heading" aria-describedby="channels-description">
           <header class="navigation-heading">
             <div><p class="eyebrow">Workspace</p><h2 id="channels-heading">Conversations</h2></div>
-            <p id="channels-description">Choose a conversation to continue.</p>
+            <button class="icon-button" id="open-agent-directory" type="button" aria-label="Open agent directory" title="Agent directory"><span aria-hidden="true">◎</span></button>
+            <p id="channels-description">Channels and direct messages with your team.</p>
           </header>
-          <div class="channel-list" id="channel-list"><p class="channel-list-empty">Your conversations will appear here.</p></div>
+          <div class="conversation-navigation-scroll">
+            <section class="conversation-group" aria-labelledby="shared-channels-heading">
+              <header class="conversation-group-heading">
+                <h3 id="shared-channels-heading">Channels</h3>
+                <button class="section-action" id="new-channel" type="button" aria-label="Create channel" title="Create channel"><span aria-hidden="true">+</span></button>
+              </header>
+              <div class="channel-list" id="channel-list"><p class="channel-list-empty">No channels yet.</p></div>
+            </section>
+            <section class="conversation-group" aria-labelledby="direct-messages-heading">
+              <header class="conversation-group-heading">
+                <h3 id="direct-messages-heading">Direct messages</h3>
+                <button class="section-action" id="new-direct-message" type="button" aria-label="Start a direct message" title="Start a direct message"><span aria-hidden="true">+</span></button>
+              </header>
+              <div class="channel-list direct-list" id="direct-list"><p class="channel-list-empty">No direct messages yet.</p></div>
+            </section>
+          </div>
         </nav>
 
         <footer class="sidebar-footer">
@@ -135,14 +151,17 @@
         <header class="conversation-header conversation-toolbar">
           <div class="channel-identity">
             <div class="channel-title-row">
-              <span class="channel-avatar" aria-hidden="true">#</span>
+              <span class="channel-avatar" id="channel-avatar" aria-hidden="true">#</span>
               <div><p class="eyebrow">Conversation</p><h1 id="channel-title">Select a conversation</h1></div>
             </div>
             <p id="channel-meta">Your shared conversations will appear here.</p>
           </div>
+          <div class="conversation-header-actions">
+            <button class="icon-button conversation-info-button" id="open-conversation-details" type="button" aria-label="Open conversation details" title="Conversation details" disabled><span aria-hidden="true">···</span></button>
           <div class="recipient-field">
             <label class="target-control" for="message-target"><span>Talking to</span><select id="message-target" aria-label="Message recipient" aria-describedby="target-description"><option value="">Choose a conversation first</option></select></label>
             <p class="target-description" id="target-description">Replies stay in this conversation.</p>
+          </div>
           </div>
         </header>
 
@@ -168,5 +187,53 @@
         </form>
       </section>
     </main>
+
+    <dialog class="workspace-dialog directory-dialog" id="agent-directory-dialog" aria-labelledby="agent-directory-title">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div><p class="eyebrow">Your fleet</p><h2 id="agent-directory-title">Agent directory</h2><p>See who is available and start a private conversation.</p></div>
+          <button class="icon-button dialog-close" type="button" data-close-dialog="agent-directory-dialog" aria-label="Close agent directory"><span aria-hidden="true">×</span></button>
+        </header>
+        <div class="dialog-state" id="agent-directory-state" role="status" aria-live="polite" hidden></div>
+        <div class="agent-list" id="agent-list" aria-busy="false"></div>
+      </div>
+    </dialog>
+
+    <dialog class="workspace-dialog" id="channel-dialog" aria-labelledby="channel-dialog-title">
+      <form class="dialog-shell" id="channel-form">
+        <header class="dialog-header">
+          <div><p class="eyebrow">New conversation</p><h2 id="channel-dialog-title">Create a channel</h2><p>Give a project or topic a durable shared home.</p></div>
+          <button class="icon-button dialog-close" type="button" data-close-dialog="channel-dialog" aria-label="Close create channel dialog"><span aria-hidden="true">×</span></button>
+        </header>
+        <div class="field"><label for="channel-name">Channel name</label><input id="channel-name" name="name" required maxlength="256" autocomplete="off" placeholder="e.g. launch-planning" aria-describedby="channel-name-hint" /><p class="field-hint" id="channel-name-hint">You can rename it later.</p></div>
+        <fieldset class="member-picker"><legend>Members</legend><p class="field-hint">You are included automatically. Choose agents to invite.</p><div class="member-options" id="channel-member-options"></div></fieldset>
+        <p class="form-error" id="channel-form-error" role="alert" hidden></p>
+        <footer class="dialog-actions"><button class="button" type="button" data-close-dialog="channel-dialog">Cancel</button><button class="primary-button" id="create-channel" type="submit">Create channel</button></footer>
+      </form>
+    </dialog>
+
+    <dialog class="workspace-dialog details-dialog" id="conversation-details-dialog" aria-labelledby="conversation-details-title">
+      <div class="dialog-shell">
+        <header class="dialog-header">
+          <div><p class="eyebrow" id="conversation-details-kicker">Conversation</p><h2 id="conversation-details-title">Conversation details</h2><p id="conversation-details-copy">Members and settings for this conversation.</p></div>
+          <button class="icon-button dialog-close" type="button" data-close-dialog="conversation-details-dialog" aria-label="Close conversation details"><span aria-hidden="true">×</span></button>
+        </header>
+        <form class="rename-channel-form" id="rename-channel-form">
+          <div class="field"><label for="rename-channel-name">Channel name</label><input id="rename-channel-name" name="name" required maxlength="256" autocomplete="off" /></div>
+          <button class="button" id="rename-channel" type="submit">Save name</button>
+        </form>
+        <section class="details-section" aria-labelledby="conversation-members-title"><header><h3 id="conversation-members-title">Members</h3><span class="count-badge" id="conversation-member-count">0</span></header><div class="member-list" id="conversation-member-list"></div></section>
+        <form class="add-member-form" id="add-member-form"><div class="field"><label for="add-member-agent">Add an agent</label><select id="add-member-agent" required><option value="">Choose an agent</option></select></div><button class="button" id="add-member" type="submit">Add member</button></form>
+        <p class="form-error" id="conversation-details-error" role="alert" hidden></p>
+        <footer class="details-danger-zone" id="channel-danger-zone"><div><strong>Archive channel</strong><p>Hide this channel from the workspace. Its history remains available.</p></div><button class="danger-button" id="request-archive-channel" type="button">Archive</button></footer>
+      </div>
+    </dialog>
+
+    <dialog class="workspace-dialog confirmation-dialog" id="archive-channel-dialog" aria-labelledby="archive-channel-title">
+      <form class="dialog-shell" id="archive-channel-form">
+        <header class="dialog-header"><div><p class="eyebrow">Confirm archive</p><h2 id="archive-channel-title">Archive this channel?</h2><p id="archive-channel-copy">It will be removed from the sidebar, but its history will not be deleted.</p></div></header>
+        <footer class="dialog-actions"><button class="button" type="button" data-close-dialog="archive-channel-dialog">Keep channel</button><button class="danger-button" id="archive-channel" type="submit">Archive channel</button></footer>
+      </form>
+    </dialog>
   </body>
 </html>

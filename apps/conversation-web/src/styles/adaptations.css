@@ -102,11 +102,44 @@
     }
 
     .channel-navigation {
-      display: block;
+      display: grid;
       min-width: 0;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
     }
 
     .navigation-heading {
+      display: flex;
+      padding: 0;
+    }
+
+    .navigation-heading > div,
+    .navigation-heading > p {
+      display: none;
+    }
+
+    .conversation-navigation-scroll {
+      display: flex;
+      height: 3.5rem;
+      min-width: 0;
+      gap: var(--fd-space-1);
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: var(--fd-space-2) var(--fd-space-3);
+      scrollbar-width: none;
+    }
+
+    .conversation-navigation-scroll::-webkit-scrollbar {
+      display: none;
+    }
+
+    .conversation-group,
+    .conversation-group + .conversation-group {
+      display: contents;
+      margin: 0;
+    }
+
+    .conversation-group-heading {
       display: none;
     }
 
@@ -114,8 +147,8 @@
       min-width: 0;
       flex-direction: row;
       gap: var(--fd-space-1);
-      overflow-x: auto;
-      padding: var(--fd-space-2) var(--fd-space-3);
+      overflow: visible;
+      padding: 0;
       scrollbar-width: none;
     }
 
@@ -127,14 +160,27 @@
       display: none;
     }
 
+    .channel-list .channel-state,
+    .channel-list .channel-list-empty {
+      display: none !important;
+    }
+
     .channel-button {
       width: auto;
       max-width: min(17rem, 54vw);
+      height: 2.5rem;
       min-height: 2.5rem;
       flex: 0 0 auto;
+      overflow: hidden;
       border-radius: var(--fd-radius-round);
       padding: var(--fd-space-1) var(--fd-space-3) var(--fd-space-1) var(--fd-space-2);
       font-size: var(--fd-text-xs);
+    }
+
+    .channel-button .channel-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .channel-marker {
@@ -168,6 +214,10 @@
       grid-template-columns: minmax(0, 1fr);
       gap: var(--fd-space-3);
       padding: var(--fd-space-3) var(--fd-space-4);
+    }
+
+    .conversation-header-actions {
+      align-items: flex-end;
     }
 
     .channel-avatar {
@@ -219,6 +269,11 @@
       width: calc(100% - (var(--fd-space-4) * 2));
       margin-bottom: var(--fd-space-4);
     }
+
+    .workspace-dialog {
+      width: min(34rem, calc(100% - var(--fd-space-5)));
+      max-height: calc(100dvh - var(--fd-space-5));
+    }
   }
 
   @media (max-width: 34rem) {
@@ -268,6 +323,10 @@
     }
 
     .channel-list {
+      padding: 0;
+    }
+
+    .conversation-navigation-scroll {
       padding-inline: var(--fd-space-2);
     }
 
@@ -301,6 +360,12 @@
 
     .recipient-field {
       min-width: 0;
+      flex: 1 1 auto;
+    }
+
+    .conversation-header-actions {
+      align-items: end;
+      gap: var(--fd-space-2);
     }
 
     .target-control {
@@ -367,6 +432,40 @@
 
     .send-button {
       min-width: 3.75rem;
+    }
+
+    .workspace-dialog {
+      width: calc(100% - var(--fd-space-3));
+      max-height: calc(100dvh - var(--fd-space-3));
+      border-radius: var(--fd-radius-lg);
+    }
+
+    .dialog-shell {
+      gap: var(--fd-space-4);
+      padding: var(--fd-space-4);
+    }
+
+    .rename-channel-form,
+    .add-member-form {
+      grid-template-columns: 1fr;
+    }
+
+    .dialog-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .details-danger-zone {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .agent-card {
+      grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .agent-card > .button {
+      grid-column: 1 / -1;
     }
   }
 

@@ -65,6 +65,26 @@ describe("conversation shell accessibility and information architecture", () => 
     expect(messages).toContain('tabindex="0"');
   });
 
+  test("labels collaboration dialogs and destructive confirmation explicitly", () => {
+    expect(openingTag("agent-directory-dialog")).toContain(
+      'aria-labelledby="agent-directory-title"',
+    );
+    expect(openingTag("channel-dialog")).toContain(
+      'aria-labelledby="channel-dialog-title"',
+    );
+    expect(openingTag("conversation-details-dialog")).toContain(
+      'aria-labelledby="conversation-details-title"',
+    );
+    expect(openingTag("archive-channel-dialog")).toContain(
+      'aria-labelledby="archive-channel-title"',
+    );
+    expect(html).toContain('for="channel-name"');
+    expect(html).toContain('for="rename-channel-name"');
+    expect(html).toContain('for="add-member-agent"');
+    expect(openingTag("channel-form-error")).toContain('role="alert"');
+    expect(openingTag("conversation-details-error")).toContain('role="alert"');
+  });
+
   test("uses product language instead of internal implementation language", () => {
     const visibleCopy = html.toLowerCase();
     for (const term of [

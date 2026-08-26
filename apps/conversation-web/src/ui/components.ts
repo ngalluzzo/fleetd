@@ -2,6 +2,7 @@ import type { ConversationSnapshot } from "../../../../clients/typescript/src/co
 import type {
   Channel,
   ChannelMember,
+  ConversationSummary,
   Message,
 } from "../../../../clients/typescript/src/generated/types.gen.ts";
 import {
@@ -16,6 +17,8 @@ import {
   recipientLabel,
   senderLabel,
 } from "./view-models.ts";
+
+export const CHANNEL_BROADCAST_TARGET = "__fleetd_channel__";
 
 export function renderConnectionStatus(
   element: HTMLElement,
@@ -77,6 +80,93 @@ export function renderChannelList(
   reconcileChildren(container, rows);
 }
 
+export function renderConversationNavigation(
+  elements: {
+    readonly channels: HTMLElement;
+    readonly directs: HTMLElement;
+  },
+  conversations: readonly ConversationSummary[],
+  selectedChannelId: string | null,
+  snapshot: Pick<ConversationSnapshot, "phase" | "error" | "participantId">,
+  agentHealth: ReadonlyMap<string, string> = new Map(),
+): void {
+  const active = conversations.filter(
+    (conversation) =>
+      conversation.archived_at_ms == null &&
+      conversation.members.some(
+        (member) => member.agent_id === snapshot.participantId,
+      ),
+  );
+  const shared = active.filter((conversation) => conversation.kind === "shared");
+  const direct = active.filter((conversation) => conversation.kind === "direct");
+  renderChannelList(
+    elements.channels,
+    shared,
+    selectedChannelId,
+    snapshot,
+  );
+  renderDirectList(
+    elements.directs,
+    direct,
+    selectedChannelId,
+    snapshot,
+    agentHealth,
+  );
+}
+
+function renderDirectList(
+  container: HTMLElement,
+  conversations: readonly ConversationSummary[],
+  selectedChannelId: string | null,
+  snapshot: Pick<ConversationSnapshot, "phase" | "error" | "participantId">,
+  agentHealth: ReadonlyMap<string, string>,
+): void {
+  container.setAttribute(
+    "aria-busy",
+    String(snapshot.phase === "loading_channels"),
+  );
+  if (conversations.length === 0) {
+    const state = document.createElement("p");
+    state.className = `channel-state channel-state-${snapshot.phase}`;
+    state.setAttribute("role", "status");
+    state.textContent =
+      snapshot.phase === "loading_channels"
+        ? "Loading direct messages…"
+        : snapshot.phase === "failed"
+          ? (snapshot.error?.message ?? "Direct messages unavailable")
+          : "No direct messages yet";
+    container.replaceChildren(state);
+    return;
+  }
+  const existing = new Map<string, HTMLButtonElement>();
+  for (const button of container.querySelectorAll<HTMLButtonElement>(
+    "button[data-channel-id]",
+  )) {
+    if (button.dataset.channelId) existing.set(button.dataset.channelId, button);
+  }
+  const rows = conversations.map((conversation) => {
+    const selected = conversation.id === selectedChannelId;
+    const peer = conversation.members.find(
+      (member) => member.agent_id !== snapshot.participantId,
+    );
+    const label = peer ? displayName(peer.agent_name) : "Direct conversation";
+    const row = existing.get(conversation.id) ?? channelRow(conversation, selected);
+    updateChannelRow(row, conversation, selected, {
+      label,
+      marker: avatarLabel(label),
+    });
+    if (peer) {
+      row.dataset.directAgentId = peer.agent_id;
+      row.dataset.agentHealth = agentHealth.get(peer.agent_id) ?? "unmanaged";
+      row.title = selected
+        ? `${peer.agent_name}, current direct message`
+        : `Direct message with ${peer.agent_name}`;
+    }
+    return row;
+  });
+  reconcileChildren(container, rows);
+}
+
 export function channelRow(
   channel: Channel,
   selected: boolean,
@@ -107,10 +197,13 @@ function updateChannelRow(
   button: HTMLButtonElement,
   channel: Channel,
   selected: boolean,
+  presentation?: { readonly label: string; readonly marker: string },
 ): void {
   button.title = selected ? `${channel.name}, current channel` : channel.name;
   const label = button.querySelector<HTMLElement>(".channel-label");
-  if (label) label.textContent = displayName(channel.name);
+  if (label) label.textContent = presentation?.label ?? displayName(channel.name);
+  const marker = button.querySelector<HTMLElement>(".channel-marker .ui-icon");
+  if (marker && presentation) marker.textContent = presentation.marker;
   button.setAttribute("aria-pressed", String(selected));
   if (selected) {
     button.setAttribute("aria-current", "page");
@@ -124,17 +217,31 @@ export function renderChannelHeader(
   elements: {
     readonly title: HTMLElement;
     readonly meta: HTMLElement;
+    readonly avatar?: HTMLElement;
   },
+  conversation?: ConversationSummary,
 ): void {
   const channel = snapshot.channels.find(
     (candidate) => candidate.id === snapshot.selectedChannelId,
   );
-  elements.title.textContent = channel
-    ? displayName(channel.name)
-    : "Select a channel";
-  elements.title.title = channel?.name ?? "";
+  const peer = conversation?.kind === "direct"
+    ? conversation.members.find(
+        (member) => member.agent_id !== snapshot.participantId,
+      )
+    : undefined;
+  const title = peer
+    ? displayName(peer.agent_name)
+    : channel
+      ? displayName(channel.name)
+      : "Select a conversation";
+  elements.title.textContent = title;
+  elements.title.title = peer?.agent_name ?? channel?.name ?? "";
+  if (elements.avatar) {
+    elements.avatar.textContent = peer ? avatarLabel(title) : "#";
+    elements.avatar.dataset.kind = conversation?.kind ?? "shared";
+  }
   elements.meta.textContent = channel
-    ? `${snapshot.members.length} participants · ${snapshot.messages.length} messages`
+    ? `${conversation?.kind === "direct" ? "Direct message" : `${snapshot.members.length} participants`} · ${snapshot.messages.length} messages`
     : snapshot.phase === "loading_channels"
       ? "Finding conversations…"
       : "Choose a conversation to begin.";
@@ -144,12 +251,13 @@ export function renderMemberTargets(
   select: HTMLSelectElement,
   members: readonly ChannelMember[],
   participantId: string,
+  allowBroadcast = false,
 ): string {
   const prior = select.value;
   const candidates = members
     .filter((member) => member.agent_id !== participantId)
     .map(memberOptionView);
-  if (candidates.length === 0) {
+  if (candidates.length === 0 && !allowBroadcast) {
     const option = document.createElement("option");
     option.value = "";
     option.textContent = "No other participants";
@@ -162,6 +270,10 @@ export function renderMemberTargets(
   const existing = new Map(
     Array.from(select.options).map((option) => [option.value, option]),
   );
+  const broadcast = document.createElement("option");
+  broadcast.value = CHANNEL_BROADCAST_TARGET;
+  broadcast.textContent = "Everyone in this channel";
+  broadcast.title = "Send a channel message to every participant";
   const options = candidates.map((candidate) => {
     const option = existing.get(candidate.id) ?? document.createElement("option");
     option.value = candidate.id;
@@ -169,16 +281,21 @@ export function renderMemberTargets(
     option.title = candidate.description;
     return option;
   });
-  reconcileChildren(select, options);
-  const selected = candidates.some((candidate) => candidate.id === prior)
+  const allOptions = allowBroadcast ? [broadcast, ...options] : options;
+  reconcileChildren(select, allOptions);
+  const priorIsValid =
+    candidates.some((candidate) => candidate.id === prior) ||
+    (allowBroadcast && prior === CHANNEL_BROADCAST_TARGET);
+  const selected = priorIsValid
     ? prior
     : (candidates.find((candidate) => candidate.preferred)?.id ??
       candidates[0]?.id ??
       "");
   select.value = selected;
-  select.title =
-    candidates.find((candidate) => candidate.id === selected)?.description ??
-    "Message recipient";
+  select.title = selected === CHANNEL_BROADCAST_TARGET
+    ? broadcast.title
+    : candidates.find((candidate) => candidate.id === selected)?.description ??
+      "Message recipient";
   return selected;
 }
 

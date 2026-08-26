@@ -23,9 +23,15 @@ const requiredIds = [
   "conversation-app",
   "connection-status",
   "channel-list",
+  "direct-list",
+  "open-agent-directory",
+  "new-channel",
+  "new-direct-message",
   "disconnect",
   "channel-title",
   "channel-meta",
+  "channel-avatar",
+  "open-conversation-details",
   "message-target",
   "empty-conversation",
   "empty-conversation-title",
@@ -34,6 +40,12 @@ const requiredIds = [
   "composer",
   "composer-text",
   "send-message",
+  "agent-directory-dialog",
+  "agent-list",
+  "channel-dialog",
+  "channel-form",
+  "conversation-details-dialog",
+  "archive-channel-dialog",
 ] as const;
 
 const structuralClasses = [
@@ -56,6 +68,9 @@ const structuralClasses = [
   "composer-shell",
   "composer-input",
   "keyboard-key",
+  "conversation-group",
+  "agent-list",
+  "workspace-dialog",
 ] as const;
 
 describe("conversation product shell contract", () => {
@@ -115,6 +130,16 @@ describe("conversation product shell contract", () => {
     expect(openingTag("result-kind")).toContain(
       'value="conversation.result/phase-c-v1"',
     );
+  });
+
+  test("presents channels, direct messages, and the agent directory as distinct surfaces", () => {
+    expect(html).toContain('id="shared-channels-heading">Channels</h3>');
+    expect(html).toContain('id="direct-messages-heading">Direct messages</h3>');
+    expect(html).toContain('id="agent-directory-title">Agent directory</h2>');
+    expect(applicationSource).toContain("openDirectConversation");
+    expect(applicationSource).toContain("createSharedChannel");
+    expect(applicationSource).toContain("archiveSharedChannel");
+    expect(applicationSource).not.toMatch(/\b(start|stop|restart)(Agent|Worker)/);
   });
 });
 
