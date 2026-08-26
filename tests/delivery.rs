@@ -9,6 +9,8 @@ use fleetd::{
 };
 use serde_json::json;
 
+mod common;
+
 async fn agent(store: &Store, name: &str) -> fleetd::model::Agent {
     store
         .create_agent(CreateAgent {
@@ -26,10 +28,9 @@ async fn fixture() -> (
     fleetd::model::Agent,
     fleetd::model::Channel,
 ) {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let common::TempStore {
+        directory, store, ..
+    } = common::temp_store().await;
     let sender = agent(&store, "sender").await;
     let receiver = agent(&store, "receiver").await;
     let channel = store

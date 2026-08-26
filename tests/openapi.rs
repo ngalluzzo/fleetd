@@ -5,12 +5,11 @@ use axum::{
     http::{Request, StatusCode},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use fleetd::{
-    http::{AppState, openapi_document, router},
-    store::Store,
-};
+use fleetd::http::{AppState, openapi_document, router};
 use serde_json::Value;
 use tower::ServiceExt;
+
+mod common;
 
 const COMMITTED_CONTRACT: &str = include_str!("../openapi/fleetd-v1.json");
 const HTTP_METHODS: [&str; 8] = [
@@ -153,10 +152,8 @@ fn browser_contract_has_no_raw_secret_fixture_or_secret_bearing_upgrade_field() 
 
 #[tokio::test]
 async fn daemon_serves_the_generated_contract() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let temporary = common::temp_store().await;
+    let store = temporary.store.clone();
     let response = router(AppState::new(store))
         .oneshot(
             Request::builder()

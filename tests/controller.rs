@@ -33,6 +33,8 @@ use fleetd::{
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 
+mod common;
+
 struct RecordingGrant {
     store: Store,
     activated_after_arm: Arc<AtomicBool>,
@@ -82,10 +84,9 @@ async fn fixture() -> (
     fleetd::model::Agent,
     fleetd::model::Invocation,
 ) {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let common::TempStore {
+        directory, store, ..
+    } = common::temp_store().await;
     let sender = store
         .create_agent(CreateAgent {
             name: "controller-sender".to_owned(),

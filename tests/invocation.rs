@@ -11,6 +11,8 @@ use fleetd::{
 };
 use serde_json::json;
 
+mod common;
+
 async fn fixture() -> (
     tempfile::TempDir,
     Store,
@@ -18,10 +20,9 @@ async fn fixture() -> (
     fleetd::model::Agent,
     fleetd::model::Message,
 ) {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let common::TempStore {
+        directory, store, ..
+    } = common::temp_store().await;
     let sender = agent(&store, "invocation-sender").await;
     let receiver = agent(&store, "invocation-receiver").await;
     let channel = store

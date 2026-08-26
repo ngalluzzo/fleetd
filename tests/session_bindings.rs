@@ -21,6 +21,8 @@ use fleetd::{
 use semver::Version;
 use serde_json::json;
 
+mod common;
+
 struct Fixture {
     directory: tempfile::TempDir,
     store: Store,
@@ -34,10 +36,9 @@ async fn fixture() -> Fixture {
 }
 
 async fn fixture_with_lease(lease_duration_ms: u64) -> Fixture {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let common::TempStore {
+        directory, store, ..
+    } = common::temp_store().await;
     let sender = agent(&store, "binding-sender").await;
     let receiver = agent(&store, "binding-receiver").await;
     let generation_id = generation(&store, &receiver.id).await;

@@ -8,6 +8,8 @@ use fleetd::{
 };
 use serde_json::json;
 
+mod common;
+
 #[tokio::test]
 async fn operator_bootstrap_is_private_digest_only_and_idempotent() {
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -47,10 +49,8 @@ async fn operator_bootstrap_is_private_digest_only_and_idempotent() {
 
 #[tokio::test]
 async fn agent_rotation_revokes_the_old_token_without_changing_identity() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let temporary = common::temp_store().await;
+    let store = temporary.store.clone();
     let auth = AuthService::new(store);
     let registration = auth
         .register_agent(CreateAgent {
@@ -79,10 +79,9 @@ async fn agent_rotation_revokes_the_old_token_without_changing_identity() {
 
 #[tokio::test]
 async fn a_revoked_operator_file_refuses_to_reconcile() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let common::TempStore {
+        directory, store, ..
+    } = common::temp_store().await;
     let auth = AuthService::new(store);
     let first_path = directory.path().join("first.token");
     let second_path = directory.path().join("second.token");

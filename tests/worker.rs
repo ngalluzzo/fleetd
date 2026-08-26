@@ -26,6 +26,8 @@ use fleetd::{
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+mod common;
+
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mock_harness_plugin.py")
 }
@@ -98,10 +100,9 @@ struct Fixture {
 }
 
 async fn fixture(message_count: usize) -> Fixture {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let common::TempStore {
+        directory, store, ..
+    } = common::temp_store().await;
     let sender = store
         .create_agent(CreateAgent {
             name: "worker-sender".to_owned(),

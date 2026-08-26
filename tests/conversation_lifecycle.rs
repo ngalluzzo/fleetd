@@ -11,10 +11,9 @@ use serde_json::json;
 mod common;
 
 async fn test_store() -> (tempfile::TempDir, Store) {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let common::TempStore {
+        directory, store, ..
+    } = common::temp_store().await;
     (directory, store)
 }
 

@@ -16,10 +16,8 @@ mod common;
 
 #[tokio::test]
 async fn websocket_replays_history_then_delivers_live_messages() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let temporary = common::temp_store().await;
+    let store = temporary.store.clone();
     let sender = store
         .create_agent(CreateAgent {
             name: "sender".to_owned(),
@@ -171,10 +169,8 @@ async fn websocket_replays_a_message_committed_by_another_local_process_store() 
 
 #[tokio::test]
 async fn streams_do_not_leak_direct_messages_between_other_members() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let temporary = common::temp_store().await;
+    let store = temporary.store.clone();
     let author = create_member(&store, "author").await;
     let recipient = create_member(&store, "recipient").await;
     let watcher = create_member(&store, "watcher").await;

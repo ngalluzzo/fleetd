@@ -2,19 +2,16 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use fleetd::{
-    http::{AppState, router},
-    store::Store,
-};
+use fleetd::http::{AppState, router};
 use serde_json::Value;
 use tower::ServiceExt;
 
+mod common;
+
 #[tokio::test]
 async fn operator_assets_are_public_exact_and_browser_hardened() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let temporary = common::temp_store().await;
+    let store = temporary.store.clone();
     let app = router(AppState::new(store));
 
     for (path, content_type) in [
@@ -87,10 +84,8 @@ async fn operator_assets_are_public_exact_and_browser_hardened() {
 
 #[tokio::test]
 async fn conversation_assets_are_public_exact_and_browser_hardened() {
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let store = Store::open(directory.path().join("fleetd.db"))
-        .await
-        .expect("open store");
+    let temporary = common::temp_store().await;
+    let store = temporary.store.clone();
     let app = router(AppState::new(store));
 
     for (path, content_type) in [
