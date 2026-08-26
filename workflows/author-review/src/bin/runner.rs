@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::Parser;
-use fleetd_author_review::runner::{AuthorReviewRunner, load_configuration};
+use fleetd_author_review::runner::{AuthorReviewRunner, TickOutcome, load_configuration};
 
 #[derive(Debug, Parser)]
 #[command(about = "Run the draft external Fleetd author-review workflow")]
@@ -30,17 +30,48 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let configuration = load_configuration(&cli.config)?;
     let mut runner = AuthorReviewRunner::start(configuration).await?;
     if cli.once {
-        runner.tick().await?;
+        report_outcome(&runner.tick().await?);
         return Ok(());
     }
+    let mut consecutive_transient_failures = 0_i64;
     loop {
-        runner.tick().await?;
+        let delay = match runner.tick().await {
+            Ok(outcome) => {
+                consecutive_transient_failures = 0;
+                report_outcome(&outcome);
+                runner.poll_interval()
+            }
+            Err(error) if error.is_transient() => {
+                consecutive_transient_failures = consecutive_transient_failures.saturating_add(1);
+                let retry_after_ms = runner.retry_delay_for_attempt(consecutive_transient_failures);
+                eprintln!(
+                    "warning: {error}; runner recovery: retry the failed phase in {retry_after_ms}ms"
+                );
+                std::time::Duration::from_millis(retry_after_ms)
+            }
+            Err(error) => return Err(error.into()),
+        };
         tokio::select! {
             signal = tokio::signal::ctrl_c() => {
                 signal?;
                 return Ok(());
             }
-            () = tokio::time::sleep(runner.poll_interval()) => {}
+            () = tokio::time::sleep(delay) => {}
         }
+    }
+}
+
+fn report_outcome(outcome: &TickOutcome) {
+    match outcome {
+        TickOutcome::Retried {
+            retry_after_ms,
+            diagnostic,
+        } => eprintln!(
+            "warning: {diagnostic}; runner recovery: exact delivery scheduled after {retry_after_ms}ms"
+        ),
+        TickOutcome::Blocked { diagnostic } => {
+            eprintln!("error: {diagnostic}");
+        }
+        TickOutcome::Idle | TickOutcome::Acknowledged => {}
     }
 }

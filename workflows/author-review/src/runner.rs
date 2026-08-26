@@ -20,7 +20,7 @@ use tokio::{
     process::{Child, ChildStdin, Command},
     time::timeout,
 };
-use tokio_util::codec::{FramedRead, LinesCodec};
+use tokio_util::codec::{FramedRead, LinesCodec, LinesCodecError};
 
 use crate::protocol::{
     DescribeResult, EVENT_KINDS, EvaluateParams, EvaluateResult, INTERFACE_ID, INTERFACE_VERSION,
@@ -34,7 +34,9 @@ const MAX_ARGS: usize = 32;
 const MAX_ARG_BYTES: usize = 4096;
 const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
 const HISTORY_PAGE_SIZE: u32 = 500;
-const RETRY_DELAY_MS: u64 = 1000;
+const MAX_RETRY_DELAY_MS: u64 = 86_400_000;
+const DEFAULT_RETRY_BASE_DELAY_MS: u64 = 1_000;
+const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 60_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +47,10 @@ pub struct RunnerConfiguration {
     pub plugin_configuration: Value,
     pub lease_duration_ms: u64,
     pub poll_interval_ms: u64,
+    #[serde(default = "default_retry_base_delay_ms")]
+    pub retry_base_delay_ms: u64,
+    #[serde(default = "default_retry_max_delay_ms")]
+    pub retry_max_delay_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -66,61 +72,149 @@ pub struct WorkflowPluginSpec {
 
 #[derive(Debug, Error)]
 pub enum RunnerError {
-    #[error("runner configuration is invalid: {0}")]
+    #[error(
+        "runner configuration phase failed: {0}; recovery: correct the configuration before restarting the runner"
+    )]
     Configuration(String),
-    #[error("cannot read {path}: {source}")]
+    #[error(
+        "runner file-read phase failed for {path}: {source}; recovery: restore the file with the required owner-only access"
+    )]
     Read {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("runner configuration JSON is invalid: {0}")]
-    ConfigurationJson(#[from] serde_json::Error),
-    #[error("Fleetd request failed before a response: {0}")]
-    Transport(#[from] reqwest::Error),
-    #[error("Fleetd returned HTTP {status}: {message}")]
-    FleetdHttp { status: StatusCode, message: String },
-    #[error("workflow plugin is unavailable: {0}")]
-    PluginUnavailable(String),
-    #[error("workflow plugin rejected the input: {0}")]
-    PluginRejected(String),
-    #[error("workflow plugin proposed an invalid effect: {0}")]
+    #[error(
+        "runner configuration JSON phase failed at line {line}, column {column}; recovery: provide one valid bounded JSON object"
+    )]
+    ConfigurationJson { line: usize, column: usize },
+    #[error(
+        "Fleetd {phase} phase is unavailable: {diagnostic}; recovery: retry with bounded backoff; any active lease releases on expiry"
+    )]
+    FleetdUnavailable {
+        phase: &'static str,
+        diagnostic: &'static str,
+    },
+    #[error(
+        "Fleetd {phase} phase returned HTTP {status}; recovery: retry transient statuses with bounded backoff, otherwise verify runner authority and inspect the exact delivery state"
+    )]
+    FleetdRejected {
+        phase: &'static str,
+        status: StatusCode,
+    },
+    #[error(
+        "Fleetd {phase} phase returned an invalid typed response; recovery: verify Fleetd compatibility, then inspect the exact delivery state"
+    )]
+    FleetdProtocol { phase: &'static str },
+    #[error(
+        "plugin {phase} phase is unavailable: {diagnostic}; recovery: discard the child and retry the delivery after bounded backoff"
+    )]
+    PluginUnavailable {
+        phase: &'static str,
+        diagnostic: String,
+    },
+    #[error(
+        "plugin {phase} phase has a permanent {kind} failure: {diagnostic}; recovery: fix or replace the plugin, then requeue the exact blocked delivery"
+    )]
+    PluginPermanent {
+        phase: &'static str,
+        kind: &'static str,
+        diagnostic: String,
+    },
+    #[error(
+        "plugin evaluation phase permanently rejected the input with RPC code {code}; recovery: correct the input or plugin configuration, then requeue the exact blocked delivery"
+    )]
+    PluginRejected { code: i32 },
+    #[error(
+        "plugin semantic-validation phase failed permanently: {0}; recovery: fix the deterministic proposal, then requeue the exact blocked delivery"
+    )]
     InvalidProposal(String),
-    #[error("workflow effect conflicts with its durable idempotency identity: {0}")]
-    ProposalConflict(String),
+    #[error(
+        "Fleetd publication phase detected a divergent replay for the derived idempotency identity; recovery: inspect the existing causal effect and fix the plugin before requeueing the exact blocked delivery"
+    )]
+    ProposalConflict,
 }
 
 impl RunnerError {
     fn requires_block(&self) -> bool {
         matches!(
             self,
-            Self::PluginRejected(_) | Self::InvalidProposal(_) | Self::ProposalConflict(_)
+            Self::PluginPermanent { .. }
+                | Self::PluginRejected { .. }
+                | Self::InvalidProposal(_)
+                | Self::ProposalConflict
+                | Self::FleetdProtocol { .. }
+        ) || matches!(
+            self,
+            Self::FleetdRejected { status, .. } if !transient_http_status(*status)
         )
     }
+
+    fn is_plugin_fault(&self) -> bool {
+        matches!(
+            self,
+            Self::PluginUnavailable { .. }
+                | Self::PluginPermanent { .. }
+                | Self::PluginRejected { .. }
+                | Self::InvalidProposal(_)
+                | Self::ProposalConflict
+        )
+    }
+
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::FleetdUnavailable { .. } | Self::PluginUnavailable { .. }
+        ) || matches!(
+            self,
+            Self::FleetdRejected { status, .. } if transient_http_status(*status)
+        )
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TickOutcome {
+    Idle,
+    Acknowledged,
+    Retried {
+        retry_after_ms: u64,
+        diagnostic: String,
+    },
+    Blocked {
+        diagnostic: String,
+    },
 }
 
 pub struct AuthorReviewRunner {
     configuration: RunnerConfiguration,
     fleetd: FleetdClient,
-    plugin: WorkflowPluginClient,
+    plugin: Option<WorkflowPluginClient>,
+    pending_plugin_failure: Option<RunnerError>,
 }
 
 impl AuthorReviewRunner {
-    /// Creates the external runner and verifies the child plugin's exact draft
-    /// description before leasing work.
+    /// Creates the external runner and probes the child plugin's exact draft
+    /// description. A probe failure is retained so the next leased delivery is
+    /// settled through the same permanent-block or transient-retry path as a
+    /// later child failure.
     ///
     /// # Errors
     ///
-    /// Returns an error for invalid configuration, credentials, endpoint, or
-    /// plugin negotiation.
+    /// Returns an error for invalid configuration, credentials, or endpoint.
     pub async fn start(configuration: RunnerConfiguration) -> Result<Self, RunnerError> {
         validate_configuration(&configuration)?;
         let token = read_private_credential(&configuration.fleetd.credential_file)?;
         let fleetd = FleetdClient::new(&configuration.fleetd.origin, token)?;
-        let plugin = WorkflowPluginClient::spawn(&configuration.plugin).await?;
+        let (plugin, pending_plugin_failure) =
+            match WorkflowPluginClient::spawn(&configuration.plugin).await {
+                Ok(plugin) => (Some(plugin), None),
+                Err(error) => (None, Some(error)),
+            };
         Ok(Self {
             configuration,
             fleetd,
             plugin,
+            pending_plugin_failure,
         })
     }
 
@@ -132,7 +226,7 @@ impl AuthorReviewRunner {
     /// Returns an error only when work could not be safely settled for retry or
     /// block. Per-input failures are otherwise durably settled and reported as
     /// processed.
-    pub async fn tick(&mut self) -> Result<bool, RunnerError> {
+    pub async fn tick(&mut self) -> Result<TickOutcome, RunnerError> {
         let batch = self
             .fleetd
             .claim(
@@ -141,7 +235,7 @@ impl AuthorReviewRunner {
             )
             .await?;
         let Some(delivery) = batch.deliveries.first() else {
-            return Ok(false);
+            return Ok(TickOutcome::Idle);
         };
         let result = self.evaluate_and_publish(delivery).await;
         match result {
@@ -153,34 +247,45 @@ impl AuthorReviewRunner {
                         &batch.lease_token,
                     )
                     .await?;
+                Ok(TickOutcome::Acknowledged)
             }
             Err(error) if error.requires_block() => {
+                if error.is_plugin_fault() {
+                    self.plugin = None;
+                }
+                let diagnostic = bounded_reason(&error.to_string());
                 self.fleetd
                     .block(
                         &self.configuration.fleetd.agent_id,
                         &delivery.message.id,
                         &batch.lease_token,
-                        &bounded_reason(&error.to_string()),
+                        &diagnostic,
                     )
                     .await?;
+                Ok(TickOutcome::Blocked { diagnostic })
             }
-            Err(error) => {
-                let plugin_unavailable = matches!(error, RunnerError::PluginUnavailable(_));
+            Err(error) if error.is_transient() => {
+                if error.is_plugin_fault() {
+                    self.plugin = None;
+                }
+                let diagnostic = bounded_reason(&error.to_string());
+                let retry_after_ms = self.retry_delay_for_attempt(delivery.attempt);
                 self.fleetd
                     .retry(
                         &self.configuration.fleetd.agent_id,
                         &delivery.message.id,
                         &batch.lease_token,
-                        &bounded_reason(&error.to_string()),
-                        RETRY_DELAY_MS,
+                        &diagnostic,
+                        retry_after_ms,
                     )
                     .await?;
-                if plugin_unavailable {
-                    self.plugin = WorkflowPluginClient::spawn(&self.configuration.plugin).await?;
-                }
+                Ok(TickOutcome::Retried {
+                    retry_after_ms,
+                    diagnostic,
+                })
             }
+            Err(error) => Err(error),
         }
-        Ok(true)
     }
 
     /// Evaluates and publishes every deterministic proposal but deliberately
@@ -213,8 +318,27 @@ impl AuthorReviewRunner {
             history: history.iter().map(workflow_message).collect(),
             members: members.iter().map(workflow_member).collect(),
         };
-        let evaluated = self.plugin.evaluate(&params).await?;
-        validate_proposals(&params, &evaluated, &self.plugin.description)?;
+        self.ensure_plugin().await?;
+        let Some(plugin) = self.plugin.as_mut() else {
+            return Err(RunnerError::PluginUnavailable {
+                phase: "evaluation",
+                diagnostic: "replacement child was unavailable after a successful probe".to_owned(),
+            });
+        };
+        let description = plugin.description.clone();
+        let evaluated = match plugin.evaluate(&params).await {
+            Ok(evaluated) => evaluated,
+            Err(error) => {
+                if error.is_plugin_fault() {
+                    self.plugin = None;
+                }
+                return Err(error);
+            }
+        };
+        if let Err(error) = validate_proposals(&params, &evaluated, &description) {
+            self.plugin = None;
+            return Err(error);
+        }
         for proposal in &evaluated.proposals {
             let idempotency_key =
                 format!("workflow/{}/{}", delivery.message.id, proposal.operation_id);
@@ -233,10 +357,10 @@ impl AuthorReviewRunner {
             };
             match self.fleetd.send(&delivery.message.channel_id, &send).await {
                 Ok(_) => {}
-                Err(RunnerError::FleetdHttp { status, message })
+                Err(RunnerError::FleetdRejected { status, .. })
                     if status == StatusCode::CONFLICT =>
                 {
-                    return Err(RunnerError::ProposalConflict(message));
+                    return Err(RunnerError::ProposalConflict);
                 }
                 Err(error) => return Err(error),
             }
@@ -247,6 +371,25 @@ impl AuthorReviewRunner {
     #[must_use]
     pub const fn poll_interval(&self) -> Duration {
         Duration::from_millis(self.configuration.poll_interval_ms)
+    }
+
+    #[must_use]
+    pub fn retry_delay_for_attempt(&self, attempt: i64) -> u64 {
+        retry_delay(
+            self.configuration.retry_base_delay_ms,
+            self.configuration.retry_max_delay_ms,
+            attempt,
+        )
+    }
+
+    async fn ensure_plugin(&mut self) -> Result<(), RunnerError> {
+        if let Some(error) = self.pending_plugin_failure.take() {
+            return Err(error);
+        }
+        if self.plugin.is_none() {
+            self.plugin = Some(WorkflowPluginClient::spawn(&self.configuration.plugin).await?);
+        }
+        Ok(())
     }
 }
 
@@ -265,7 +408,11 @@ pub fn load_configuration(path: &Path) -> Result<RunnerConfiguration, RunnerErro
             "configuration exceeds {MAX_CONFIG_BYTES} bytes"
         )));
     }
-    let configuration: RunnerConfiguration = serde_json::from_slice(&bytes)?;
+    let configuration: RunnerConfiguration =
+        serde_json::from_slice(&bytes).map_err(|error| RunnerError::ConfigurationJson {
+            line: error.line(),
+            column: error.column(),
+        })?;
     validate_configuration(&configuration)?;
     Ok(configuration)
 }
@@ -322,7 +469,36 @@ fn validate_configuration(configuration: &RunnerConfiguration) -> Result<(), Run
             "poll_interval_ms must be between 100 and 60000".to_owned(),
         ));
     }
+    if configuration.retry_base_delay_ms <= configuration.poll_interval_ms
+        || configuration.retry_base_delay_ms > MAX_RETRY_DELAY_MS
+    {
+        return Err(RunnerError::Configuration(format!(
+            "retry_base_delay_ms must exceed poll_interval_ms and not exceed {MAX_RETRY_DELAY_MS}"
+        )));
+    }
+    if configuration.retry_max_delay_ms < configuration.retry_base_delay_ms
+        || configuration.retry_max_delay_ms > MAX_RETRY_DELAY_MS
+    {
+        return Err(RunnerError::Configuration(format!(
+            "retry_max_delay_ms must be at least retry_base_delay_ms and not exceed {MAX_RETRY_DELAY_MS}"
+        )));
+    }
     Ok(())
+}
+
+const fn default_retry_base_delay_ms() -> u64 {
+    DEFAULT_RETRY_BASE_DELAY_MS
+}
+
+const fn default_retry_max_delay_ms() -> u64 {
+    DEFAULT_RETRY_MAX_DELAY_MS
+}
+
+fn retry_delay(base_delay_ms: u64, max_delay_ms: u64, attempt: i64) -> u64 {
+    let exponent = u32::try_from(attempt.max(1).saturating_sub(1)).unwrap_or(u32::MAX);
+    base_delay_ms
+        .saturating_mul(1_u64 << exponent.min(63))
+        .min(max_delay_ms)
 }
 
 fn validate_origin(value: &str) -> Result<Url, RunnerError> {
@@ -409,15 +585,24 @@ impl WorkflowPluginClient {
             .kill_on_drop(true);
         let mut child = command
             .spawn()
-            .map_err(|error| RunnerError::PluginUnavailable(error.to_string()))?;
+            .map_err(|error| RunnerError::PluginUnavailable {
+                phase: "launch",
+                diagnostic: io_diagnostic(&error),
+            })?;
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| RunnerError::PluginUnavailable("stdin was unavailable".to_owned()))?;
+            .ok_or_else(|| RunnerError::PluginUnavailable {
+                phase: "launch",
+                diagnostic: "child stdin was unavailable".to_owned(),
+            })?;
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| RunnerError::PluginUnavailable("stdout was unavailable".to_owned()))?;
+            .ok_or_else(|| RunnerError::PluginUnavailable {
+                phase: "launch",
+                diagnostic: "child stdout was unavailable".to_owned(),
+            })?;
         let mut client = Self {
             child,
             stdin,
@@ -442,8 +627,12 @@ impl WorkflowPluginClient {
     }
 
     async fn evaluate(&mut self, params: &EvaluateParams) -> Result<EvaluateResult, RunnerError> {
-        self.call("workflow.evaluate", serde_json::to_value(params)?)
-            .await
+        let params = serde_json::to_value(params).map_err(|_| RunnerError::PluginPermanent {
+            phase: "evaluation request",
+            kind: "encoding",
+            diagnostic: "runner could not encode the bounded typed request".to_owned(),
+        })?;
+        self.call("workflow.evaluate", params).await
     }
 
     async fn call<T: DeserializeOwned>(
@@ -461,37 +650,84 @@ impl WorkflowPluginClient {
             method: method.to_owned(),
             params,
         };
-        let mut encoded = serde_json::to_vec(&request)?;
+        let mut encoded =
+            serde_json::to_vec(&request).map_err(|_| RunnerError::PluginPermanent {
+                phase: "request framing",
+                kind: "encoding",
+                diagnostic: "runner could not encode the typed JSON-RPC request".to_owned(),
+            })?;
         if encoded.len() > MAX_FRAME_BYTES {
-            return Err(RunnerError::PluginRejected(
-                "workflow request exceeds frame bound".to_owned(),
-            ));
+            return Err(RunnerError::PluginPermanent {
+                phase: "request framing",
+                kind: "framing",
+                diagnostic: format!("request exceeds the {MAX_FRAME_BYTES}-byte frame bound"),
+            });
         }
         encoded.push(b'\n');
         timeout(self.request_timeout, self.stdin.write_all(&encoded))
             .await
-            .map_err(|_| RunnerError::PluginUnavailable("request write timed out".to_owned()))?
-            .map_err(|error| RunnerError::PluginUnavailable(error.to_string()))?;
+            .map_err(|_| RunnerError::PluginUnavailable {
+                phase: "request write",
+                diagnostic: "request write timed out".to_owned(),
+            })?
+            .map_err(|error| RunnerError::PluginUnavailable {
+                phase: "request write",
+                diagnostic: io_diagnostic(&error),
+            })?;
         let line = timeout(self.request_timeout, self.stdout.next())
             .await
-            .map_err(|_| RunnerError::PluginUnavailable("response timed out".to_owned()))?
-            .ok_or_else(|| RunnerError::PluginUnavailable("plugin closed stdout".to_owned()))?
-            .map_err(|error| RunnerError::PluginUnavailable(error.to_string()))?;
-        let response: RpcResponse = serde_json::from_str(&line)
-            .map_err(|error| RunnerError::PluginUnavailable(error.to_string()))?;
+            .map_err(|_| RunnerError::PluginUnavailable {
+                phase: "response read",
+                diagnostic: "response read timed out".to_owned(),
+            })?
+            .ok_or_else(|| RunnerError::PluginUnavailable {
+                phase: "response read",
+                diagnostic: "child closed stdout before responding".to_owned(),
+            })?
+            .map_err(|error| match error {
+                LinesCodecError::MaxLineLengthExceeded => RunnerError::PluginPermanent {
+                    phase: "response framing",
+                    kind: "framing",
+                    diagnostic: format!("response exceeds the {MAX_FRAME_BYTES}-byte frame bound"),
+                },
+                LinesCodecError::Io(error) => RunnerError::PluginUnavailable {
+                    phase: "response read",
+                    diagnostic: io_diagnostic(&error),
+                },
+            })?;
+        let response: RpcResponse =
+            serde_json::from_str(&line).map_err(|error| RunnerError::PluginPermanent {
+                phase: "response decoding",
+                kind: "protocol decoding",
+                diagnostic: format!(
+                    "response is not the typed JSON-RPC envelope at line {}, column {}",
+                    error.line(),
+                    error.column()
+                ),
+            })?;
         if response.jsonrpc != "2.0" || response.id != id {
-            return Err(RunnerError::PluginUnavailable(
-                "plugin response identity did not match the request".to_owned(),
-            ));
+            return Err(RunnerError::PluginPermanent {
+                phase: "response identity",
+                kind: "protocol identity",
+                diagnostic: "response version or request ID did not match the request".to_owned(),
+            });
         }
-        if let Some(error) = response.error {
-            return Err(RunnerError::PluginRejected(error.message));
-        }
-        let result = response.result.ok_or_else(|| {
-            RunnerError::PluginUnavailable("plugin response omitted result".to_owned())
-        })?;
-        serde_json::from_value(result)
-            .map_err(|error| RunnerError::PluginUnavailable(error.to_string()))
+        let result = match (response.result, response.error) {
+            (Some(result), None) => result,
+            (None, Some(error)) => return Err(RunnerError::PluginRejected { code: error.code }),
+            _ => {
+                return Err(RunnerError::PluginPermanent {
+                    phase: "response decoding",
+                    kind: "protocol decoding",
+                    diagnostic: "response must contain exactly one of result or error".to_owned(),
+                });
+            }
+        };
+        serde_json::from_value(result).map_err(|_| RunnerError::PluginPermanent {
+            phase: "response decoding",
+            kind: "result decoding",
+            diagnostic: "response result does not match the method's typed schema".to_owned(),
+        })
     }
 }
 
@@ -506,11 +742,14 @@ fn validate_description(description: &DescribeResult) -> Result<(), RunnerError>
         || description.interface_version != INTERFACE_VERSION
         || description.plugin_id != PLUGIN_ID
         || description.plugin_version != PLUGIN_VERSION
-        || description.event_schemas.len() != 7
     {
-        return Err(RunnerError::PluginUnavailable(
-            "plugin description does not match the paired draft interface".to_owned(),
-        ));
+        return Err(RunnerError::PluginPermanent {
+            phase: "description identity",
+            kind: "identity",
+            diagnostic: format!(
+                "description must identify {INTERFACE_ID}@{INTERFACE_VERSION} and {PLUGIN_ID}@{PLUGIN_VERSION}"
+            ),
+        });
     }
     let kinds = description
         .event_schemas
@@ -528,14 +767,18 @@ fn validate_description(description: &DescribeResult) -> Result<(), RunnerError>
         .collect::<HashSet<_>>();
     if kinds != expected_kinds
         || roles != expected_roles
+        || description.event_schemas.len() != EVENT_KINDS.len()
         || description
             .event_schemas
             .iter()
             .any(|contract| !contract.schema.is_object())
     {
-        return Err(RunnerError::PluginUnavailable(
-            "plugin description has an incomplete or duplicate vocabulary".to_owned(),
-        ));
+        return Err(RunnerError::PluginPermanent {
+            phase: "description validation",
+            kind: "semantic validation",
+            diagnostic: "description has an incomplete, duplicate, or invalid vocabulary"
+                .to_owned(),
+        });
     }
     Ok(())
 }
@@ -582,7 +825,13 @@ fn validate_proposals(
                 proposal.kind
             )));
         }
-        let payload_bytes = serde_json::to_vec(&proposal.payload)?.len();
+        let payload_bytes = serde_json::to_vec(&proposal.payload)
+            .map_err(|_| {
+                RunnerError::InvalidProposal(
+                    "proposal payload could not be encoded as bounded JSON".to_owned(),
+                )
+            })?
+            .len();
         if payload_bytes > MAX_PAYLOAD_BYTES {
             return Err(RunnerError::InvalidProposal(format!(
                 "proposal payload exceeds {MAX_PAYLOAD_BYTES} bytes"
@@ -603,7 +852,14 @@ impl FleetdClient {
         Ok(Self {
             origin: validate_origin(origin)?,
             token,
-            http: Client::builder().timeout(Duration::from_secs(10)).build()?,
+            http: Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .map_err(|_| {
+                    RunnerError::Configuration(
+                        "could not construct the bounded Fleetd HTTP client".to_owned(),
+                    )
+                })?,
         })
     }
 
@@ -619,6 +875,7 @@ impl FleetdClient {
                 limit: 1,
                 lease_duration_ms,
             }),
+            "claim",
         )
         .await
     }
@@ -635,6 +892,7 @@ impl FleetdClient {
             Some(&AckDelivery {
                 lease_token: lease_token.to_owned(),
             }),
+            "acknowledgement settlement",
         )
         .await
     }
@@ -655,6 +913,7 @@ impl FleetdClient {
                 retry_after_ms,
                 error: Some(reason.to_owned()),
             }),
+            "retry settlement",
         )
         .await
     }
@@ -674,6 +933,7 @@ impl FleetdClient {
                     lease_token: lease_token.to_owned(),
                     reason: reason.to_owned(),
                 }),
+                "block settlement",
             )
             .await?;
         Ok(())
@@ -684,6 +944,7 @@ impl FleetdClient {
             Method::POST,
             &["v1", "channels", channel_id, "messages"],
             Some(input),
+            "publication",
         )
         .await
     }
@@ -693,6 +954,7 @@ impl FleetdClient {
             Method::GET,
             &["v1", "channels", channel_id, "members"],
             None,
+            "membership read",
         )
         .await
     }
@@ -709,8 +971,14 @@ impl FleetdClient {
             url.query_pairs_mut()
                 .append_pair("after", &cursor.to_string())
                 .append_pair("limit", &HISTORY_PAGE_SIZE.to_string());
-            let response = self.http.get(url).bearer_auth(&self.token).send().await?;
-            let page: MessagePage = decode_response(response).await?;
+            let response = self
+                .http
+                .get(url)
+                .bearer_auth(&self.token)
+                .send()
+                .await
+                .map_err(|error| fleetd_transport("history read", &error))?;
+            let page: MessagePage = decode_response(response, "history read").await?;
             let count = page.messages.len();
             for message in page.messages {
                 cursor = message.seq;
@@ -735,13 +1003,18 @@ impl FleetdClient {
         method: Method,
         segments: &[&str],
         body: Option<&B>,
+        phase: &'static str,
     ) -> Result<T, RunnerError> {
         let url = endpoint(&self.origin, segments)?;
         let mut request = self.http.request(method, url).bearer_auth(&self.token);
         if let Some(body) = body {
             request = request.json(body);
         }
-        decode_response(request.send().await?).await
+        let response = request
+            .send()
+            .await
+            .map_err(|error| fleetd_transport(phase, &error))?;
+        decode_response(response, phase).await
     }
 
     async fn empty<B: Serialize + ?Sized>(
@@ -749,17 +1022,21 @@ impl FleetdClient {
         method: Method,
         segments: &[&str],
         body: Option<&B>,
+        phase: &'static str,
     ) -> Result<(), RunnerError> {
         let url = endpoint(&self.origin, segments)?;
         let mut request = self.http.request(method, url).bearer_auth(&self.token);
         if let Some(body) = body {
             request = request.json(body);
         }
-        let response = request.send().await?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| fleetd_transport(phase, &error))?;
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(http_error(response).await)
+            Err(http_error(&response, phase))
         }
     }
 }
@@ -772,23 +1049,50 @@ impl Drop for FleetdClient {
 
 async fn decode_response<T: DeserializeOwned>(
     response: reqwest::Response,
+    phase: &'static str,
 ) -> Result<T, RunnerError> {
     if response.status().is_success() {
-        return response.json().await.map_err(RunnerError::Transport);
+        return response.json().await.map_err(|error| {
+            if error.is_decode() {
+                RunnerError::FleetdProtocol { phase }
+            } else {
+                fleetd_transport(phase, &error)
+            }
+        });
     }
-    Err(http_error(response).await)
+    Err(http_error(&response, phase))
 }
 
-async fn http_error(response: reqwest::Response) -> RunnerError {
-    let status = response.status();
-    let mut message = response
-        .text()
-        .await
-        .unwrap_or_else(|_| "response body unavailable".to_owned());
-    if message.len() > 4096 {
-        message.truncate(4096);
+fn http_error(response: &reqwest::Response, phase: &'static str) -> RunnerError {
+    RunnerError::FleetdRejected {
+        phase,
+        status: response.status(),
     }
-    RunnerError::FleetdHttp { status, message }
+}
+
+fn fleetd_transport(phase: &'static str, error: &reqwest::Error) -> RunnerError {
+    let diagnostic = if error.is_timeout() {
+        "request timed out before a complete response"
+    } else if error.is_connect() {
+        "connection could not be established"
+    } else if error.is_body() {
+        "response body was interrupted"
+    } else {
+        "request failed before a complete response"
+    };
+    RunnerError::FleetdUnavailable { phase, diagnostic }
+}
+
+fn transient_http_status(status: StatusCode) -> bool {
+    status.is_server_error()
+        || matches!(
+            status,
+            StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_EARLY | StatusCode::TOO_MANY_REQUESTS
+        )
+}
+
+fn io_diagnostic(error: &std::io::Error) -> String {
+    format!("operating-system I/O failed with {:?}", error.kind())
 }
 
 fn endpoint(origin: &Url, segments: &[&str]) -> Result<Url, RunnerError> {
