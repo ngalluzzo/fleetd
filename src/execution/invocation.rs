@@ -527,7 +527,7 @@ pub(crate) async fn terminalize_invocation(
         certainty == ExecutionCertainty::OutcomeUnknown && reason == "blocked",
     )
     .await?;
-    let certainty = certainty_name(&certainty);
+    let certainty = certainty.as_str();
     sqlx::query(
         r"
         UPDATE invocations
@@ -827,7 +827,13 @@ fn invocation_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Invocation, Flee
         reserved_at_ms: row.try_get("reserved_at_ms")?,
         dispatch_armed_at_ms: row.try_get("dispatch_armed_at_ms")?,
         terminal_at_ms: row.try_get("terminal_at_ms")?,
-        execution_certainty: certainty.as_deref().map(execution_certainty).transpose()?,
+        execution_certainty: certainty
+            .as_deref()
+            .map(|value| {
+                ExecutionCertainty::parse(value)
+                    .ok_or_else(|| invalid_stored_state("execution certainty", value))
+            })
+            .transpose()?,
         terminal_reason: row.try_get("terminal_reason")?,
         result_message_id: row.try_get("result_message_id")?,
     })
@@ -839,23 +845,6 @@ fn invocation_state(state: &str) -> Result<InvocationState, FleetError> {
         "dispatch_armed" => Ok(InvocationState::DispatchArmed),
         "terminal" => Ok(InvocationState::Terminal),
         _ => Err(invalid_stored_state("invocation", state)),
-    }
-}
-
-fn execution_certainty(certainty: &str) -> Result<ExecutionCertainty, FleetError> {
-    match certainty {
-        "not_started" => Ok(ExecutionCertainty::NotStarted),
-        "outcome_known" => Ok(ExecutionCertainty::OutcomeKnown),
-        "outcome_unknown" => Ok(ExecutionCertainty::OutcomeUnknown),
-        _ => Err(invalid_stored_state("execution certainty", certainty)),
-    }
-}
-
-const fn certainty_name(certainty: &ExecutionCertainty) -> &'static str {
-    match certainty {
-        ExecutionCertainty::NotStarted => "not_started",
-        ExecutionCertainty::OutcomeKnown => "outcome_known",
-        ExecutionCertainty::OutcomeUnknown => "outcome_unknown",
     }
 }
 

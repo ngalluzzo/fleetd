@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::plugin::PluginInterface;
+use crate::{model::ExecutionCertainty, plugin::PluginInterface};
 
 pub const HARNESS_ACP_INTERFACE_ID: &str = "fleetd.harness-acp";
 
@@ -274,12 +274,61 @@ pub enum HarnessExecutionCertainty {
     OutcomeUnknown,
 }
 
+/// A harness's claim, restated as the certainty fleetd records.
+///
+/// The two enums are deliberately separate types -- one is what a plugin
+/// asserts, the other is what fleetd is willing to durably believe -- but they
+/// share a vocabulary, so the translation belongs here rather than in whichever
+/// caller happens to need it.
+impl From<HarnessExecutionCertainty> for ExecutionCertainty {
+    fn from(value: HarnessExecutionCertainty) -> Self {
+        match value {
+            HarnessExecutionCertainty::NotStarted => Self::NotStarted,
+            HarnessExecutionCertainty::OutcomeKnown => Self::OutcomeKnown,
+            HarnessExecutionCertainty::OutcomeUnknown => Self::OutcomeUnknown,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionPersistence {
     Confirmed,
     RuntimeClaimed,
     Unknown,
+}
+
+impl SessionPersistence {
+    /// Every variant, so `parse` can invert `as_str` without a second table.
+    ///
+    /// A new variant has to appear here to survive a storage round trip; the
+    /// tests at the end of this module fail while it is missing.
+    pub const ALL: [Self; 3] = [Self::Confirmed, Self::RuntimeClaimed, Self::Unknown];
+
+    /// Returns the exact stored representation of this variant.
+    ///
+    /// `Serialize` produces the same spelling, and a test pins the two
+    /// together: a durable row and a wire frame carry one vocabulary, not two.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Confirmed => "confirmed",
+            Self::RuntimeClaimed => "runtime_claimed",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Reads back the representation `as_str` produced.
+    ///
+    /// Returns `None` for anything else, leaving the caller to say what an
+    /// unreadable stored value means to it.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.as_str() == value)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -304,4 +353,71 @@ pub enum HarnessAcpNotification {
     TurnEvent(TurnEvent),
     PermissionRequested(PermissionRequested),
     TurnTerminal(TurnTerminal),
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::{ExecutionCertainty, HarnessExecutionCertainty, SessionPersistence};
+
+    #[test]
+    fn stored_spelling_matches_the_wire_spelling() {
+        for variant in SessionPersistence::ALL {
+            let wire = serde_json::to_value(variant).expect("serialize persistence");
+            assert_eq!(
+                wire,
+                Value::String(variant.as_str().to_owned()),
+                "the stored and wire spellings of {variant:?} diverged",
+            );
+            assert_eq!(SessionPersistence::parse(variant.as_str()), Some(variant));
+        }
+    }
+
+    #[test]
+    fn unreadable_values_do_not_parse() {
+        assert_eq!(SessionPersistence::parse("runtime-claimed"), None);
+        assert_eq!(SessionPersistence::parse("Confirmed"), None);
+        assert_eq!(SessionPersistence::parse(""), None);
+    }
+
+    #[test]
+    fn all_lists_every_variant() {
+        // Adding a variant makes this match non-exhaustive, and the count below
+        // then fails until `ALL` learns about it too.
+        for variant in SessionPersistence::ALL {
+            match variant {
+                SessionPersistence::Confirmed
+                | SessionPersistence::RuntimeClaimed
+                | SessionPersistence::Unknown => {}
+            }
+        }
+        assert_eq!(SessionPersistence::ALL.len(), 3);
+    }
+
+    #[test]
+    fn a_harness_claim_maps_onto_the_recorded_certainty() {
+        for (claimed, recorded) in [
+            (
+                HarnessExecutionCertainty::NotStarted,
+                ExecutionCertainty::NotStarted,
+            ),
+            (
+                HarnessExecutionCertainty::OutcomeKnown,
+                ExecutionCertainty::OutcomeKnown,
+            ),
+            (
+                HarnessExecutionCertainty::OutcomeUnknown,
+                ExecutionCertainty::OutcomeUnknown,
+            ),
+        ] {
+            assert_eq!(ExecutionCertainty::from(claimed), recorded);
+            // The two types agree on the wire, which is what let an earlier
+            // version of this code translate through the stored string.
+            assert_eq!(
+                serde_json::to_value(claimed).expect("serialize claim"),
+                serde_json::to_value(&recorded).expect("serialize record"),
+            );
+        }
+    }
 }

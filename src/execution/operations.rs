@@ -356,8 +356,8 @@ pub async fn record_invocation_terminal(
     let last_event_seq = i64::try_from(terminal.last_event_seq)
         .map_err(|_| FleetError::Invalid("terminal event sequence is too large".to_owned()))?;
     let usage_json = bounded_json(&terminal.usage, "terminal usage")?;
-    let certainty = harness_certainty_str(terminal.execution_certainty);
-    let persistence = persistence_str(terminal.session_persistence);
+    let certainty = ExecutionCertainty::from(terminal.execution_certainty).as_str();
+    let persistence = terminal.session_persistence.as_str();
     let mut transaction = store.begin_immediate().await?;
     let row = sqlx::query(
         r"
@@ -737,7 +737,10 @@ fn observation_from_row(
         execution_certainty: row
             .try_get::<Option<String>, _>("execution_certainty")?
             .as_deref()
-            .map(parse_certainty)
+            .map(|value| {
+                ExecutionCertainty::parse(value)
+                    .ok_or_else(|| invalid_stored("execution certainty", value))
+            })
             .transpose()?,
         session_quiescent: row
             .try_get::<Option<i64>, _>("session_quiescent")?
@@ -745,7 +748,10 @@ fn observation_from_row(
         session_persistence: row
             .try_get::<Option<String>, _>("session_persistence")?
             .as_deref()
-            .map(parse_persistence)
+            .map(|value| {
+                SessionPersistence::parse(value)
+                    .ok_or_else(|| invalid_stored("session persistence", value))
+            })
             .transpose()?,
         usage: row
             .try_get::<Option<String>, _>("usage_json")?
@@ -856,7 +862,7 @@ fn parse_disposition(value: &str) -> Result<PluginGenerationDisposition, FleetEr
         "stopped" => Ok(PluginGenerationDisposition::Stopped),
         "restart" => Ok(PluginGenerationDisposition::Restart),
         "fatal" => Ok(PluginGenerationDisposition::Fatal),
-        _ => invalid_stored("plugin generation disposition", value),
+        _ => Err(invalid_stored("plugin generation disposition", value)),
     }
 }
 
@@ -873,7 +879,7 @@ fn parse_shutdown(value: &str) -> Result<PluginShutdownOutcome, FleetError> {
         "graceful" => Ok(PluginShutdownOutcome::Graceful),
         "forced" => Ok(PluginShutdownOutcome::Forced),
         "failed" => Ok(PluginShutdownOutcome::Failed),
-        _ => invalid_stored("plugin shutdown outcome", value),
+        _ => Err(invalid_stored("plugin shutdown outcome", value)),
     }
 }
 
@@ -881,41 +887,7 @@ fn parse_generation_state(value: &str) -> Result<PluginGenerationState, FleetErr
     match value {
         "active" => Ok(PluginGenerationState::Active),
         "stopped" => Ok(PluginGenerationState::Stopped),
-        _ => invalid_stored("plugin generation state", value),
-    }
-}
-
-fn harness_certainty_str(value: crate::plugin::HarnessExecutionCertainty) -> &'static str {
-    match value {
-        crate::plugin::HarnessExecutionCertainty::NotStarted => "not_started",
-        crate::plugin::HarnessExecutionCertainty::OutcomeKnown => "outcome_known",
-        crate::plugin::HarnessExecutionCertainty::OutcomeUnknown => "outcome_unknown",
-    }
-}
-
-fn parse_certainty(value: &str) -> Result<ExecutionCertainty, FleetError> {
-    match value {
-        "not_started" => Ok(ExecutionCertainty::NotStarted),
-        "outcome_known" => Ok(ExecutionCertainty::OutcomeKnown),
-        "outcome_unknown" => Ok(ExecutionCertainty::OutcomeUnknown),
-        _ => invalid_stored("execution certainty", value),
-    }
-}
-
-fn persistence_str(value: SessionPersistence) -> &'static str {
-    match value {
-        SessionPersistence::Confirmed => "confirmed",
-        SessionPersistence::RuntimeClaimed => "runtime_claimed",
-        SessionPersistence::Unknown => "unknown",
-    }
-}
-
-fn parse_persistence(value: &str) -> Result<SessionPersistence, FleetError> {
-    match value {
-        "confirmed" => Ok(SessionPersistence::Confirmed),
-        "runtime_claimed" => Ok(SessionPersistence::RuntimeClaimed),
-        "unknown" => Ok(SessionPersistence::Unknown),
-        _ => invalid_stored("session persistence", value),
+        _ => Err(invalid_stored("plugin generation state", value)),
     }
 }
 
@@ -943,10 +915,10 @@ fn to_usize(value: i64, label: &str) -> Result<usize, FleetError> {
     })
 }
 
-fn invalid_stored<T>(label: &str, value: &str) -> Result<T, FleetError> {
-    Err(FleetError::Database(sqlx::Error::Decode(
+fn invalid_stored(label: &str, value: &str) -> FleetError {
+    FleetError::Database(sqlx::Error::Decode(
         format!("invalid stored {label}: {value}").into(),
-    )))
+    ))
 }
 
 fn is_unique_violation(error: &sqlx::Error) -> bool {

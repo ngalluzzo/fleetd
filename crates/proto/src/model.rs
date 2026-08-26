@@ -336,6 +336,39 @@ pub enum ExecutionCertainty {
     OutcomeUnknown,
 }
 
+impl ExecutionCertainty {
+    /// Every variant, so `parse` can invert `as_str` without a second table.
+    ///
+    /// A new variant has to appear here to survive a storage round trip; the
+    /// tests at the end of this module fail while it is missing.
+    pub const ALL: [Self; 3] = [Self::NotStarted, Self::OutcomeKnown, Self::OutcomeUnknown];
+
+    /// Returns the exact stored representation of this variant.
+    ///
+    /// `Serialize` produces the same spelling, and a test pins the two
+    /// together: a durable row and a wire frame carry one vocabulary, not two.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::NotStarted => "not_started",
+            Self::OutcomeKnown => "outcome_known",
+            Self::OutcomeUnknown => "outcome_unknown",
+        }
+    }
+
+    /// Reads back the representation `as_str` produced.
+    ///
+    /// Returns `None` for anything else, leaving the caller to say what an
+    /// unreadable stored value means to it.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .find(|variant| variant.as_str() == value)
+            .cloned()
+    }
+}
+
 /// One durable managed attempt reserved together with its inbox lease.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct Invocation {
@@ -401,4 +434,45 @@ const fn default_claim_limit() -> u32 {
 
 const fn default_lease_duration_ms() -> u64 {
     300_000
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::ExecutionCertainty;
+
+    #[test]
+    fn stored_spelling_matches_the_wire_spelling() {
+        for variant in ExecutionCertainty::ALL {
+            let wire = serde_json::to_value(&variant).expect("serialize certainty");
+            assert_eq!(
+                wire,
+                Value::String(variant.as_str().to_owned()),
+                "the stored and wire spellings of {variant:?} diverged",
+            );
+            assert_eq!(ExecutionCertainty::parse(variant.as_str()), Some(variant));
+        }
+    }
+
+    #[test]
+    fn unreadable_values_do_not_parse() {
+        assert_eq!(ExecutionCertainty::parse("outcome_maybe"), None);
+        assert_eq!(ExecutionCertainty::parse("NotStarted"), None);
+        assert_eq!(ExecutionCertainty::parse(""), None);
+    }
+
+    #[test]
+    fn all_lists_every_variant() {
+        // Adding a variant makes this match non-exhaustive, and the count below
+        // then fails until `ALL` learns about it too.
+        for variant in ExecutionCertainty::ALL {
+            match variant {
+                ExecutionCertainty::NotStarted
+                | ExecutionCertainty::OutcomeKnown
+                | ExecutionCertainty::OutcomeUnknown => {}
+            }
+        }
+        assert_eq!(ExecutionCertainty::ALL.len(), 3);
+    }
 }

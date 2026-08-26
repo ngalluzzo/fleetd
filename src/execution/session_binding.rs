@@ -827,7 +827,7 @@ async fn settle_quiescent_turn(
     persistence: SessionPersistence,
     now: i64,
 ) -> Result<(), FleetError> {
-    let persistence_name = persistence_name(persistence);
+    let persistence_name = persistence.as_str();
     let turn = bound_turn_row(transaction, invocation_id).await?;
     let turn_state: String = turn.try_get("state")?;
     if turn_state == "quiescent" {
@@ -1136,7 +1136,13 @@ fn binding_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<SessionBinding, Fle
         state: parse_state(&state)?,
         active_invocation_id: row.try_get("active_invocation_id")?,
         last_quiescent_invocation_id: row.try_get("last_quiescent_invocation_id")?,
-        session_persistence: persistence.as_deref().map(parse_persistence).transpose()?,
+        session_persistence: persistence
+            .as_deref()
+            .map(|value| {
+                SessionPersistence::parse(value)
+                    .ok_or_else(|| invalid_stored("session persistence state is invalid"))
+            })
+            .transpose()?,
         uncertain_reason: row.try_get("uncertain_reason")?,
         retired_reason: row.try_get("retired_reason")?,
         created_at_ms: row.try_get("created_at_ms")?,
@@ -1229,23 +1235,6 @@ fn parse_state(value: &str) -> Result<SessionBindingState, FleetError> {
         "uncertain" => Ok(SessionBindingState::Uncertain),
         "retired" => Ok(SessionBindingState::Retired),
         _ => Err(invalid_stored("session binding state is invalid")),
-    }
-}
-
-const fn persistence_name(value: SessionPersistence) -> &'static str {
-    match value {
-        SessionPersistence::Confirmed => "confirmed",
-        SessionPersistence::RuntimeClaimed => "runtime_claimed",
-        SessionPersistence::Unknown => "unknown",
-    }
-}
-
-fn parse_persistence(value: &str) -> Result<SessionPersistence, FleetError> {
-    match value {
-        "confirmed" => Ok(SessionPersistence::Confirmed),
-        "runtime_claimed" => Ok(SessionPersistence::RuntimeClaimed),
-        "unknown" => Ok(SessionPersistence::Unknown),
-        _ => Err(invalid_stored("session persistence state is invalid")),
     }
 }
 

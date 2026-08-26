@@ -1,10 +1,6 @@
 //! Controller-owned, invocation-scoped message grants.
 
-use std::{
-    collections::BTreeSet,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeSet, sync::Arc};
 
 use axum::{
     Router,
@@ -37,7 +33,7 @@ use crate::{
     execution::controller::ManagedTurnGrant,
     model::{CreateMessage, Invocation},
     plugin::{ResolvedMcpEndpoint, ResolvedMcpGrant, ResolvedMcpHttpHeader},
-    store::Store,
+    store::{Store, now_ms},
 };
 
 /// Runtime grant name for invocation-scoped durable message publication.
@@ -387,14 +383,6 @@ async fn require_grant_token(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     next.run(request).await
-}
-
-fn now_ms() -> i64 {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    i64::try_from(millis).unwrap_or(i64::MAX)
 }
 
 #[cfg(test)]
