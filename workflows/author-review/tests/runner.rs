@@ -88,20 +88,23 @@ async fn crash_replay_is_idempotent_and_divergent_replay_is_rejected() {
 #[tokio::test]
 async fn permanent_plugin_failures_block_with_bounded_secret_free_diagnostics() {
     let secret = "DO_NOT_EXPOSE_PLUGIN_OR_AMBIENT_SECRET";
+    assert_incompatible_identity_does_not_claim().await;
+
     let cases = vec![
         (
             "protocol",
-            single_response_script("not-json"),
+            plugin_script(
+                &description_response_with_interface(INTERFACE_ID),
+                "not-json",
+            ),
             "response decoding phase",
         ),
         (
-            "identity",
-            single_response_script(&description_response_with_interface("wrong.interface")),
-            "description identity phase",
-        ),
-        (
             "framing",
-            single_response_script(&"x".repeat(MAX_FRAME_BYTES + 1)),
+            plugin_script(
+                &description_response_with_interface(INTERFACE_ID),
+                &"x".repeat(MAX_FRAME_BYTES + 1),
+            ),
             "response framing phase",
         ),
         (
@@ -176,6 +179,37 @@ async fn permanent_plugin_failures_block_with_bounded_secret_free_diagnostics() 
     }
 }
 
+async fn assert_incompatible_identity_does_not_claim() {
+    let fixture = WorkflowFixture::start().await;
+    fixture.release_root().await;
+    let mut incompatible = fixture.configuration.clone();
+    incompatible.plugin.executable = fixture.write_plugin(
+        "incompatible-identity",
+        &single_response_script(&description_response_with_interface("wrong.interface")),
+    );
+    let error = AuthorReviewRunner::start(incompatible)
+        .await
+        .err()
+        .expect("incompatible identity must fail readiness");
+    assert!(error.to_string().contains("description identity phase"));
+    let pending = fixture
+        .server
+        .store
+        .list_deliveries(
+            Some(&fixture.runner_agent.agent.id),
+            Some(DeliveryState::Pending),
+            10,
+        )
+        .await
+        .expect("list pending delivery after readiness failure");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message.id, fixture.root.id);
+    assert_eq!(
+        pending[0].attempt, 1,
+        "readiness failure must not claim work"
+    );
+}
+
 #[tokio::test]
 async fn dead_child_is_replaced_and_delayed_input_does_not_starve_later_work() {
     let fixture = WorkflowFixture::start().await;
@@ -191,16 +225,16 @@ async fn dead_child_is_replaced_and_delayed_input_does_not_starve_later_work() {
     let script = replacement_plugin_script(&marker);
     let mut configuration = fixture.configuration.clone();
     configuration.plugin.executable = fixture.write_plugin("replacement-plugin", &script);
-    configuration.retry_base_delay_ms = 200;
-    configuration.retry_max_delay_ms = 800;
+    configuration.retry_base_delay_ms = 11_000;
+    configuration.retry_max_delay_ms = 44_000;
     let mut runner = AuthorReviewRunner::start(configuration)
         .await
         .expect("start runner");
 
-    assert_eq!(runner.retry_delay_for_attempt(1), 200);
-    assert_eq!(runner.retry_delay_for_attempt(2), 400);
-    assert_eq!(runner.retry_delay_for_attempt(3), 800);
-    assert_eq!(runner.retry_delay_for_attempt(100), 800);
+    assert_eq!(runner.retry_delay_for_attempt(1), 11_000);
+    assert_eq!(runner.retry_delay_for_attempt(2), 22_000);
+    assert_eq!(runner.retry_delay_for_attempt(3), 44_000);
+    assert_eq!(runner.retry_delay_for_attempt(100), 44_000);
     let first = runner.tick().await.expect("retry dead child");
     let TickOutcome::Retried {
         retry_after_ms,
@@ -209,7 +243,7 @@ async fn dead_child_is_replaced_and_delayed_input_does_not_starve_later_work() {
     else {
         panic!("dead child should be retried, got {first:?}");
     };
-    assert_eq!(retry_after_ms, 400);
+    assert_eq!(retry_after_ms, 22_000);
     assert!(diagnostic.contains("response read phase is unavailable"));
     assert!(marker.exists());
 
@@ -305,7 +339,25 @@ fn retry_controls_reject_poll_interval_reclaim_and_unbounded_delays() {
     let error = load_configuration(&path).expect_err("poll-rate retry must be rejected");
     assert!(error.to_string().contains("retry_base_delay_ms"));
 
-    configuration["retry_base_delay_ms"] = json!(200);
+    configuration["poll_interval_ms"] = json!(1_000);
+    configuration
+        .as_object_mut()
+        .expect("configuration object")
+        .remove("retry_base_delay_ms");
+    configuration
+        .as_object_mut()
+        .expect("configuration object")
+        .remove("retry_max_delay_ms");
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&configuration).expect("encode configuration"),
+    )
+    .expect("rewrite configuration without optional retry controls");
+    let compatible = load_configuration(&path).expect("schema-v1 defaults remain compatible");
+    assert_eq!(compatible.retry_base_delay_ms, 11_000);
+    assert_eq!(compatible.retry_max_delay_ms, 60_000);
+
+    configuration["retry_base_delay_ms"] = json!(11_000);
     configuration["retry_max_delay_ms"] = json!(86_400_001_u64);
     std::fs::write(
         &path,
@@ -618,7 +670,7 @@ fn runner_configuration(
         }),
         lease_duration_ms: 15_000,
         poll_interval_ms: 100,
-        retry_base_delay_ms: 1_000,
+        retry_base_delay_ms: 11_000,
         retry_max_delay_ms: 60_000,
     }
 }

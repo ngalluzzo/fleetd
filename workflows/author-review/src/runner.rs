@@ -35,7 +35,9 @@ const MAX_ARG_BYTES: usize = 4096;
 const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
 const HISTORY_PAGE_SIZE: u32 = 500;
 const MAX_RETRY_DELAY_MS: u64 = 86_400_000;
-const DEFAULT_RETRY_BASE_DELAY_MS: u64 = 1_000;
+const FLEETD_REQUEST_TIMEOUT_MS: u64 = 10_000;
+const MIN_RETRY_BASE_DELAY_MS: u64 = FLEETD_REQUEST_TIMEOUT_MS + 1_000;
+const DEFAULT_RETRY_BASE_DELAY_MS: u64 = MIN_RETRY_BASE_DELAY_MS;
 const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 60_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -189,32 +191,25 @@ pub struct AuthorReviewRunner {
     configuration: RunnerConfiguration,
     fleetd: FleetdClient,
     plugin: Option<WorkflowPluginClient>,
-    pending_plugin_failure: Option<RunnerError>,
 }
 
 impl AuthorReviewRunner {
-    /// Creates the external runner and probes the child plugin's exact draft
-    /// description. A probe failure is retained so the next leased delivery is
-    /// settled through the same permanent-block or transient-retry path as a
-    /// later child failure.
+    /// Creates the external runner and verifies the child plugin's exact draft
+    /// description before any work can be leased.
     ///
     /// # Errors
     ///
-    /// Returns an error for invalid configuration, credentials, or endpoint.
+    /// Returns an error for invalid configuration, credentials, endpoint, or
+    /// plugin readiness.
     pub async fn start(configuration: RunnerConfiguration) -> Result<Self, RunnerError> {
         validate_configuration(&configuration)?;
         let token = read_private_credential(&configuration.fleetd.credential_file)?;
         let fleetd = FleetdClient::new(&configuration.fleetd.origin, token)?;
-        let (plugin, pending_plugin_failure) =
-            match WorkflowPluginClient::spawn(&configuration.plugin).await {
-                Ok(plugin) => (Some(plugin), None),
-                Err(error) => (None, Some(error)),
-            };
+        let plugin = WorkflowPluginClient::spawn(&configuration.plugin).await?;
         Ok(Self {
             configuration,
             fleetd,
-            plugin,
-            pending_plugin_failure,
+            plugin: Some(plugin),
         })
     }
 
@@ -227,6 +222,7 @@ impl AuthorReviewRunner {
     /// block. Per-input failures are otherwise durably settled and reported as
     /// processed.
     pub async fn tick(&mut self) -> Result<TickOutcome, RunnerError> {
+        self.ensure_plugin().await?;
         let batch = self
             .fleetd
             .claim(
@@ -383,9 +379,6 @@ impl AuthorReviewRunner {
     }
 
     async fn ensure_plugin(&mut self) -> Result<(), RunnerError> {
-        if let Some(error) = self.pending_plugin_failure.take() {
-            return Err(error);
-        }
         if self.plugin.is_none() {
             self.plugin = Some(WorkflowPluginClient::spawn(&self.configuration.plugin).await?);
         }
@@ -469,11 +462,11 @@ fn validate_configuration(configuration: &RunnerConfiguration) -> Result<(), Run
             "poll_interval_ms must be between 100 and 60000".to_owned(),
         ));
     }
-    if configuration.retry_base_delay_ms <= configuration.poll_interval_ms
+    if configuration.retry_base_delay_ms < MIN_RETRY_BASE_DELAY_MS
         || configuration.retry_base_delay_ms > MAX_RETRY_DELAY_MS
     {
         return Err(RunnerError::Configuration(format!(
-            "retry_base_delay_ms must exceed poll_interval_ms and not exceed {MAX_RETRY_DELAY_MS}"
+            "retry_base_delay_ms must be between {MIN_RETRY_BASE_DELAY_MS} and {MAX_RETRY_DELAY_MS}"
         )));
     }
     if configuration.retry_max_delay_ms < configuration.retry_base_delay_ms
@@ -853,7 +846,7 @@ impl FleetdClient {
             origin: validate_origin(origin)?,
             token,
             http: Client::builder()
-                .timeout(Duration::from_secs(10))
+                .timeout(Duration::from_millis(FLEETD_REQUEST_TIMEOUT_MS))
                 .build()
                 .map_err(|_| {
                     RunnerError::Configuration(

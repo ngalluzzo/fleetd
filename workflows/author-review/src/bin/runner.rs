@@ -39,7 +39,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(outcome) => {
                 consecutive_transient_failures = 0;
                 report_outcome(&outcome);
-                runner.poll_interval()
+                post_tick_delay(&outcome, runner.poll_interval())
             }
             Err(error) if error.is_transient() => {
                 consecutive_transient_failures = consecutive_transient_failures.saturating_add(1);
@@ -61,6 +61,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+fn post_tick_delay(
+    outcome: &TickOutcome,
+    poll_interval: std::time::Duration,
+) -> std::time::Duration {
+    if matches!(outcome, TickOutcome::Retried { .. }) {
+        std::time::Duration::ZERO
+    } else {
+        poll_interval
+    }
+}
+
 fn report_outcome(outcome: &TickOutcome) {
     match outcome {
         TickOutcome::Retried {
@@ -73,5 +84,28 @@ fn report_outcome(outcome: &TickOutcome) {
             eprintln!("error: {diagnostic}");
         }
         TickOutcome::Idle | TickOutcome::Acknowledged => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_outcome_claims_other_work_before_sleeping() {
+        let poll_interval = std::time::Duration::from_mins(1);
+        let retried = TickOutcome::Retried {
+            retry_after_ms: 11_000,
+            diagnostic: "bounded retry".to_owned(),
+        };
+
+        assert_eq!(
+            post_tick_delay(&retried, poll_interval),
+            std::time::Duration::ZERO
+        );
+        assert_eq!(
+            post_tick_delay(&TickOutcome::Acknowledged, poll_interval),
+            poll_interval
+        );
     }
 }
