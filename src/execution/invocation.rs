@@ -71,7 +71,7 @@ async fn reserve_invocations_filtered(
     message_kinds: Option<&BTreeSet<String>>,
 ) -> Result<InvocationBatch, FleetError> {
     crate::delivery::validate_claim(&input)?;
-    crate::delivery::ensure_agent(store.pool(), agent_id).await?;
+    crate::delivery::ensure_agent(store, agent_id).await?;
     let now = now_ms();
     let lease_duration = i64::try_from(input.lease_duration_ms)
         .map_err(|_| FleetError::Invalid("lease duration is too large".to_owned()))?;

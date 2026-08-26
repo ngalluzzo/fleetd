@@ -50,7 +50,7 @@ pub async fn acquire_session_binding(
     input: AcquireSessionBinding,
 ) -> Result<SessionAcquisition, FleetError> {
     validate_acquisition(agent_id, &input)?;
-    crate::delivery::ensure_agent(store.pool(), agent_id).await?;
+    crate::delivery::ensure_agent(store, agent_id).await?;
     let directories_json = serde_json::to_string(&input.additional_directories)?;
     let now = now_ms();
     let mut transaction = store.begin_immediate().await?;

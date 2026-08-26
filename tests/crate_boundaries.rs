@@ -360,6 +360,30 @@ fn the_kernel_does_not_depend_on_what_is_layered_above_it() {
     }
 }
 
+/// Every crate above the substrate that could reach a kernel table.
+///
+/// `Store::pool()` and `Store::begin_immediate()` both hand out an executor that
+/// accepts any SQL, so this rule cannot be a type -- see the note on
+/// `only_the_kernel_writes_kernel_tables`. That makes the list of places it is
+/// checked load-bearing: a new crate above the substrate that is missing here is
+/// unchecked, not compliant.
+const ABOVE_SUBSTRATE_CRATES: [&str; 1] = ["crates/conversation/src"];
+
+/// Checks the one rule in this file that cannot be made structural.
+///
+/// Turning a module boundary into a crate boundary converts most of these
+/// assertions into compile errors. Not this one. `Store::pool()` and
+/// `Store::begin_immediate()` both return a sqlx executor, and an executor
+/// accepts any SQL string, so no signature distinguishes reading a table this
+/// layer owns from deleting one it does not. `begin_immediate` cannot be
+/// withdrawn either: a delivery transition and the invocation fence settling it
+/// have to commit in one transaction, which is the whole reason a layer above
+/// the kernel is handed one.
+///
+/// Verified by writing `DELETE FROM channels` in `execution/settlement` through
+/// `begin_immediate` alone: it compiled with no errors and only this test
+/// objected. Separate databases would make it structural and would also make
+/// that shared transaction impossible.
 #[test]
 fn only_the_kernel_writes_kernel_tables() {
     const KERNEL_TABLES: [&str; 7] = [
@@ -371,8 +395,26 @@ fn only_the_kernel_writes_kernel_tables() {
         "delivery_blocks",
         "messages",
     ];
-    for module in above_kernel() {
-        let path = workspace_root().join(format!("src/{module}.rs"));
+    let mut sources: Vec<(String, PathBuf)> = above_kernel()
+        .into_iter()
+        .map(|module| {
+            let path = workspace_root().join(format!("src/{module}.rs"));
+            (module, path)
+        })
+        .collect();
+    for crate_root in ABOVE_SUBSTRATE_CRATES {
+        let root = workspace_root().join(crate_root);
+        let mut crate_sources = Vec::new();
+        collect_sources(&root, &mut crate_sources);
+        assert!(
+            !crate_sources.is_empty(),
+            "{crate_root} holds no sources to check"
+        );
+        for path in crate_sources {
+            sources.push((crate_root.to_owned(), path));
+        }
+    }
+    for (module, path) in sources {
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("module {module} at {}", path.display()));
         for table in KERNEL_TABLES {

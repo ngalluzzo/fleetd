@@ -206,10 +206,10 @@ pub fn validate_token(lease_token: &str) -> Result<(), FleetError> {
 /// # Errors
 ///
 /// Returns an error when the agent does not exist or cannot be read.
-pub async fn ensure_agent(pool: &sqlx::SqlitePool, agent_id: &str) -> Result<(), FleetError> {
+pub async fn ensure_agent(store: &Store, agent_id: &str) -> Result<(), FleetError> {
     let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agents WHERE id = ?")
         .bind(agent_id)
-        .fetch_one(pool)
+        .fetch_one(store.pool())
         .await?;
     if exists == 0 {
         return Err(FleetError::NotFound {
@@ -226,7 +226,7 @@ pub async fn ensure_agent(pool: &sqlx::SqlitePool, agent_id: &str) -> Result<(),
 ///
 /// Returns an error when the delivery is unknown, or when the lease is expired, foreign, or settled differently.
 pub async fn settle_miss(
-    pool: &sqlx::SqlitePool,
+    store: &Store,
     agent_id: &str,
     message_id: &str,
     lease_token: &str,
@@ -242,7 +242,7 @@ pub async fn settle_miss(
     )
     .bind(agent_id)
     .bind(message_id)
-    .fetch_optional(pool)
+    .fetch_optional(store.pool())
     .await?;
     let Some(row) = row else {
         return Err(FleetError::NotFound {

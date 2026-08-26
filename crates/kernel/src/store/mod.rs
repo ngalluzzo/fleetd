@@ -92,7 +92,15 @@ impl Store {
         Ok(self.pool.begin_with("BEGIN IMMEDIATE").await?)
     }
 
-    /// Returns the read handle for queries the kernel does not itself model.
+    /// Returns the pool, for a layer querying the tables it owns itself.
+    ///
+    /// This cannot be narrowed into a read-only or table-scoped handle: a sqlx
+    /// executor accepts any statement, so any handle at all grants every table.
+    /// [`Store::begin_immediate`] grants exactly the same reach and has to stay
+    /// public, because a delivery transition and the fence settling it must
+    /// commit together. So "only the kernel writes kernel tables" is a rule
+    /// `tests/crate_boundaries.rs` reads the source to check, not one the
+    /// compiler can hold.
     #[must_use]
     pub fn pool(&self) -> &sqlx::SqlitePool {
         &self.pool

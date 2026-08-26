@@ -51,7 +51,7 @@ pub async fn claim_deliveries(
         .checked_add(lease_duration)
         .ok_or_else(|| FleetError::Invalid("lease expiry overflowed".to_owned()))?;
     let lease_token = Uuid::new_v4().to_string();
-    ensure_agent(store.pool(), agent_id).await?;
+    ensure_agent(store, agent_id).await?;
     let mut transaction = store.begin_immediate().await?;
     recover_expired_invocations(&mut transaction, agent_id, now).await?;
     lease_claimable(
@@ -105,14 +105,7 @@ pub async fn acknowledge_delivery(
         return Ok(());
     }
     transaction.rollback().await?;
-    settle_miss(
-        store.pool(),
-        agent_id,
-        message_id,
-        lease_token,
-        "acknowledged",
-    )
-    .await
+    settle_miss(store, agent_id, message_id, lease_token, "acknowledged").await
 }
 
 /// Releases a failed delivery for a later attempt under the active lease.
@@ -163,14 +156,7 @@ pub async fn retry_delivery(
         return Ok(());
     }
     transaction.rollback().await?;
-    settle_miss(
-        store.pool(),
-        agent_id,
-        message_id,
-        &input.lease_token,
-        "retry",
-    )
-    .await
+    settle_miss(store, agent_id, message_id, &input.lease_token, "retry").await
 }
 
 /// Parks an ambiguously executed delivery under its active lease.
@@ -222,14 +208,7 @@ pub async fn block_delivery(
         return Ok((blocked, false));
     }
     transaction.rollback().await?;
-    settle_miss(
-        store.pool(),
-        agent_id,
-        message_id,
-        &input.lease_token,
-        "blocked",
-    )
-    .await?;
+    settle_miss(store, agent_id, message_id, &input.lease_token, "blocked").await?;
     Err(FleetError::LeaseConflict(
         "blocked settlement evidence is missing".to_owned(),
     ))
