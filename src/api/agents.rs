@@ -7,13 +7,9 @@ use axum::{
 };
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::{
-    auth::Principal,
-    error::{ErrorResponse, FleetError},
-    model::CreateAgent,
-};
+use crate::{auth::Principal, error::ErrorResponse, model::CreateAgent};
 
-use super::{AppState, guard::require_operator};
+use super::{AppState, error::ApiError, guard::require_operator};
 
 pub(super) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::default()
@@ -43,7 +39,7 @@ async fn create_agent(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Json(input): Json<CreateAgent>,
-) -> Result<(StatusCode, Json<crate::model::RegisteredAgent>), FleetError> {
+) -> Result<(StatusCode, Json<crate::model::RegisteredAgent>), ApiError> {
     require_operator(&principal)?;
     let registration = state.auth.register_agent(input).await?;
     Ok((StatusCode::CREATED, Json(registration)))
@@ -67,7 +63,7 @@ async fn create_agent(
 async fn list_agents(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-) -> Result<Json<Vec<crate::model::Agent>>, FleetError> {
+) -> Result<Json<Vec<crate::model::Agent>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(state.store.list_agents().await?))
 }
@@ -93,7 +89,7 @@ async fn rotate_agent_credential(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Path(agent_id): Path<String>,
-) -> Result<Json<crate::model::IssuedCredential>, FleetError> {
+) -> Result<Json<crate::model::IssuedCredential>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(state.auth.rotate_agent_credential(&agent_id).await?))
 }

@@ -34,7 +34,7 @@ use crate::{
     stream_grant_broker::StreamGrantBrokerError,
 };
 
-use super::{AppState, guard::require_channel_access};
+use super::{AppState, error::ApiError, guard::require_channel_access};
 
 pub(super) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::default()
@@ -75,7 +75,7 @@ async fn issue_browser_stream_grant(
     Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
     Json(input): Json<BrowserStreamGrantIssueRequest>,
-) -> Result<(StatusCode, HeaderMap, Json<BrowserStreamGrantIssueResponse>), FleetError> {
+) -> Result<(StatusCode, HeaderMap, Json<BrowserStreamGrantIssueResponse>), ApiError> {
     require_channel_access(&state, &principal, &channel_id).await?;
     state
         .store
@@ -164,7 +164,7 @@ async fn stream(
     Path(channel_id): Path<String>,
     Query(query): Query<StreamQuery>,
     upgrade: WebSocketUpgrade,
-) -> Result<Response, FleetError> {
+) -> Result<Response, ApiError> {
     require_channel_access(&state, &principal, &channel_id).await?;
     state
         .store

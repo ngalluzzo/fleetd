@@ -8,12 +8,9 @@ use serde::Deserialize;
 use utoipa::IntoParams;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::{
-    auth::Principal,
-    error::{ErrorResponse, FleetError},
-};
+use crate::{auth::Principal, error::ErrorResponse};
 
-use super::{AppState, guard::require_operator};
+use super::{AppState, error::ApiError, guard::require_operator};
 
 #[derive(Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -49,7 +46,7 @@ async fn list_plugin_generations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<AgentQuery>,
-) -> Result<Json<Vec<crate::operations::PluginGeneration>>, FleetError> {
+) -> Result<Json<Vec<crate::operations::PluginGeneration>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
         crate::operations::list_plugin_generations(&state.store, query.agent.as_deref()).await?,
@@ -76,7 +73,7 @@ async fn list_invocation_observations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<AgentQuery>,
-) -> Result<Json<Vec<crate::operations::InvocationObservation>>, FleetError> {
+) -> Result<Json<Vec<crate::operations::InvocationObservation>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
         crate::operations::list_invocation_observations(&state.store, query.agent.as_deref())
@@ -104,7 +101,7 @@ async fn list_session_bindings(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<AgentQuery>,
-) -> Result<Json<Vec<crate::session_binding::SessionBinding>>, FleetError> {
+) -> Result<Json<Vec<crate::session_binding::SessionBinding>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
         crate::session_binding::list_session_bindings(&state.store, query.agent.as_deref()).await?,

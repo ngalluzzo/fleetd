@@ -11,13 +11,14 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::Principal,
-    error::{ErrorResponse, FleetError},
+    error::ErrorResponse,
     message_commit_hint::MessageCommitWake,
     model::{ArmInvocation, ClaimDeliveries, CompleteInvocation},
 };
 
 use super::{
     AppState,
+    error::ApiError,
     guard::{require_bound_agent, require_operator},
 };
 use crate::invocation;
@@ -54,7 +55,7 @@ async fn reserve_invocations(
     Extension(principal): Extension<Principal>,
     Path(agent_id): Path<String>,
     Json(input): Json<ClaimDeliveries>,
-) -> Result<Json<crate::model::InvocationBatch>, FleetError> {
+) -> Result<Json<crate::model::InvocationBatch>, ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     Ok(Json(
         invocation::reserve_invocations(&state.store, &agent_id, input).await?,
@@ -89,7 +90,7 @@ async fn arm_invocation(
     Extension(principal): Extension<Principal>,
     Path((agent_id, invocation_id)): Path<(String, String)>,
     Json(input): Json<ArmInvocation>,
-) -> Result<Json<crate::model::Invocation>, FleetError> {
+) -> Result<Json<crate::model::Invocation>, ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     Ok(Json(
         invocation::arm_invocation(&state.store, &agent_id, &invocation_id, input).await?,
@@ -125,7 +126,7 @@ async fn complete_invocation(
     Extension(principal): Extension<Principal>,
     Path((agent_id, invocation_id)): Path<(String, String)>,
     Json(input): Json<CompleteInvocation>,
-) -> Result<(StatusCode, Json<crate::model::InvocationCompletion>), FleetError> {
+) -> Result<(StatusCode, Json<crate::model::InvocationCompletion>), ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     let (completion, created) =
         invocation::complete_invocation(&state.store, &agent_id, &invocation_id, input).await?;
@@ -169,7 +170,7 @@ async fn list_invocations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<InvocationQuery>,
-) -> Result<Json<Vec<crate::model::Invocation>>, FleetError> {
+) -> Result<Json<Vec<crate::model::Invocation>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
         invocation::list_invocations(&state.store, query.agent.as_deref()).await?,

@@ -319,3 +319,20 @@ fn only_the_kernel_adds_methods_to_the_store() {
         );
     }
 }
+
+#[test]
+fn the_kernel_does_not_speak_http() {
+    for module in KERNEL_MODULES {
+        let path = workspace_root().join(format!("src/{module}.rs"));
+        let Ok(source) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for forbidden in ["axum", "utoipa", "reqwest"] {
+            assert!(
+                !source.contains(forbidden),
+                "kernel module `{module}` references `{forbidden}`. Rendering a domain error \
+                 as a status code is the HTTP layer's decision — see `api::error::ApiError`."
+            );
+        }
+    }
+}

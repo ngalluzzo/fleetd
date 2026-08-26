@@ -11,12 +11,13 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::Principal,
-    error::{ErrorResponse, FleetError},
+    error::ErrorResponse,
     model::{AddMember, CreateChannel, OpenDirectConversation, RenameChannel},
 };
 
 use super::{
     AppState,
+    error::ApiError,
     guard::{require_channel_access, require_operator},
 };
 
@@ -51,7 +52,7 @@ async fn create_channel(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Json(input): Json<CreateChannel>,
-) -> Result<(StatusCode, Json<crate::model::Channel>), FleetError> {
+) -> Result<(StatusCode, Json<crate::model::Channel>), ApiError> {
     require_operator(&principal)?;
     let channel = state.store.create_channel(input).await?;
     Ok((StatusCode::CREATED, Json(channel)))
@@ -75,7 +76,7 @@ async fn create_channel(
 async fn list_channels(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-) -> Result<Json<Vec<crate::model::Channel>>, FleetError> {
+) -> Result<Json<Vec<crate::model::Channel>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(state.store.list_channels().await?))
 }
@@ -108,7 +109,7 @@ async fn list_conversations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<ConversationQuery>,
-) -> Result<Json<Vec<crate::model::ConversationSummary>>, FleetError> {
+) -> Result<Json<Vec<crate::model::ConversationSummary>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
         state
@@ -142,7 +143,7 @@ async fn open_direct_conversation(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Json(input): Json<OpenDirectConversation>,
-) -> Result<(StatusCode, Json<crate::model::ConversationSummary>), FleetError> {
+) -> Result<(StatusCode, Json<crate::model::ConversationSummary>), ApiError> {
     require_operator(&principal)?;
     let result = state.store.open_direct_conversation(input).await?;
     let status = if result.created {
@@ -178,7 +179,7 @@ async fn rename_channel(
     Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
     Json(input): Json<RenameChannel>,
-) -> Result<Json<crate::model::Channel>, FleetError> {
+) -> Result<Json<crate::model::Channel>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
         state.store.rename_channel(&channel_id, input.name).await?,
@@ -207,7 +208,7 @@ async fn archive_channel(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
-) -> Result<Json<crate::model::Channel>, FleetError> {
+) -> Result<Json<crate::model::Channel>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(state.store.archive_channel(&channel_id).await?))
 }
@@ -236,7 +237,7 @@ async fn add_member(
     Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
     Json(input): Json<AddMember>,
-) -> Result<StatusCode, FleetError> {
+) -> Result<StatusCode, ApiError> {
     require_operator(&principal)?;
     state
         .store
@@ -266,7 +267,7 @@ async fn list_channel_members(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
-) -> Result<Json<Vec<crate::model::ChannelMember>>, FleetError> {
+) -> Result<Json<Vec<crate::model::ChannelMember>>, ApiError> {
     require_channel_access(&state, &principal, &channel_id).await?;
     Ok(Json(state.store.list_channel_members(&channel_id).await?))
 }

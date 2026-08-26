@@ -11,12 +11,13 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::Principal,
-    error::{ErrorResponse, FleetError},
+    error::ErrorResponse,
     model::{AckDelivery, BlockDelivery, ClaimDeliveries, ResolveDeliveryBlock, RetryDelivery},
 };
 
 use super::{
     AppState,
+    error::ApiError,
     guard::{require_bound_agent, require_operator},
 };
 use crate::settlement;
@@ -55,7 +56,7 @@ async fn claim_deliveries(
     Extension(principal): Extension<Principal>,
     Path(agent_id): Path<String>,
     Json(input): Json<ClaimDeliveries>,
-) -> Result<Json<crate::model::ClaimBatch>, FleetError> {
+) -> Result<Json<crate::model::ClaimBatch>, ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     Ok(Json(
         settlement::claim_deliveries(&state.store, &agent_id, input).await?,
@@ -90,7 +91,7 @@ async fn acknowledge_delivery(
     Extension(principal): Extension<Principal>,
     Path((agent_id, message_id)): Path<(String, String)>,
     Json(input): Json<AckDelivery>,
-) -> Result<StatusCode, FleetError> {
+) -> Result<StatusCode, ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     settlement::acknowledge_delivery(&state.store, &agent_id, &message_id, &input.lease_token)
         .await?;
@@ -125,7 +126,7 @@ async fn retry_delivery(
     Extension(principal): Extension<Principal>,
     Path((agent_id, message_id)): Path<(String, String)>,
     Json(input): Json<RetryDelivery>,
-) -> Result<StatusCode, FleetError> {
+) -> Result<StatusCode, ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     settlement::retry_delivery(&state.store, &agent_id, &message_id, input).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -160,7 +161,7 @@ async fn block_delivery(
     Extension(principal): Extension<Principal>,
     Path((agent_id, message_id)): Path<(String, String)>,
     Json(input): Json<BlockDelivery>,
-) -> Result<(StatusCode, Json<crate::model::BlockedDelivery>), FleetError> {
+) -> Result<(StatusCode, Json<crate::model::BlockedDelivery>), ApiError> {
     require_bound_agent(&principal, &agent_id)?;
     let (blocked, created) =
         settlement::block_delivery(&state.store, &agent_id, &message_id, input).await?;
@@ -199,7 +200,7 @@ async fn list_delivery_blocks(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<DeliveryBlockQuery>,
-) -> Result<Json<Vec<crate::model::BlockedDelivery>>, FleetError> {
+) -> Result<Json<Vec<crate::model::BlockedDelivery>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
         state
@@ -234,7 +235,7 @@ async fn resolve_delivery_block(
     Extension(principal): Extension<Principal>,
     Path(block_id): Path<i64>,
     Json(input): Json<ResolveDeliveryBlock>,
-) -> Result<StatusCode, FleetError> {
+) -> Result<StatusCode, ApiError> {
     require_operator(&principal)?;
     state.store.resolve_delivery_block(block_id, input).await?;
     Ok(StatusCode::NO_CONTENT)

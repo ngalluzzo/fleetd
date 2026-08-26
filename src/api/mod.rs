@@ -25,9 +25,12 @@ use crate::{
     stream_grant_broker::StreamGrantBroker,
 };
 
+use error::ApiError;
+
 mod agents;
 mod channels;
 mod deliveries;
+pub mod error;
 mod guard;
 mod invocations;
 mod messages;
@@ -215,7 +218,7 @@ async fn authenticate(
     State(state): State<AppState>,
     mut request: Request,
     next: Next,
-) -> Result<Response, FleetError> {
+) -> Result<Response, ApiError> {
     let header = request
         .headers()
         .get(AUTHORIZATION)

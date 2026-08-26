@@ -1,8 +1,8 @@
-use axum::{
-    Json,
-    http::{HeaderValue, StatusCode, header::WWW_AUTHENTICATE},
-    response::{IntoResponse, Response},
-};
+//! Domain and persistence errors raised by the kernel.
+//!
+//! How one of these becomes an HTTP response is the HTTP layer's decision; see
+//! `api::error::ApiError`.
+
 use thiserror::Error;
 
 pub use fleetd_proto::error::ErrorResponse;
@@ -39,43 +39,4 @@ pub enum FleetError {
     Credential(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-}
-
-impl IntoResponse for FleetError {
-    fn into_response(self) -> Response {
-        let status = match &self {
-            Self::NotFound { .. } => StatusCode::NOT_FOUND,
-            Self::NotMember { .. } | Self::Forbidden(_) => StatusCode::FORBIDDEN,
-            Self::Invalid(_) => StatusCode::BAD_REQUEST,
-            Self::Unauthorized => StatusCode::UNAUTHORIZED,
-            Self::Conflict(_) | Self::LeaseConflict(_) => StatusCode::CONFLICT,
-            Self::ResourceExhausted(_) => StatusCode::TOO_MANY_REQUESTS,
-            Self::Database(_)
-            | Self::Migration(_)
-            | Self::Serialization(_)
-            | Self::Credential(_)
-            | Self::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        let public_message = match &self {
-            Self::Database(_)
-            | Self::Migration(_)
-            | Self::Serialization(_)
-            | Self::Credential(_)
-            | Self::Io(_) => {
-                tracing::error!(error = %self, "request failed");
-                "internal server error".to_owned()
-            }
-            _ => self.to_string(),
-        };
-        let body = Json(ErrorResponse {
-            error: public_message,
-        });
-        let mut response = (status, body).into_response();
-        if status == StatusCode::UNAUTHORIZED {
-            response
-                .headers_mut()
-                .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
-        }
-        response
-    }
 }

@@ -11,13 +11,14 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::Principal,
-    error::{ErrorResponse, FleetError},
+    error::ErrorResponse,
     message_commit_hint::MessageCommitWake,
     model::{CreateMessage, Message, SendMessage},
 };
 
 use super::{
     AppState,
+    error::ApiError,
     guard::{require_agent, require_channel_access},
 };
 
@@ -51,7 +52,7 @@ async fn append_message(
     Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
     Json(input): Json<SendMessage>,
-) -> Result<(StatusCode, Json<Message>), FleetError> {
+) -> Result<(StatusCode, Json<Message>), ApiError> {
     let input: CreateMessage = input.attributed_to(require_agent(&principal)?);
     let result = state
         .store
@@ -113,7 +114,7 @@ async fn list_messages(
     Extension(principal): Extension<Principal>,
     Path(channel_id): Path<String>,
     Query(query): Query<PageQuery>,
-) -> Result<Json<crate::model::MessagePage>, FleetError> {
+) -> Result<Json<crate::model::MessagePage>, ApiError> {
     require_channel_access(&state, &principal, &channel_id).await?;
     Ok(Json(
         state
