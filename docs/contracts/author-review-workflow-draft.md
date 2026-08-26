@@ -56,10 +56,21 @@ The request params are exactly `{}`. The result contains:
 }
 ```
 
-The actual response contains exactly seven unique event records with the
-plugin-owned semantic payload schema for each initial vocabulary kind. The
-paired runner rejects another interface ID, version, plugin ID, duplicate kind,
-or incomplete vocabulary before leasing work.
+The actual response contains exactly seven unique event records. Each `schema`
+is a JSON Schema Draft 2020-12 document for the plugin-owned semantic payloads
+that the plugin emits or accepts for that kind. The schemas enumerate each
+root, assignment, artifact, review, and terminal variant; close every semantic
+object (including nested repository, proposal, artifact-reference, and
+expected-output objects); and declare required fields and global string, list,
+child, and revision bounds. `x-fleetd-maxBytes` records the plugin's UTF-8 byte
+bound in addition to the standard JSON Schema string-length bound.
+
+The managed envelope transcript accepted for `artifact.proposed` and
+`review.completed` is a carrier rather than another semantic variant: the
+plugin extracts its one complete final-assistant JSON object and decodes that
+object as the same closed semantic type represented by the declared schema.
+The paired runner rejects another interface ID, version, plugin ID, duplicate
+kind, or incomplete vocabulary before leasing work.
 
 ### `workflow.evaluate`
 
@@ -115,8 +126,9 @@ The plugin accepts runner deliveries only for initial `work.requested`,
 `artifact.proposed`, and `review.completed`. It emits the seven-kind vocabulary.
 Configuration supplies one coordinator ID, non-empty author and reviewer
 candidate lists, `max_children` from 1 through 16, and
-`max_revision_rounds` from 0 through 8. Every role candidate must be a current
-`inbox` member; the selected reviewer must differ from the child author.
+`max_revision_rounds` from 0 through 8 inclusive. Every role candidate must be
+a current `inbox` member; the selected reviewer must differ from the child
+author.
 
 The coordinator proposes a decomposition artifact. Each unique child becomes
 a first-class `work.requested` assigned round-robin to an author. A change
@@ -124,6 +136,14 @@ artifact is reviewed against its exact message and artifact revisions. Approval
 completes the child; revision returns it to its original author. The parent
 completes only when every child is complete and blocks when a child exceeds its
 revision bound.
+
+The initial artifact is revision `0` and does not consume a revision round. A
+configuration value `N` permits at most `N` additional author attempts,
+numbered `1` through `N`. A `revise` decision on revision `r` emits revision
+`r + 1` only when `r < N`; a `revise` decision when `r >= N` blocks the child
+and parent. Thus `0` permits review of the initial artifact but blocks its first
+`revise` decision, while `8` permits revisions `1` through `8` and blocks a
+`revise` decision on revision `8`.
 
 ## Recovery and failure
 

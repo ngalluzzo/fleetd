@@ -29,7 +29,7 @@ The first flow requires a coordinator to propose a bounded decomposition. The
 plugin materializes every child as an ordinary `work.requested` addressed to a
 selected author in the same channel. Proposed changes go to a distinct
 reviewer. Approval completes a child; revision returns it to its original
-author; exceeding the configured revision bound blocks the child and parent.
+author; exhausting the configured revision rounds blocks the child and parent.
 The parent completes only when every child is approved.
 
 All messages remain visible to every channel member. Addressing selects the
@@ -79,8 +79,10 @@ and result kinds:
 The current envelope worker returns a bounded assistant transcript. For
 `artifact.proposed` and `review.completed`, the plugin accepts either a direct
 semantic payload or one exact complete final-assistant JSON object carried by
-that transcript. This is an intentional first-integration coupling, not a
-normalization layer.
+that transcript. The seven declared Draft 2020-12 schemas describe the same
+semantic objects after that extraction, including every variant, closed nested
+objects, required fields, and global bounds. This is an intentional
+first-integration coupling, not a normalization layer.
 
 Submit the root request to the runner with `correlation_id` equal to
 `request_id`:
@@ -100,7 +102,12 @@ Submit the root request to the runner with `correlation_id` equal to
 }
 ```
 
-The experiment currently permits one fan-out level, at most 16 children, and
-at most eight revision rounds. It does not create Git worktrees, merge code,
-or interpret repository state. Existing agents and Git tools retain those
-responsibilities while the workflow records their exact artifact references.
+The experiment currently permits one fan-out level, at most 16 children, and a
+configured `max_revision_rounds` from 0 through 8 inclusive. Revision `0` is
+the initial artifact and does not consume a round. A value `N` permits
+additional revisions `1` through `N`; a `revise` decision on revision `N`
+blocks the child and parent. Therefore `0` blocks the first `revise` decision,
+while `8` permits eight additional author attempts. The experiment does not
+create Git worktrees, merge code, or interpret repository state. Existing
+agents and Git tools retain those responsibilities while the workflow records
+their exact artifact references.

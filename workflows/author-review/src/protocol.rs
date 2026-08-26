@@ -11,6 +11,8 @@ pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
 pub const MAX_HISTORY_MESSAGES: usize = 10_000;
 pub const MAX_MEMBERS: usize = 256;
 pub const MAX_PROPOSALS: usize = 32;
+pub const MIN_REVISION_ROUNDS: u32 = 0;
+pub const MAX_REVISION_ROUNDS: u32 = 8;
 
 pub const WORK_REQUESTED: &str = "work.requested";
 pub const ARTIFACT_PROPOSED: &str = "artifact.proposed";

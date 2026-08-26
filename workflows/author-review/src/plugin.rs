@@ -8,14 +8,16 @@ use thiserror::Error;
 
 use crate::protocol::{
     ARTIFACT_PROPOSED, DescribeResult, EVENT_KINDS, EvaluateParams, EvaluateResult, EventSchema,
-    INTERFACE_ID, INTERFACE_VERSION, MAX_HISTORY_MESSAGES, MAX_MEMBERS, MAX_PROPOSALS, PLUGIN_ID,
-    PLUGIN_VERSION, ProposedMessage, REVIEW_COMPLETED, REVIEW_REQUESTED, REVISION_REQUESTED,
-    WORK_BLOCKED, WORK_COMPLETED, WORK_REQUESTED, WorkflowMessage,
+    INTERFACE_ID, INTERFACE_VERSION, MAX_HISTORY_MESSAGES, MAX_MEMBERS, MAX_PROPOSALS,
+    MAX_REVISION_ROUNDS, MIN_REVISION_ROUNDS, PLUGIN_ID, PLUGIN_VERSION, ProposedMessage,
+    REVIEW_COMPLETED, REVIEW_REQUESTED, REVISION_REQUESTED, WORK_BLOCKED, WORK_COMPLETED,
+    WORK_REQUESTED, WorkflowMessage,
 };
 
 const MAX_ID_BYTES: usize = 128;
 const MAX_TEXT_BYTES: usize = 8 * 1024;
 const MAX_LIST_ITEMS: usize = 64;
+const MAX_CHILDREN: usize = 16;
 
 #[derive(Debug, Error)]
 pub enum AuthorReviewError {
@@ -201,37 +203,25 @@ fn evaluate_root_request(
             "root request must originate outside the workflow runner".to_owned(),
         ));
     }
-    let already_assigned = find_assignment(
-        &params.history,
-        &params.runner_agent_id,
-        WORK_REQUESTED,
-        &request.request_id,
-        "coordinator",
-        0,
-    )
-    .is_some();
-    let proposals = if already_assigned {
-        Vec::new()
-    } else {
-        vec![ProposedMessage {
-            operation_id: format!("assign-coordinator:{}", request.request_id),
-            recipient_id: configuration.coordinator_agent_id.clone(),
-            kind: WORK_REQUESTED.to_owned(),
-            payload: json!({
-                "schema_version": 1,
-                "request_id": request.request_id,
-                "parent_request_id": null,
-                "assignment": "coordinator",
-                "revision": 0,
-                "change_request": request,
-                "expected_output": {
-                    "kind": ARTIFACT_PROPOSED,
-                    "artifact_type": "decomposition",
-                    "instruction": "Return only one JSON object matching the decomposition artifact schema as the final assistant message."
-                }
-            }),
-        }]
+    let proposal = ProposedMessage {
+        operation_id: format!("assign-coordinator:{}", request.request_id),
+        recipient_id: configuration.coordinator_agent_id.clone(),
+        kind: WORK_REQUESTED.to_owned(),
+        payload: json!({
+            "schema_version": 1,
+            "request_id": request.request_id,
+            "parent_request_id": null,
+            "assignment": "coordinator",
+            "revision": 0,
+            "change_request": request,
+            "expected_output": {
+                "kind": ARTIFACT_PROPOSED,
+                "artifact_type": "decomposition",
+                "instruction": "Return only one JSON object matching the decomposition artifact schema as the final assistant message."
+            }
+        }),
     };
+    let proposals = missing_effect(params, proposal).into_iter().collect();
     Ok(EvaluateResult {
         projection: json!({
             "workflow_id": params.workflow_id,
@@ -337,20 +327,8 @@ fn evaluate_decomposition(
     let root = find_root_request(&params.history, request_id)?;
     let mut proposals = Vec::new();
     for (index, child) in children.iter().enumerate() {
-        if find_assignment(
-            &params.history,
-            &params.runner_agent_id,
-            WORK_REQUESTED,
-            &child.request_id,
-            "author",
-            0,
-        )
-        .is_some()
-        {
-            continue;
-        }
         let author = &configuration.author_agent_ids[index % configuration.author_agent_ids.len()];
-        proposals.push(ProposedMessage {
+        let proposal = ProposedMessage {
             operation_id: format!("assign-author:{}:0", child.request_id),
             recipient_id: author.clone(),
             kind: WORK_REQUESTED.to_owned(),
@@ -368,7 +346,8 @@ fn evaluate_decomposition(
                     "instruction": "Implement the bounded change, then return only one JSON object matching the change artifact schema as the final assistant message."
                 }
             }),
-        });
+        };
+        proposals.extend(missing_effect(params, proposal));
     }
     Ok(EvaluateResult {
         projection: projection(params, request_id, "awaiting_child_artifacts", children),
@@ -433,46 +412,33 @@ fn evaluate_change_artifact(
             "change artifact sender is not its assigned author".to_owned(),
         ));
     }
-    let already_requested = params.history.iter().any(|message| {
-        message.sender_id == params.runner_agent_id
-            && message.kind == REVIEW_REQUESTED
-            && assignment_identity(message).is_some_and(|identity| {
-                identity.request_id == artifact.request_id
-                    && identity.revision == artifact.revision
-                    && identity.proposal_message_id.as_deref() == Some(&params.input.id)
-            })
-    });
-    let proposals = if already_requested {
-        Vec::new()
-    } else {
-        let reviewer =
-            select_reviewer(configuration, &params.input.sender_id, artifact.request_id)?;
-        vec![ProposedMessage {
-            operation_id: format!(
-                "request-review:{}:{}:{}",
-                artifact.request_id, artifact.revision, params.input.id
-            ),
-            recipient_id: reviewer.to_owned(),
-            kind: REVIEW_REQUESTED.to_owned(),
-            payload: json!({
-                "schema_version": 1,
-                "request_id": artifact.request_id,
-                "parent_request_id": params.workflow_id,
-                "assignment": "reviewer",
-                "revision": artifact.revision,
-                "proposal_message_id": params.input.id,
-                "proposal": {
-                    "summary": artifact.summary,
-                    "artifacts": artifact.artifacts,
-                    "evidence": artifact.evidence
-                },
-                "expected_output": {
-                    "kind": REVIEW_COMPLETED,
-                    "instruction": "Review the exact proposed artifacts and evidence, then return only one JSON object matching the completed review schema as the final assistant message."
-                }
-            }),
-        }]
+    let reviewer = select_reviewer(configuration, &params.input.sender_id, artifact.request_id)?;
+    let proposal = ProposedMessage {
+        operation_id: format!(
+            "request-review:{}:{}:{}",
+            artifact.request_id, artifact.revision, params.input.id
+        ),
+        recipient_id: reviewer.to_owned(),
+        kind: REVIEW_REQUESTED.to_owned(),
+        payload: json!({
+            "schema_version": 1,
+            "request_id": artifact.request_id,
+            "parent_request_id": params.workflow_id,
+            "assignment": "reviewer",
+            "revision": artifact.revision,
+            "proposal_message_id": params.input.id,
+            "proposal": {
+                "summary": artifact.summary,
+                "artifacts": artifact.artifacts,
+                "evidence": artifact.evidence
+            },
+            "expected_output": {
+                "kind": REVIEW_COMPLETED,
+                "instruction": "Review the exact proposed artifacts and evidence, then return only one JSON object matching the completed review schema as the final assistant message."
+            }
+        }),
     };
+    let proposals = missing_effect(params, proposal).into_iter().collect();
     let children = find_children(&params.history, &params.workflow_id)?;
     Ok(EvaluateResult {
         projection: projection(params, &params.workflow_id, "awaiting_review", &children),
@@ -559,36 +525,23 @@ fn approve_review(
     children: &[ChildRequest],
 ) -> Result<Vec<ProposedMessage>, AuthorReviewError> {
     let mut proposals = Vec::new();
-    if !has_terminal_event(
-        &params.history,
-        &params.runner_agent_id,
-        WORK_COMPLETED,
-        &review.request_id,
-    ) {
-        proposals.push(ProposedMessage {
-            operation_id: format!("complete-child:{}:{}", review.request_id, review.revision),
-            recipient_id: root_requester(&params.history, &params.workflow_id)?.to_owned(),
-            kind: WORK_COMPLETED.to_owned(),
-            payload: json!({
-                "schema_version": 1,
-                "request_id": review.request_id,
-                "parent_request_id": params.workflow_id,
-                "revision": review.revision,
-                "proposal_message_id": proposal_message_id,
-                "review_message_id": params.input.id,
-                "summary": review.summary
-            }),
-        });
-    }
-    if parent_will_be_complete(params, &review.request_id, children)
-        && !has_terminal_event(
-            &params.history,
-            &params.runner_agent_id,
-            WORK_COMPLETED,
-            &params.workflow_id,
-        )
-    {
-        proposals.push(ProposedMessage {
+    let complete_child = ProposedMessage {
+        operation_id: format!("complete-child:{}:{}", review.request_id, review.revision),
+        recipient_id: root_requester(&params.history, &params.workflow_id)?.to_owned(),
+        kind: WORK_COMPLETED.to_owned(),
+        payload: json!({
+            "schema_version": 1,
+            "request_id": review.request_id,
+            "parent_request_id": params.workflow_id,
+            "revision": review.revision,
+            "proposal_message_id": proposal_message_id,
+            "review_message_id": params.input.id,
+            "summary": review.summary
+        }),
+    };
+    proposals.extend(missing_effect(params, complete_child));
+    if parent_will_be_complete(params, &review.request_id, children) {
+        let complete_parent = ProposedMessage {
             operation_id: format!("complete-parent:{}", params.workflow_id),
             recipient_id: root_requester(&params.history, &params.workflow_id)?.to_owned(),
             kind: WORK_COMPLETED.to_owned(),
@@ -600,7 +553,8 @@ fn approve_review(
                 "children": children.iter().map(|child| child.request_id.clone()).collect::<Vec<_>>(),
                 "summary": "Every child change request completed its author-review policy."
             }),
-        });
+        };
+        proposals.extend(missing_effect(params, complete_parent));
     }
     Ok(proposals)
 }
@@ -621,61 +575,37 @@ fn revise_review(
     let requester = root_requester(&params.history, &params.workflow_id)?;
     if review.revision >= configuration.max_revision_rounds {
         let mut proposals = Vec::new();
-        if !has_terminal_event(
-            &params.history,
-            &params.runner_agent_id,
-            WORK_BLOCKED,
-            &review.request_id,
-        ) {
-            proposals.push(ProposedMessage {
-                operation_id: format!("block-child:{}", review.request_id),
-                recipient_id: requester.to_owned(),
-                kind: WORK_BLOCKED.to_owned(),
-                payload: json!({
-                    "schema_version": 1,
-                    "request_id": review.request_id,
-                    "parent_request_id": params.workflow_id,
-                    "reason": "revision_limit_reached",
-                    "revision": review.revision,
-                    "findings": review.findings
-                }),
-            });
-        }
-        if !has_terminal_event(
-            &params.history,
-            &params.runner_agent_id,
-            WORK_BLOCKED,
-            &params.workflow_id,
-        ) {
-            proposals.push(ProposedMessage {
-                operation_id: format!("block-parent:{}", params.workflow_id),
-                recipient_id: requester.to_owned(),
-                kind: WORK_BLOCKED.to_owned(),
-                payload: json!({
-                    "schema_version": 1,
-                    "request_id": params.workflow_id,
-                    "parent_request_id": null,
-                    "title": root.title,
-                    "reason": "child_revision_limit_reached",
-                    "blocked_child_id": review.request_id
-                }),
-            });
-        }
+        let block_child = ProposedMessage {
+            operation_id: format!("block-child:{}", review.request_id),
+            recipient_id: requester.to_owned(),
+            kind: WORK_BLOCKED.to_owned(),
+            payload: json!({
+                "schema_version": 1,
+                "request_id": review.request_id,
+                "parent_request_id": params.workflow_id,
+                "reason": "revision_limit_reached",
+                "revision": review.revision,
+                "findings": review.findings
+            }),
+        };
+        proposals.extend(missing_effect(params, block_child));
+        let block_parent = ProposedMessage {
+            operation_id: format!("block-parent:{}", params.workflow_id),
+            recipient_id: requester.to_owned(),
+            kind: WORK_BLOCKED.to_owned(),
+            payload: json!({
+                "schema_version": 1,
+                "request_id": params.workflow_id,
+                "parent_request_id": null,
+                "title": root.title,
+                "reason": "child_revision_limit_reached",
+                "blocked_child_id": review.request_id
+            }),
+        };
+        proposals.extend(missing_effect(params, block_parent));
         return Ok(proposals);
     }
     let next_revision = review.revision + 1;
-    if find_assignment(
-        &params.history,
-        &params.runner_agent_id,
-        REVISION_REQUESTED,
-        &review.request_id,
-        "author",
-        next_revision,
-    )
-    .is_some()
-    {
-        return Ok(Vec::new());
-    }
     let original_author = find_assignment(
         &params.history,
         &params.runner_agent_id,
@@ -686,7 +616,7 @@ fn revise_review(
     )
     .and_then(|message| message.recipient_id.as_deref())
     .ok_or_else(|| AuthorReviewError::Evaluation("child has no original author".to_owned()))?;
-    Ok(vec![ProposedMessage {
+    let proposal = ProposedMessage {
         operation_id: format!("request-revision:{}:{next_revision}", review.request_id),
         recipient_id: original_author.to_owned(),
         kind: REVISION_REQUESTED.to_owned(),
@@ -706,7 +636,8 @@ fn revise_review(
                 "instruction": "Address every finding, then return only one JSON object matching the change artifact schema as the final assistant message."
             }
         }),
-    }])
+    };
+    Ok(missing_effect(params, proposal).into_iter().collect())
 }
 
 fn validate_evaluation(params: &EvaluateParams) -> Result<(), AuthorReviewError> {
@@ -744,6 +675,7 @@ fn validate_evaluation(params: &EvaluateParams) -> Result<(), AuthorReviewError>
     let mut found_input = false;
     for message in &params.history {
         if message.channel_id != params.input.channel_id
+            || message.correlation_id.as_deref() != Some(params.workflow_id.as_str())
             || message.seq <= previous_seq
             || !message_ids.insert(message.id.as_str())
         {
@@ -782,15 +714,15 @@ fn validate_configuration(
             "author and reviewer candidate sets must be non-empty and bounded".to_owned(),
         ));
     }
-    if configuration.max_children == 0 || configuration.max_children > 16 {
-        return Err(AuthorReviewError::Configuration(
-            "max_children must be between 1 and 16".to_owned(),
-        ));
+    if configuration.max_children == 0 || configuration.max_children > MAX_CHILDREN {
+        return Err(AuthorReviewError::Configuration(format!(
+            "max_children must be between 1 and {MAX_CHILDREN}"
+        )));
     }
-    if configuration.max_revision_rounds > 8 {
-        return Err(AuthorReviewError::Configuration(
-            "max_revision_rounds must not exceed 8".to_owned(),
-        ));
+    if !(MIN_REVISION_ROUNDS..=MAX_REVISION_ROUNDS).contains(&configuration.max_revision_rounds) {
+        return Err(AuthorReviewError::Configuration(format!(
+            "max_revision_rounds must be between {MIN_REVISION_ROUNDS} and {MAX_REVISION_ROUNDS}"
+        )));
     }
     let members = params
         .members
@@ -1001,6 +933,18 @@ fn extract_semantic_payload(message: &WorkflowMessage) -> Result<Value, AuthorRe
     serde_json::from_str(&text).map_err(|error| payload_error(&message.kind, error.to_string()))
 }
 
+fn missing_effect(params: &EvaluateParams, proposal: ProposedMessage) -> Option<ProposedMessage> {
+    let committed = params.history.iter().any(|message| {
+        message.sender_id == params.runner_agent_id
+            && message.recipient_id.as_deref() == Some(proposal.recipient_id.as_str())
+            && message.kind == proposal.kind
+            && message.payload == proposal.payload
+            && message.correlation_id.as_deref() == Some(params.workflow_id.as_str())
+            && message.causation_id.as_deref() == Some(params.input.id.as_str())
+    });
+    (!committed).then_some(proposal)
+}
+
 fn find_assignment<'a>(
     history: &'a [WorkflowMessage],
     runner_agent_id: &str,
@@ -1185,156 +1129,399 @@ fn event_schema(kind: &str) -> Value {
 }
 
 fn work_requested_schema() -> Value {
-    json!({
+    schema_root(json!({
         "oneOf": [
-            {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["schema_version", "request_id", "title", "objective", "repository", "scope", "acceptance_criteria"],
-                "properties": {
-                    "schema_version": {"const": 1}, "request_id": {"type": "string"},
-                    "title": {"type": "string"}, "objective": {"type": "string"},
-                    "repository": {"type": "object"}, "scope": {"type": "array"},
-                    "acceptance_criteria": {"type": "array"}
-                }
-            },
-            {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["schema_version", "request_id", "parent_request_id", "assignment", "revision", "change_request", "expected_output"],
-                "properties": {
-                    "schema_version": {"const": 1}, "request_id": {"type": "string"},
-                    "parent_request_id": {"type": ["string", "null"]},
-                    "assignment": {"enum": ["coordinator", "author"]},
-                    "revision": {"type": "integer", "minimum": 0},
-                    "repository": {"type": "object"}, "change_request": {"type": "object"},
-                    "expected_output": {"type": "object"}
-                }
-            }
+            change_request_schema(),
+            object_schema(
+                &["schema_version", "request_id", "parent_request_id", "assignment", "revision", "change_request", "expected_output"],
+                json!({
+                    "schema_version": {"const": 1},
+                    "request_id": identifier_schema(),
+                    "parent_request_id": {"const": null},
+                    "assignment": {"const": "coordinator"},
+                    "revision": {"const": 0},
+                    "change_request": change_request_schema(),
+                    "expected_output": decomposition_output_schema()
+                })
+            ),
+            object_schema(
+                &["schema_version", "request_id", "parent_request_id", "assignment", "revision", "repository", "change_request", "expected_output"],
+                json!({
+                    "schema_version": {"const": 1},
+                    "request_id": identifier_schema(),
+                    "parent_request_id": identifier_schema(),
+                    "assignment": {"const": "author"},
+                    "revision": {"const": 0},
+                    "repository": repository_schema(),
+                    "change_request": child_request_schema(),
+                    "expected_output": change_output_schema(false)
+                })
+            )
         ]
-    })
+    }))
 }
 
 fn artifact_proposed_schema() -> Value {
-    json!({
+    schema_root(json!({
         "oneOf": [
-            {
-                "type": "object", "additionalProperties": false,
-                "required": ["schema_version", "request_id", "artifact_type", "children"],
-                "properties": {
-                    "schema_version": {"const": 1}, "request_id": {"type": "string"},
+            object_schema(
+                &["schema_version", "request_id", "artifact_type", "children"],
+                json!({
+                    "schema_version": {"const": 1},
+                    "request_id": identifier_schema(),
                     "artifact_type": {"const": "decomposition"},
-                    "children": {"type": "array", "minItems": 1}
-                }
-            },
-            {
-                "type": "object", "additionalProperties": false,
-                "required": ["schema_version", "request_id", "artifact_type", "revision", "summary", "artifacts", "evidence"],
-                "properties": {
-                    "schema_version": {"const": 1}, "request_id": {"type": "string"},
+                    "children": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": MAX_CHILDREN,
+                        "items": child_request_schema()
+                    }
+                })
+            ),
+            object_schema(
+                &["schema_version", "request_id", "artifact_type", "revision", "summary", "artifacts", "evidence"],
+                json!({
+                    "schema_version": {"const": 1},
+                    "request_id": identifier_schema(),
                     "artifact_type": {"const": "change"},
-                    "revision": {"type": "integer", "minimum": 0},
-                    "summary": {"type": "string"},
-                    "artifacts": {"type": "array", "minItems": 1}, "evidence": {"type": "array"}
-                }
-            }
+                    "revision": revision_schema(0),
+                    "summary": text_schema(),
+                    "artifacts": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": MAX_LIST_ITEMS,
+                        "items": artifact_reference_schema()
+                    },
+                    "evidence": text_list_schema(0)
+                })
+            )
         ]
-    })
+    }))
 }
 
 fn review_requested_schema() -> Value {
-    json!({
-        "type": "object", "additionalProperties": false,
-        "required": ["schema_version", "request_id", "parent_request_id", "assignment", "revision", "proposal_message_id", "proposal", "expected_output"],
-        "properties": {
-            "schema_version": {"const": 1}, "request_id": {"type": "string"},
-            "parent_request_id": {"type": "string"}, "assignment": {"const": "reviewer"},
-            "revision": {"type": "integer", "minimum": 0},
-            "proposal_message_id": {"type": "string"}, "proposal": {"type": "object"},
-            "expected_output": {"type": "object"}
-        }
-    })
+    schema_root(object_schema(
+        &[
+            "schema_version",
+            "request_id",
+            "parent_request_id",
+            "assignment",
+            "revision",
+            "proposal_message_id",
+            "proposal",
+            "expected_output",
+        ],
+        json!({
+            "schema_version": {"const": 1},
+            "request_id": identifier_schema(),
+            "parent_request_id": identifier_schema(),
+            "assignment": {"const": "reviewer"},
+            "revision": revision_schema(0),
+            "proposal_message_id": identifier_schema(),
+            "proposal": object_schema(
+                &["summary", "artifacts", "evidence"],
+                json!({
+                    "summary": text_schema(),
+                    "artifacts": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": MAX_LIST_ITEMS,
+                        "items": artifact_reference_schema()
+                    },
+                    "evidence": text_list_schema(0)
+                })
+            ),
+            "expected_output": review_output_schema()
+        }),
+    ))
 }
 
 fn review_completed_schema() -> Value {
-    json!({
-        "type": "object", "additionalProperties": false,
-        "required": ["schema_version", "request_id", "revision", "decision", "summary", "findings"],
-        "properties": {
-            "schema_version": {"const": 1}, "request_id": {"type": "string"},
-            "revision": {"type": "integer", "minimum": 0},
-            "decision": {"enum": ["approve", "revise"]},
-            "summary": {"type": "string"},
-            "findings": {"type": "array", "items": {"type": "string"}}
-        }
-    })
+    schema_root(json!({
+        "oneOf": [
+            completed_review_variant("approve", 0),
+            completed_review_variant("revise", 1)
+        ]
+    }))
 }
 
 fn revision_requested_schema() -> Value {
-    json!({
-        "type": "object", "additionalProperties": false,
-        "required": ["schema_version", "request_id", "parent_request_id", "assignment", "revision", "prior_proposal_message_id", "review_message_id", "findings", "expected_output"],
-        "properties": {
-            "schema_version": {"const": 1}, "request_id": {"type": "string"},
-            "parent_request_id": {"type": "string"}, "assignment": {"const": "author"},
-            "revision": {"type": "integer", "minimum": 1},
-            "prior_proposal_message_id": {"type": "string"}, "review_message_id": {"type": "string"},
-            "findings": {"type": "array", "minItems": 1}, "expected_output": {"type": "object"}
-        }
-    })
+    schema_root(object_schema(
+        &[
+            "schema_version",
+            "request_id",
+            "parent_request_id",
+            "assignment",
+            "revision",
+            "prior_proposal_message_id",
+            "review_message_id",
+            "findings",
+            "expected_output",
+        ],
+        json!({
+            "schema_version": {"const": 1},
+            "request_id": identifier_schema(),
+            "parent_request_id": identifier_schema(),
+            "assignment": {"const": "author"},
+            "revision": revision_schema(1),
+            "prior_proposal_message_id": identifier_schema(),
+            "review_message_id": identifier_schema(),
+            "findings": text_list_schema(1),
+            "expected_output": change_output_schema(true)
+        }),
+    ))
 }
 
 fn work_completed_schema() -> Value {
-    json!({
+    schema_root(json!({
         "oneOf": [
-            {
-                "type": "object", "additionalProperties": false,
-                "required": ["schema_version", "request_id", "parent_request_id", "revision", "proposal_message_id", "review_message_id", "summary"],
-                "properties": {
-                    "schema_version": {"const": 1}, "request_id": {"type": "string"},
-                    "parent_request_id": {"type": "string"},
-                    "revision": {"type": "integer", "minimum": 0},
-                    "proposal_message_id": {"type": "string"}, "review_message_id": {"type": "string"},
-                    "summary": {"type": "string"}
-                }
-            },
-            {
-                "type": "object", "additionalProperties": false,
-                "required": ["schema_version", "request_id", "parent_request_id", "title", "children", "summary"],
-                "properties": {
-                    "schema_version": {"const": 1}, "request_id": {"type": "string"},
-                    "parent_request_id": {"type": "null"}, "title": {"type": "string"},
-                    "children": {"type": "array", "minItems": 1, "items": {"type": "string"}},
-                    "summary": {"type": "string"}
-                }
-            }
+            object_schema(
+                &["schema_version", "request_id", "parent_request_id", "revision", "proposal_message_id", "review_message_id", "summary"],
+                json!({
+                    "schema_version": {"const": 1},
+                    "request_id": identifier_schema(),
+                    "parent_request_id": identifier_schema(),
+                    "revision": revision_schema(0),
+                    "proposal_message_id": identifier_schema(),
+                    "review_message_id": identifier_schema(),
+                    "summary": text_schema()
+                })
+            ),
+            object_schema(
+                &["schema_version", "request_id", "parent_request_id", "title", "children", "summary"],
+                json!({
+                    "schema_version": {"const": 1},
+                    "request_id": identifier_schema(),
+                    "parent_request_id": {"const": null},
+                    "title": text_schema(),
+                    "children": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": MAX_CHILDREN,
+                        "uniqueItems": true,
+                        "items": identifier_schema()
+                    },
+                    "summary": text_schema()
+                })
+            )
         ]
-    })
+    }))
 }
 
 fn work_blocked_schema() -> Value {
-    json!({
+    schema_root(json!({
         "oneOf": [
-            {
-                "type": "object", "additionalProperties": false,
-                "required": ["schema_version", "request_id", "parent_request_id", "reason", "revision", "findings"],
-                "properties": {
-                    "schema_version": {"const": 1}, "request_id": {"type": "string"},
-                    "parent_request_id": {"type": "string"}, "reason": {"const": "revision_limit_reached"},
-                    "revision": {"type": "integer", "minimum": 0},
-                    "findings": {"type": "array", "minItems": 1}
-                }
-            },
-            {
-                "type": "object", "additionalProperties": false,
-                "required": ["schema_version", "request_id", "parent_request_id", "title", "reason", "blocked_child_id"],
-                "properties": {
-                    "schema_version": {"const": 1}, "request_id": {"type": "string"},
-                    "parent_request_id": {"type": "null"}, "title": {"type": "string"},
+            object_schema(
+                &["schema_version", "request_id", "parent_request_id", "reason", "revision", "findings"],
+                json!({
+                    "schema_version": {"const": 1},
+                    "request_id": identifier_schema(),
+                    "parent_request_id": identifier_schema(),
+                    "reason": {"const": "revision_limit_reached"},
+                    "revision": revision_schema(0),
+                    "findings": text_list_schema(1)
+                })
+            ),
+            object_schema(
+                &["schema_version", "request_id", "parent_request_id", "title", "reason", "blocked_child_id"],
+                json!({
+                    "schema_version": {"const": 1},
+                    "request_id": identifier_schema(),
+                    "parent_request_id": {"const": null},
+                    "title": text_schema(),
                     "reason": {"const": "child_revision_limit_reached"},
-                    "blocked_child_id": {"type": "string"}
-                }
-            }
+                    "blocked_child_id": identifier_schema()
+                })
+            )
         ]
+    }))
+}
+
+fn schema_root(mut schema: Value) -> Value {
+    schema
+        .as_object_mut()
+        .expect("event schemas are objects")
+        .insert(
+            "$schema".to_owned(),
+            Value::String("https://json-schema.org/draft/2020-12/schema".to_owned()),
+        );
+    schema
+}
+
+fn object_schema(required: &[&str], properties: Value) -> Value {
+    let mut schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": required
+    });
+    schema
+        .as_object_mut()
+        .expect("object schemas are objects")
+        .insert("properties".to_owned(), properties);
+    schema
+}
+
+fn identifier_schema() -> Value {
+    json!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAX_ID_BYTES,
+        "pattern": "\\S",
+        "x-fleetd-maxBytes": MAX_ID_BYTES
     })
+}
+
+fn text_schema() -> Value {
+    json!({
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAX_TEXT_BYTES,
+        "pattern": "\\S",
+        "x-fleetd-maxBytes": MAX_TEXT_BYTES
+    })
+}
+
+fn revision_schema(minimum: u32) -> Value {
+    json!({
+        "type": "integer",
+        "minimum": minimum,
+        "maximum": MAX_REVISION_ROUNDS
+    })
+}
+
+fn text_list_schema(min_items: usize) -> Value {
+    json!({
+        "type": "array",
+        "minItems": min_items,
+        "maxItems": MAX_LIST_ITEMS,
+        "items": text_schema()
+    })
+}
+
+fn repository_schema() -> Value {
+    object_schema(
+        &["path", "base_revision"],
+        json!({
+            "path": text_schema(),
+            "base_revision": identifier_schema()
+        }),
+    )
+}
+
+fn change_request_schema() -> Value {
+    object_schema(
+        &[
+            "schema_version",
+            "request_id",
+            "title",
+            "objective",
+            "repository",
+            "scope",
+            "acceptance_criteria",
+        ],
+        json!({
+            "schema_version": {"const": 1},
+            "request_id": identifier_schema(),
+            "title": text_schema(),
+            "objective": text_schema(),
+            "repository": repository_schema(),
+            "scope": text_list_schema(1),
+            "acceptance_criteria": text_list_schema(1)
+        }),
+    )
+}
+
+fn child_request_schema() -> Value {
+    object_schema(
+        &[
+            "request_id",
+            "title",
+            "objective",
+            "scope",
+            "acceptance_criteria",
+        ],
+        json!({
+            "request_id": identifier_schema(),
+            "title": text_schema(),
+            "objective": text_schema(),
+            "scope": text_list_schema(1),
+            "acceptance_criteria": text_list_schema(1)
+        }),
+    )
+}
+
+fn artifact_reference_schema() -> Value {
+    object_schema(
+        &["kind", "uri", "revision"],
+        json!({
+            "kind": identifier_schema(),
+            "uri": text_schema(),
+            "revision": identifier_schema()
+        }),
+    )
+}
+
+fn decomposition_output_schema() -> Value {
+    object_schema(
+        &["kind", "artifact_type", "instruction"],
+        json!({
+            "kind": {"const": ARTIFACT_PROPOSED},
+            "artifact_type": {"const": "decomposition"},
+            "instruction": {"const": "Return only one JSON object matching the decomposition artifact schema as the final assistant message."}
+        }),
+    )
+}
+
+fn change_output_schema(includes_revision: bool) -> Value {
+    if includes_revision {
+        object_schema(
+            &["kind", "artifact_type", "revision", "instruction"],
+            json!({
+                "kind": {"const": ARTIFACT_PROPOSED},
+                "artifact_type": {"const": "change"},
+                "revision": revision_schema(1),
+                "instruction": {"const": "Address every finding, then return only one JSON object matching the change artifact schema as the final assistant message."}
+            }),
+        )
+    } else {
+        object_schema(
+            &["kind", "artifact_type", "instruction"],
+            json!({
+                "kind": {"const": ARTIFACT_PROPOSED},
+                "artifact_type": {"const": "change"},
+                "instruction": {"const": "Implement the bounded change, then return only one JSON object matching the change artifact schema as the final assistant message."}
+            }),
+        )
+    }
+}
+
+fn review_output_schema() -> Value {
+    object_schema(
+        &["kind", "instruction"],
+        json!({
+            "kind": {"const": REVIEW_COMPLETED},
+            "instruction": {"const": "Review the exact proposed artifacts and evidence, then return only one JSON object matching the completed review schema as the final assistant message."}
+        }),
+    )
+}
+
+fn completed_review_variant(decision: &str, minimum_findings: usize) -> Value {
+    object_schema(
+        &[
+            "schema_version",
+            "request_id",
+            "revision",
+            "decision",
+            "summary",
+            "findings",
+        ],
+        json!({
+            "schema_version": {"const": 1},
+            "request_id": identifier_schema(),
+            "revision": revision_schema(0),
+            "decision": {"const": decision},
+            "summary": text_schema(),
+            "findings": text_list_schema(minimum_findings)
+        }),
+    )
 }
