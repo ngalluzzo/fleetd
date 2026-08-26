@@ -579,6 +579,92 @@ pub async fn leased_batch(
     rows.iter().map(delivery_from_row).collect()
 }
 
+/// How a settlement addresses the delivery row it is settling.
+#[derive(Clone, Copy)]
+enum DeliveryKey<'a> {
+    /// Resolve the durable sequence from the message's public ID.
+    MessageId(&'a str),
+    /// The caller already holds the durable sequence.
+    Seq(i64),
+}
+
+impl DeliveryKey<'_> {
+    fn predicate(self) -> &'static str {
+        match self {
+            Self::MessageId(_) => "message_seq = (SELECT seq FROM messages WHERE id = ?)",
+            Self::Seq(_) => "message_seq = ?",
+        }
+    }
+}
+
+/// Which side of its expiry the lease has to be on.
+///
+/// The two settlement families differ here and only here, by one operator, so
+/// the choice is named rather than retyped: `Live` settles work an agent still
+/// holds, and `Expired` reclaims work whose lease has already lapsed.
+#[derive(Clone, Copy)]
+enum LeaseWindow {
+    Live,
+    Expired,
+}
+
+impl LeaseWindow {
+    const fn predicate(self) -> &'static str {
+        match self {
+            Self::Live => "lease_expires_at_ms > ?",
+            Self::Expired => "lease_expires_at_ms <= ?",
+        }
+    }
+}
+
+/// The exact row one settlement is allowed to touch.
+///
+/// Every settlement matches the same four things -- which delivery, whose it
+/// is, the lease token the caller actually holds, and whether that lease is
+/// still live -- so the predicate and its bind order are declared once here
+/// instead of being retyped per statement. `state = 'leased'` and the token
+/// equality are not parameters: no settlement may proceed without them.
+#[derive(Clone, Copy)]
+struct LeasedRow<'a> {
+    key: DeliveryKey<'a>,
+    agent_id: &'a str,
+    lease_token: &'a str,
+    window: LeaseWindow,
+    now: i64,
+}
+
+impl LeasedRow<'_> {
+    /// Builds `UPDATE agent_deliveries SET {set} WHERE <this row>`.
+    ///
+    /// Placeholders bind in two groups: whatever `set` needs, then the four
+    /// that `bind_leased_row` fills.
+    fn update(self, set: &str) -> String {
+        format!(
+            "UPDATE agent_deliveries SET {set} WHERE {key} AND agent_id = ? \
+             AND state = 'leased' AND lease_token = ? AND {window}",
+            key = self.key.predicate(),
+            window = self.window.predicate(),
+        )
+    }
+}
+
+/// Binds a [`LeasedRow`] where its placeholders appear in the statement.
+trait LeasedQuery<'q> {
+    fn bind_leased_row(self, row: LeasedRow<'q>) -> Self;
+}
+
+impl<'q> LeasedQuery<'q>
+    for sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>
+{
+    fn bind_leased_row(self, row: LeasedRow<'q>) -> Self {
+        let keyed = match row.key {
+            DeliveryKey::MessageId(id) => self.bind(id),
+            DeliveryKey::Seq(seq) => self.bind(seq),
+        };
+        keyed.bind(row.agent_id).bind(row.lease_token).bind(row.now)
+    }
+}
+
 /// Moves one leased row to `acknowledged`.
 ///
 /// Returns whether the row transitioned. A `false` result means the lease is
@@ -594,30 +680,24 @@ pub async fn mark_acknowledged(
     lease_token: &str,
     now: i64,
 ) -> Result<bool, FleetError> {
-    let result = sqlx::query(
-        r"
-        UPDATE agent_deliveries
-        SET state = 'acknowledged',
-            lease_token = NULL,
-            lease_expires_at_ms = NULL,
-            last_settled_lease_token = ?,
-            last_settlement = 'acknowledged',
-            acknowledged_at_ms = ?
-        WHERE agent_id = ?
-          AND message_seq = (SELECT seq FROM messages WHERE id = ?)
-          AND state = 'leased'
-          AND lease_token = ?
-          AND lease_expires_at_ms > ?
-        ",
-    )
-    .bind(lease_token)
-    .bind(now)
-    .bind(agent_id)
-    .bind(message_id)
-    .bind(lease_token)
-    .bind(now)
-    .execute(&mut **transaction)
-    .await?;
+    let row = LeasedRow {
+        key: DeliveryKey::MessageId(message_id),
+        agent_id,
+        lease_token,
+        window: LeaseWindow::Live,
+        now,
+    };
+    let statement = row.update(
+        "state = 'acknowledged', lease_token = NULL, lease_expires_at_ms = NULL, \
+         last_settled_lease_token = ?, last_settlement = 'acknowledged', \
+         acknowledged_at_ms = ?",
+    );
+    let result = sqlx::query(&statement)
+        .bind(lease_token)
+        .bind(now)
+        .bind_leased_row(row)
+        .execute(&mut **transaction)
+        .await?;
     Ok(result.rows_affected() == 1)
 }
 
@@ -636,33 +716,25 @@ pub async fn mark_retry(
     available_at_ms: i64,
     now: i64,
 ) -> Result<bool, FleetError> {
-    let result = sqlx::query(
-        r"
-        UPDATE agent_deliveries
-        SET state = 'pending',
-            available_at_ms = ?,
-            lease_token = NULL,
-            lease_expires_at_ms = NULL,
-            last_error = ?,
-            last_settled_lease_token = ?,
-            last_settlement = 'retry',
-            acknowledged_at_ms = NULL
-        WHERE agent_id = ?
-          AND message_seq = (SELECT seq FROM messages WHERE id = ?)
-          AND state = 'leased'
-          AND lease_token = ?
-          AND lease_expires_at_ms > ?
-        ",
-    )
-    .bind(available_at_ms)
-    .bind(&input.error)
-    .bind(&input.lease_token)
-    .bind(agent_id)
-    .bind(message_id)
-    .bind(&input.lease_token)
-    .bind(now)
-    .execute(&mut **transaction)
-    .await?;
+    let row = LeasedRow {
+        key: DeliveryKey::MessageId(message_id),
+        agent_id,
+        lease_token: &input.lease_token,
+        window: LeaseWindow::Live,
+        now,
+    };
+    let statement = row.update(
+        "state = 'pending', available_at_ms = ?, lease_token = NULL, \
+         lease_expires_at_ms = NULL, last_error = ?, last_settled_lease_token = ?, \
+         last_settlement = 'retry', acknowledged_at_ms = NULL",
+    );
+    let result = sqlx::query(&statement)
+        .bind(available_at_ms)
+        .bind(&input.error)
+        .bind(&input.lease_token)
+        .bind_leased_row(row)
+        .execute(&mut **transaction)
+        .await?;
     Ok(result.rows_affected() == 1)
 }
 
@@ -680,31 +752,24 @@ pub async fn mark_blocked(
     input: &BlockDelivery,
     now: i64,
 ) -> Result<bool, FleetError> {
-    let result = sqlx::query(
-        r"
-        UPDATE agent_deliveries
-        SET state = 'blocked',
-            lease_token = NULL,
-            lease_expires_at_ms = NULL,
-            last_error = ?,
-            last_settled_lease_token = ?,
-            last_settlement = 'blocked',
-            acknowledged_at_ms = NULL
-        WHERE agent_id = ?
-          AND message_seq = (SELECT seq FROM messages WHERE id = ?)
-          AND state = 'leased'
-          AND lease_token = ?
-          AND lease_expires_at_ms > ?
-        ",
-    )
-    .bind(&input.reason)
-    .bind(&input.lease_token)
-    .bind(agent_id)
-    .bind(message_id)
-    .bind(&input.lease_token)
-    .bind(now)
-    .execute(&mut **transaction)
-    .await?;
+    let row = LeasedRow {
+        key: DeliveryKey::MessageId(message_id),
+        agent_id,
+        lease_token: &input.lease_token,
+        window: LeaseWindow::Live,
+        now,
+    };
+    let statement = row.update(
+        "state = 'blocked', lease_token = NULL, lease_expires_at_ms = NULL, \
+         last_error = ?, last_settled_lease_token = ?, last_settlement = 'blocked', \
+         acknowledged_at_ms = NULL",
+    );
+    let result = sqlx::query(&statement)
+        .bind(&input.reason)
+        .bind(&input.lease_token)
+        .bind_leased_row(row)
+        .execute(&mut **transaction)
+        .await?;
     Ok(result.rows_affected() == 1)
 }
 
@@ -723,24 +788,24 @@ pub async fn block_expired_lease(
     reason: &str,
     now: i64,
 ) -> Result<bool, FleetError> {
-    let result = sqlx::query(
-        r"
-        UPDATE agent_deliveries
-        SET state = 'blocked', lease_token = NULL, lease_expires_at_ms = NULL,
-            last_error = ?, last_settled_lease_token = ?,
-            last_settlement = 'blocked', acknowledged_at_ms = NULL
-        WHERE message_seq = ? AND agent_id = ? AND state = 'leased'
-          AND lease_token = ? AND lease_expires_at_ms <= ?
-        ",
-    )
-    .bind(reason)
-    .bind(lease_token)
-    .bind(message_seq)
-    .bind(agent_id)
-    .bind(lease_token)
-    .bind(now)
-    .execute(&mut **transaction)
-    .await?;
+    let row = LeasedRow {
+        key: DeliveryKey::Seq(message_seq),
+        agent_id,
+        lease_token,
+        window: LeaseWindow::Expired,
+        now,
+    };
+    let statement = row.update(
+        "state = 'blocked', lease_token = NULL, lease_expires_at_ms = NULL, \
+         last_error = ?, last_settled_lease_token = ?, \
+         last_settlement = 'blocked', acknowledged_at_ms = NULL",
+    );
+    let result = sqlx::query(&statement)
+        .bind(reason)
+        .bind(lease_token)
+        .bind_leased_row(row)
+        .execute(&mut **transaction)
+        .await?;
     Ok(result.rows_affected() == 1)
 }
 
@@ -790,23 +855,23 @@ pub async fn acknowledge_leased_seq(
     lease_token: &str,
     now: i64,
 ) -> Result<bool, FleetError> {
-    let result = sqlx::query(
-        r"
-        UPDATE agent_deliveries
-        SET state = 'acknowledged', lease_token = NULL, lease_expires_at_ms = NULL,
-            last_settled_lease_token = ?, last_settlement = 'acknowledged',
-            acknowledged_at_ms = ?
-        WHERE message_seq = ? AND agent_id = ? AND state = 'leased'
-          AND lease_token = ? AND lease_expires_at_ms > ?
-        ",
-    )
-    .bind(lease_token)
-    .bind(now)
-    .bind(message_seq)
-    .bind(agent_id)
-    .bind(lease_token)
-    .bind(now)
-    .execute(&mut **transaction)
-    .await?;
+    let row = LeasedRow {
+        key: DeliveryKey::Seq(message_seq),
+        agent_id,
+        lease_token,
+        window: LeaseWindow::Live,
+        now,
+    };
+    let statement = row.update(
+        "state = 'acknowledged', lease_token = NULL, lease_expires_at_ms = NULL, \
+         last_settled_lease_token = ?, last_settlement = 'acknowledged', \
+         acknowledged_at_ms = ?",
+    );
+    let result = sqlx::query(&statement)
+        .bind(lease_token)
+        .bind(now)
+        .bind_leased_row(row)
+        .execute(&mut **transaction)
+        .await?;
     Ok(result.rows_affected() == 1)
 }
