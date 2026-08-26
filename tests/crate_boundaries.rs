@@ -373,3 +373,51 @@ fn the_kernel_crate_depends_only_on_storage_crates() {
         }
     }
 }
+
+/// JavaScript packages in the workspace.
+const JAVASCRIPT_PACKAGES: [&str; 3] = [
+    "apps/conversation-desktop",
+    "apps/conversation-web",
+    "clients/typescript",
+];
+
+#[test]
+fn javascript_packages_import_each_other_by_name() {
+    for package in JAVASCRIPT_PACKAGES {
+        for directory in ["src", "test"] {
+            let root = workspace_root().join(package).join(directory);
+            if !root.is_dir() {
+                continue;
+            }
+            inspect_imports(&root, package);
+        }
+    }
+}
+
+fn inspect_imports(path: &Path, package: &str) {
+    if path.is_dir() {
+        for entry in fs::read_dir(path).expect("package directory is readable") {
+            inspect_imports(&entry.expect("package entry is readable").path(), package);
+        }
+        return;
+    }
+    let is_source = path
+        .extension()
+        .is_some_and(|extension| extension == "ts" || extension == "mjs");
+    if !is_source {
+        return;
+    }
+    let source = fs::read_to_string(path).expect("package source is UTF-8");
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        let is_import = trimmed.starts_with("import ") || trimmed.starts_with("} from ");
+        // Two levels up still lands inside the package; three leaves it.
+        assert!(
+            !(is_import && line.contains("../../../")),
+            "`{package}` reaches outside itself by relative path in {}:\n  {}\nImport the \
+             other package by name so its `exports` map stays the contract.",
+            path.display(),
+            trimmed
+        );
+    }
+}
