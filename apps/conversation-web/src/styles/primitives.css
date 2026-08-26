@@ -1,5 +1,5 @@
 @layer primitives {
-  /* Layout primitives are intentionally presentation-neutral and composable. */
+  /* Layout primitives expose rhythm without prescribing product composition. */
   .stack {
     display: flex;
     flex-direction: column;
@@ -20,6 +20,16 @@
     box-shadow: var(--fd-shadow-sm);
   }
 
+  .surface[data-elevation="inset"] {
+    background: var(--fd-color-surface-inset);
+    box-shadow: var(--fd-shadow-inset);
+  }
+
+  .surface[data-elevation="raised"] {
+    background: var(--fd-color-surface-2);
+    box-shadow: var(--fd-shadow-md);
+  }
+
   .divider {
     width: 100%;
     height: 1px;
@@ -34,31 +44,52 @@
     font-size: var(--fd-text-2xs);
     font-weight: var(--fd-font-weight-semibold);
     line-height: 1.2;
-    letter-spacing: 0.11em;
+    letter-spacing: var(--fd-tracking-caps);
     text-transform: uppercase;
   }
 
   .site-brand {
     display: inline-flex;
     align-items: center;
-    gap: var(--fd-space-2);
+    gap: var(--fd-space-3);
     color: var(--fd-color-text);
   }
 
   .brand-mark {
+    position: relative;
     display: inline-grid;
     width: 1.75rem;
     height: 1.75rem;
     flex: 0 0 auto;
     place-items: center;
-    border: 1px solid rgba(142, 171, 236, 0.24);
+    overflow: hidden;
+    border: 1px solid var(--fd-color-accent-outline);
     border-radius: var(--fd-radius-md);
-    background: var(--fd-color-accent-soft);
+    background:
+      linear-gradient(
+        135deg,
+        var(--fd-color-accent-border-subtle),
+        transparent 55%
+      ),
+      var(--fd-color-surface-inset);
+    box-shadow: var(--fd-shadow-xs);
     color: var(--fd-color-accent-hover);
     font-family: var(--fd-font-mono);
-    font-size: var(--fd-text-sm);
+    font-size: var(--fd-text-xs);
     font-weight: var(--fd-font-weight-bold);
     line-height: 1;
+    text-transform: uppercase;
+  }
+
+  .brand-mark::after {
+    position: absolute;
+    right: -0.125rem;
+    bottom: -0.125rem;
+    width: 0.5rem;
+    height: 0.5rem;
+    border: 1px solid var(--fd-color-accent-border-strong);
+    content: "";
+    transform: rotate(45deg);
   }
 
   .brand-wordmark,
@@ -66,15 +97,24 @@
     color: var(--fd-color-text);
     font-size: var(--fd-text-sm);
     font-weight: var(--fd-font-weight-semibold);
-    letter-spacing: -0.02em;
+    letter-spacing: var(--fd-tracking-tight);
+  }
+
+  .brand-wordmark {
+    font-family: var(--fd-font-mono);
+    letter-spacing: -0.035em;
   }
 
   .ui-icon {
     display: inline-grid;
+    width: 1em;
+    height: 1em;
     flex: 0 0 auto;
     place-items: center;
     font-family: var(--fd-font-mono);
+    font-size: 1em;
     font-style: normal;
+    font-weight: var(--fd-font-weight-medium);
     line-height: 1;
   }
 
@@ -88,8 +128,22 @@
     padding-inline: var(--fd-space-2);
     background: var(--fd-color-surface-2);
     color: var(--fd-color-text-secondary);
+    font-family: var(--fd-font-mono);
     font-size: var(--fd-text-2xs);
     font-weight: var(--fd-font-weight-medium);
+    line-height: 1;
+  }
+
+  .badge[data-tone="accent"] {
+    border-color: var(--fd-color-accent-border);
+    background: var(--fd-color-accent-soft);
+    color: var(--fd-color-accent-hover);
+  }
+
+  .badge[data-tone="success"] {
+    border-color: var(--fd-color-success-border);
+    background: var(--fd-color-success-soft);
+    color: var(--fd-color-success);
   }
 
   .skeleton {

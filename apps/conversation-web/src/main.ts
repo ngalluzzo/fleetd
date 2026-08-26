@@ -131,9 +131,7 @@ elements.connectForm.addEventListener("submit", (event) => {
   setConnectBusy(true);
   void connect(profile)
     .catch(() => {
-      showConnectError(
-        "Could not connect with the supplied Fleetd authorities.",
-      );
+      showConnectError("Check your workspace and participant keys, then try again.");
     })
     .finally(() => {
       connectInFlight = false;
@@ -166,6 +164,7 @@ elements.composerText.addEventListener("keydown", (event) => {
 });
 elements.target.addEventListener("change", () => {
   renderComposerAvailability();
+  renderComposerContext();
   const selected = elements.target.selectedOptions[0];
   if (selected?.title) elements.target.title = selected.title;
 });
@@ -258,6 +257,7 @@ function render(snapshot: ConversationSnapshot): void {
     meta: elements.channelMeta,
   });
   renderMemberTargets(elements.target, snapshot.members, snapshot.participantId);
+  renderComposerContext();
   messageList.render(snapshot, requiredContract());
   renderEmptyConversation(snapshot, {
     root: elements.empty,
@@ -328,6 +328,13 @@ function renderComposerAvailability(): void {
   });
 }
 
+function renderComposerContext(): void {
+  const recipient = elements.target.selectedOptions[0]?.textContent?.trim();
+  elements.composerText.placeholder = recipient
+    ? `Message ${recipient}…`
+    : "Write a message…";
+}
+
 function validateProfile(value: ConnectionProfile): ConnectionProfile {
   if (!value || typeof value !== "object") throw new Error("profile required");
   boundedProfileField(value.participantId, "participantId", 256);
@@ -382,7 +389,9 @@ function showConnectError(message: string): void {
 function setConnectBusy(busy: boolean): void {
   elements.connectForm.setAttribute("aria-busy", String(busy));
   connectSubmit.disabled = busy;
-  connectSubmitLabel.textContent = busy ? "Connecting…" : "Open conversations";
+  connectSubmitLabel.textContent = busy
+    ? "Connecting…"
+    : "Continue to conversations";
   connectSubmitIcon.textContent = busy ? "…" : "→";
 }
 

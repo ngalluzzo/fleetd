@@ -19,6 +19,23 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .mono {
+    font-family: var(--fd-font-mono);
+    font-variant-ligatures: none;
+  }
+
+  .text-secondary {
+    color: var(--fd-color-text-secondary);
+  }
+
+  .text-tertiary {
+    color: var(--fd-color-text-tertiary);
+  }
+
+  .measure {
+    max-width: 66ch;
+  }
+
   .skip-link {
     position: fixed;
     z-index: 100;
@@ -28,10 +45,12 @@
     border-radius: var(--fd-radius-md);
     padding: var(--fd-space-2) var(--fd-space-3);
     background: var(--fd-color-accent);
+    box-shadow: var(--fd-shadow-md);
     color: var(--fd-color-text-on-accent);
     font-size: var(--fd-text-sm);
     font-weight: var(--fd-font-weight-semibold);
-    transition: transform var(--fd-duration-fast) var(--fd-ease-standard);
+    text-decoration: none;
+    transition: transform var(--fd-duration-fast) var(--fd-ease-enter);
   }
 
   .skip-link:focus {

@@ -1,62 +1,85 @@
-@layer reset, tokens, base, primitives, components, composition, utilities, adaptations;
-
 @layer tokens {
   :root {
     color-scheme: dark;
 
-    /* Neutral surfaces: cool enough for clarity, warm enough for long shifts. */
-    --fd-color-canvas: #0c1015;
-    --fd-color-shell: #10151c;
-    --fd-color-surface-1: #151b23;
-    --fd-color-surface-2: #1a222c;
-    --fd-color-surface-3: #202a35;
-    --fd-color-surface-inset: #0f141a;
-    --fd-color-overlay: rgba(8, 11, 15, 0.86);
+    /*
+     * Fleetd is an operations instrument, not a chat skin. Graphite surfaces
+     * carry the hierarchy; ion blue is reserved for intent and live activity.
+     */
+    --fd-color-canvas: #080c10;
+    --fd-color-shell: #0c1218;
+    --fd-color-surface-1: #111920;
+    --fd-color-surface-2: #172129;
+    --fd-color-surface-3: #1d2a33;
+    --fd-color-surface-inset: #0a1015;
+    --fd-color-overlay: rgba(4, 7, 10, 0.88);
 
-    --fd-color-text: #f0f3f6;
-    --fd-color-text-secondary: #a9b4c0;
-    --fd-color-text-tertiary: #758291;
-    --fd-color-text-disabled: #596572;
-    --fd-color-text-on-accent: #0c1525;
+    --fd-color-text: #f3f4f2;
+    --fd-color-text-secondary: #b4bdc5;
+    --fd-color-text-tertiary: #7d8994;
+    --fd-color-text-disabled: #5d6872;
+    --fd-color-text-on-accent: #031116;
 
-    --fd-color-border-subtle: rgba(225, 233, 242, 0.08);
-    --fd-color-border: rgba(225, 233, 242, 0.14);
-    --fd-color-border-strong: rgba(225, 233, 242, 0.24);
+    --fd-color-border-subtle: rgba(198, 216, 229, 0.08);
+    --fd-color-border: rgba(198, 216, 229, 0.14);
+    --fd-color-border-strong: rgba(198, 216, 229, 0.24);
+    --fd-color-surface-highlight-subtle: rgba(255, 255, 255, 0.018);
+    --fd-color-surface-highlight: rgba(255, 255, 255, 0.025);
+    --fd-color-surface-highlight-strong: rgba(255, 255, 255, 0.06);
 
-    --fd-color-accent: #8eabec;
-    --fd-color-accent-hover: #a4bcf2;
-    --fd-color-accent-active: #7899e2;
-    --fd-color-accent-soft: rgba(142, 171, 236, 0.12);
-    --fd-color-accent-muted: rgba(142, 171, 236, 0.19);
+    --fd-color-accent: #78d8e5;
+    --fd-color-accent-hover: #9ae6ee;
+    --fd-color-accent-active: #5fc3d1;
+    --fd-color-accent-ambient-subtle: rgba(120, 216, 229, 0.045);
+    --fd-color-accent-ambient: rgba(120, 216, 229, 0.075);
+    --fd-color-accent-soft: rgba(120, 216, 229, 0.1);
+    --fd-color-accent-border-subtle: rgba(120, 216, 229, 0.16);
+    --fd-color-accent-muted: rgba(120, 216, 229, 0.18);
+    --fd-color-accent-border: rgba(120, 216, 229, 0.22);
+    --fd-color-accent-selection: rgba(120, 216, 229, 0.26);
+    --fd-color-accent-border-strong: rgba(120, 216, 229, 0.3);
+    --fd-color-accent-outline: rgba(120, 216, 229, 0.34);
+    --fd-color-accent-focus: rgba(120, 216, 229, 0.72);
 
-    --fd-color-success: #86b99a;
-    --fd-color-success-soft: rgba(134, 185, 154, 0.13);
-    --fd-color-warning: #d2b276;
-    --fd-color-warning-soft: rgba(210, 178, 118, 0.13);
-    --fd-color-danger: #df9292;
-    --fd-color-danger-hover: #eda4a4;
-    --fd-color-danger-soft: rgba(223, 146, 146, 0.12);
+    --fd-color-success: #82d3a2;
+    --fd-color-success-soft: rgba(130, 211, 162, 0.11);
+    --fd-color-success-glow: rgba(130, 211, 162, 0.08);
+    --fd-color-success-border-subtle: rgba(130, 211, 162, 0.18);
+    --fd-color-success-border: rgba(130, 211, 162, 0.22);
+    --fd-color-warning: #e8bf75;
+    --fd-color-warning-soft: rgba(232, 191, 117, 0.12);
+    --fd-color-warning-border: rgba(232, 191, 117, 0.28);
+    --fd-color-danger: #f08b91;
+    --fd-color-danger-hover: #f5a4a9;
+    --fd-color-danger-soft: rgba(240, 139, 145, 0.11);
+    --fd-color-danger-border: rgba(240, 139, 145, 0.24);
+    --fd-color-danger-border-strong: rgba(240, 139, 145, 0.28);
 
-    --fd-font-sans: Inter, ui-sans-serif, system-ui, -apple-system,
-      BlinkMacSystemFont, "Segoe UI", sans-serif;
+    /* Native-first typography keeps the desktop host fast and deterministic. */
+    --fd-font-sans: "SF Pro Text", "SF Pro Display", Inter, ui-sans-serif,
+      system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --fd-font-display: "SF Pro Display", "SF Pro Text", Inter, ui-sans-serif,
+      system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --fd-font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Menlo,
       Consolas, monospace;
-    --fd-font-weight-regular: 430;
-    --fd-font-weight-medium: 560;
-    --fd-font-weight-semibold: 650;
-    --fd-font-weight-bold: 720;
+    --fd-font-weight-regular: 400;
+    --fd-font-weight-medium: 500;
+    --fd-font-weight-semibold: 600;
+    --fd-font-weight-bold: 700;
 
     --fd-text-2xs: 0.6875rem;
     --fd-text-xs: 0.75rem;
     --fd-text-sm: 0.8125rem;
-    --fd-text-md: 0.875rem;
-    --fd-text-lg: 1rem;
-    --fd-text-xl: 1.25rem;
-    --fd-text-2xl: 1.75rem;
-    --fd-text-display: clamp(3.25rem, 7.5vw, 6.75rem);
-    --fd-leading-tight: 1.15;
-    --fd-leading-body: 1.55;
+    --fd-text-md: 0.9375rem;
+    --fd-text-lg: 1.0625rem;
+    --fd-text-xl: 1.375rem;
+    --fd-text-2xl: 1.875rem;
+    --fd-text-display: clamp(3.5rem, 7.5vw, 6.75rem);
+    --fd-leading-tight: 1.12;
+    --fd-leading-body: 1.5;
     --fd-leading-relaxed: 1.65;
+    --fd-tracking-tight: -0.025em;
+    --fd-tracking-caps: 0.12em;
 
     /* Four-pixel base grid. */
     --fd-space-0: 0;
@@ -73,21 +96,30 @@
     --fd-space-20: 5rem;
     --fd-space-24: 6rem;
 
-    --fd-radius-xs: 0.25rem;
-    --fd-radius-sm: 0.375rem;
-    --fd-radius-md: 0.5rem;
-    --fd-radius-lg: 0.75rem;
-    --fd-radius-xl: 1rem;
+    /* Crisp geometry: nesting, not decoration, increases the radius. */
+    --fd-radius-xs: 0.125rem;
+    --fd-radius-sm: 0.25rem;
+    --fd-radius-md: 0.375rem;
+    --fd-radius-lg: 0.5rem;
+    --fd-radius-xl: 0.75rem;
     --fd-radius-round: 999px;
 
-    --fd-shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.16);
-    --fd-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24),
-      0 4px 12px rgba(0, 0, 0, 0.12);
-    --fd-shadow-md: 0 12px 32px rgba(0, 0, 0, 0.24),
-      0 2px 8px rgba(0, 0, 0, 0.14);
-    --fd-shadow-lg: 0 24px 72px rgba(0, 0, 0, 0.34),
-      0 4px 16px rgba(0, 0, 0, 0.18);
-    --fd-shadow-focus: 0 0 0 3px rgba(142, 171, 236, 0.28);
+    /* Every elevation combines separation below with a faint top edge. */
+    --fd-shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.28),
+      inset 0 1px rgba(255, 255, 255, 0.025);
+    --fd-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3),
+      0 6px 18px rgba(0, 0, 0, 0.14),
+      inset 0 1px rgba(255, 255, 255, 0.025);
+    --fd-shadow-md: 0 18px 48px rgba(0, 0, 0, 0.3),
+      0 3px 10px rgba(0, 0, 0, 0.2),
+      inset 0 1px rgba(255, 255, 255, 0.03);
+    --fd-shadow-lg: 0 32px 96px rgba(0, 0, 0, 0.42),
+      0 8px 24px rgba(0, 0, 0, 0.2),
+      inset 0 1px rgba(255, 255, 255, 0.035);
+    --fd-shadow-inset: inset 0 1px 2px rgba(0, 0, 0, 0.2);
+    --fd-shadow-inset-edge: inset 0 1px 0 var(--fd-color-surface-highlight);
+    --fd-shadow-focus: 0 0 0 2px var(--fd-color-canvas),
+      0 0 0 4px var(--fd-color-accent-focus);
 
     --fd-control-sm: 2rem;
     --fd-control-md: 2.5rem;
@@ -95,9 +127,12 @@
     --fd-sidebar-width: 17.5rem;
     --fd-content-width: 56rem;
 
-    --fd-duration-fast: 120ms;
-    --fd-duration-base: 180ms;
+    --fd-duration-instant: 80ms;
+    --fd-duration-fast: 140ms;
+    --fd-duration-base: 220ms;
+    --fd-duration-slow: 360ms;
     --fd-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+    --fd-ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
     --fd-ease-exit: cubic-bezier(0.4, 0, 1, 1);
 
     /* Compatibility aliases while existing product markup migrates. */

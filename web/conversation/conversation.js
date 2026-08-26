@@ -1168,7 +1168,7 @@
   function memberOptionView(member) {
     return {
       id: member.agent_id,
-      label: member.agent_name,
+      label: displayName(member.agent_name),
       description: `${member.agent_name} (${shortId(member.agent_id)})`,
       preferred: member.delivery_mode === "inbox"
     };
@@ -1185,6 +1185,22 @@
   }
   function shortId(value) {
     return value.length > 12 ? `${value.slice(0, 8)}…` : value;
+  }
+  function displayName(value) {
+    const trimmed = value.trim();
+    const stem = trimmed.replace(/[-_](?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i, "");
+    if (stem === trimmed)
+      return value;
+    const words = stem.split(/[-_]+/).filter(Boolean);
+    if (words.length === 0)
+      return value;
+    return words.map((word, index) => {
+      if (/^[a-z]$/i.test(word))
+        return word.toUpperCase();
+      if (index === 0)
+        return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
+      return word.toLowerCase();
+    }).join(" ");
   }
 
   // src/ui/components.ts
@@ -1230,12 +1246,19 @@
   function channelRow(channel, selected) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "channel-button";
+    button.className = "channel-button nav-item";
     button.dataset.channelId = channel.id;
+    const marker = document.createElement("span");
+    marker.className = "channel-marker nav-item__icon";
+    marker.append(icon("channel", "#"));
+    const content = document.createElement("span");
+    content.className = "nav-item__content";
     const label = document.createElement("span");
-    label.className = "channel-label";
+    label.className = "channel-label nav-item__label";
     label.textContent = channel.name;
-    button.append(icon("channel", "#", "channel-marker"), label);
+    content.append(label);
+    const chevron = icon("chevron", "›", "nav-item__chevron");
+    button.append(marker, content, chevron);
     updateChannelRow(button, channel, selected);
     return button;
   }
@@ -1243,7 +1266,7 @@
     button.title = selected ? `${channel.name}, current channel` : channel.name;
     const label = button.querySelector(".channel-label");
     if (label)
-      label.textContent = channel.name;
+      label.textContent = displayName(channel.name);
     button.setAttribute("aria-pressed", String(selected));
     if (selected) {
       button.setAttribute("aria-current", "page");
@@ -1253,7 +1276,8 @@
   }
   function renderChannelHeader(snapshot, elements) {
     const channel = snapshot.channels.find((candidate) => candidate.id === snapshot.selectedChannelId);
-    elements.title.textContent = channel?.name ?? "Select a channel";
+    elements.title.textContent = channel ? displayName(channel.name) : "Select a channel";
+    elements.title.title = channel?.name ?? "";
     elements.meta.textContent = channel ? `${snapshot.members.length} participants · ${snapshot.messages.length} messages` : snapshot.phase === "loading_channels" ? "Finding conversations…" : "Choose a conversation to begin.";
   }
   function renderMemberTargets(select, members, participantId) {
@@ -1340,15 +1364,26 @@
   }
   function messageCard(message, participantId, names, contract) {
     const article = document.createElement("article");
-    article.className = message.sender_id === participantId ? "message message-self" : "message";
+    article.className = message.sender_id === participantId ? "message message-card message-self" : "message message-card";
     article.dataset.messageId = message.id;
     article.dataset.messageSeq = String(message.seq);
+    article.dataset.direction = message.sender_id === participantId ? "outgoing" : "incoming";
+    const avatar = document.createElement("span");
+    avatar.className = "message-card__avatar";
+    avatar.setAttribute("aria-hidden", "true");
+    const content = document.createElement("div");
+    content.className = "message-card__content";
     const header = document.createElement("header");
+    header.className = "message-card__header";
+    const identity = document.createElement("span");
+    identity.className = "message-card__identity";
     const sender = document.createElement("strong");
     sender.className = "message-sender";
     const kind = document.createElement("code");
-    kind.textContent = message.kind;
+    kind.className = "message-kind";
+    kind.textContent = messageKindLabel(message.kind, contract);
     kind.title = message.kind;
+    identity.append(sender, kind);
     const time = document.createElement("time");
     const created = new Date(message.created_at_ms);
     time.dateTime = created.toISOString();
@@ -1357,42 +1392,94 @@
       minute: "2-digit"
     });
     time.title = created.toLocaleString();
-    header.append(sender, kind, time);
+    header.append(identity, time);
     const rendered = renderMessageBody(message, contract);
     const body = document.createElement(rendered.format === "json" ? "pre" : "p");
-    body.className = rendered.format === "json" ? "message-json" : "message-text";
+    body.className = rendered.format === "json" ? "message-json message-card__body" : "message-text message-card__body";
     body.textContent = rendered.text;
-    const footer = document.createElement("footer");
+    const footer = document.createElement("div");
+    footer.className = "message-card__footer";
+    const delivery = document.createElement("span");
+    delivery.className = "message-card__delivery";
     if (rendered.status) {
       const status = document.createElement("span");
       status.className = "result-status";
-      status.textContent = rendered.status;
-      footer.append(status);
+      status.dataset.tone = statusTone(rendered.status);
+      const statusLabel = document.createElement("span");
+      statusLabel.className = "result-status__label";
+      statusLabel.textContent = rendered.status;
+      status.append(icon("status", "✓"), statusLabel);
+      delivery.append(status);
     }
     const recipient = document.createElement("span");
     recipient.className = "message-recipient";
-    footer.append(recipient);
+    delivery.append(recipient);
+    footer.append(delivery);
     const details = document.createElement("details");
+    details.className = "message-details";
     const summary = document.createElement("summary");
-    summary.append(icon("envelope", "◇"), text(`Details · message ${message.seq}`));
+    summary.className = "message-details__trigger";
+    summary.append(icon("envelope", "···"), text(`Details · message ${message.seq}`));
     const envelope = document.createElement("pre");
+    envelope.className = "message-details__envelope";
     envelope.textContent = JSON.stringify(message, null, 2);
     details.append(summary, envelope);
     footer.append(details);
-    article.append(header, body, footer);
+    content.append(header, body, footer);
+    article.append(avatar, content);
     updateMessageLabels(article, message, participantId, names);
     return article;
   }
+  function messageKindLabel(kind, contract) {
+    if (kind === contract.requestKind)
+      return "Message";
+    if (kind === contract.resultKind)
+      return "Reply";
+    return "Event";
+  }
+  function statusTone(status) {
+    const normalized = status.trim().toLowerCase();
+    if (["complete", "completed", "done", "success", "succeeded"].includes(normalized)) {
+      return "success";
+    }
+    if (["queued", "pending", "running", "working", "in_progress"].includes(normalized)) {
+      return "warning";
+    }
+    if (["error", "failed", "failure", "cancelled", "canceled"].includes(normalized)) {
+      return "danger";
+    }
+    return "neutral";
+  }
   function updateMessageLabels(article, message, participantId, names) {
-    const sender = senderLabel(message, participantId, names);
-    const recipient = recipientLabel(message, participantId, names);
+    const sender = displayName(senderLabel(message, participantId, names));
+    const recipient = displayName(recipientLabel(message, participantId, names));
     const senderElement = article.querySelector(".message-sender");
     const recipientElement = article.querySelector(".message-recipient");
+    const avatarElement = article.querySelector(".message-card__avatar");
     if (senderElement)
       senderElement.textContent = sender;
     if (recipientElement)
       recipientElement.textContent = `to ${recipient}`;
+    if (senderElement) {
+      senderElement.title = exactParticipantLabel(message.sender_id, names);
+    }
+    if (recipientElement && message.recipient_id) {
+      recipientElement.title = exactParticipantLabel(message.recipient_id, names);
+    }
+    if (avatarElement)
+      avatarElement.textContent = avatarLabel(sender);
+    const outgoing = message.sender_id === participantId;
+    article.classList.toggle("message-self", outgoing);
+    article.dataset.direction = outgoing ? "outgoing" : "incoming";
     article.setAttribute("aria-label", `Message from ${sender} to ${recipient}`);
+  }
+  function avatarLabel(sender) {
+    const meaningful = sender.trim().replace(/^@/, "");
+    return meaningful.slice(0, 1).toLocaleUpperCase() || "·";
+  }
+  function exactParticipantLabel(id, names) {
+    const name = names.get(id);
+    return name ? `${name} · ${id}` : id;
   }
   function icon(name, glyph, extraClass = "") {
     const element = document.createElement("span");
@@ -1515,7 +1602,7 @@
     connectInFlight = true;
     setConnectBusy(true);
     connect(profile).catch(() => {
-      showConnectError("Could not connect with the supplied Fleetd authorities.");
+      showConnectError("Check your workspace and participant keys, then try again.");
     }).finally(() => {
       connectInFlight = false;
       setConnectBusy(false);
@@ -1550,6 +1637,7 @@
   });
   elements.target.addEventListener("change", () => {
     renderComposerAvailability();
+    renderComposerContext();
     const selected = elements.target.selectedOptions[0];
     if (selected?.title)
       elements.target.title = selected.title;
@@ -1639,6 +1727,7 @@
       meta: elements.channelMeta
     });
     renderMemberTargets(elements.target, snapshot.members, snapshot.participantId);
+    renderComposerContext();
     messageList.render(snapshot, requiredContract());
     renderEmptyConversation(snapshot, {
       root: elements.empty,
@@ -1704,6 +1793,10 @@
       send: elements.send
     });
   }
+  function renderComposerContext() {
+    const recipient = elements.target.selectedOptions[0]?.textContent?.trim();
+    elements.composerText.placeholder = recipient ? `Message ${recipient}…` : "Write a message…";
+  }
   function validateProfile(value) {
     if (!value || typeof value !== "object")
       throw new Error("profile required");
@@ -1736,7 +1829,7 @@
   function setConnectBusy(busy) {
     elements.connectForm.setAttribute("aria-busy", String(busy));
     connectSubmit.disabled = busy;
-    connectSubmitLabel.textContent = busy ? "Connecting…" : "Open conversations";
+    connectSubmitLabel.textContent = busy ? "Connecting…" : "Continue to conversations";
     connectSubmitIcon.textContent = busy ? "…" : "→";
   }
   function requiredContract() {

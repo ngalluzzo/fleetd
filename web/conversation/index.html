@@ -3,321 +3,167 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta
-      name="description"
-      content="A private, local workspace for conversations with your agent team."
-    />
+    <meta name="description" content="A private, local workspace for conversations with your agent team." />
     <title>Conversations | fleetd</title>
     <link rel="stylesheet" href="/conversation/conversation.css" />
     <script src="/conversation/conversation.js" defer></script>
   </head>
   <body>
-    <main
-      class="connect-panel onboarding-shell"
-      id="connect-panel"
-      aria-labelledby="connect-title"
-    >
-      <div class="connect-copy onboarding-intro">
-        <div class="site-brand" aria-label="fleetd conversations">
-          <span class="brand-mark" aria-hidden="true">f</span>
-          <span class="brand-wordmark">fleetd</span>
+    <main class="connect-panel onboarding-shell" id="connect-panel" aria-labelledby="connect-title">
+      <section class="connect-copy onboarding-intro">
+        <div class="onboarding-brand-row">
+          <div class="site-brand" aria-label="fleetd conversations">
+            <span class="brand-mark" aria-hidden="true">f</span>
+            <span class="brand-wordmark">fleetd</span>
+          </div>
+          <p class="local-badge"><span class="invariant-mark" aria-hidden="true"></span>Local workspace</p>
         </div>
 
-        <p class="local-badge">
-          <span class="invariant-mark" aria-hidden="true"></span>
-          Private to this machine
-        </p>
-        <p class="eyebrow">Your agent workspace</p>
-        <h1 id="connect-title">Keep the whole team in the loop.</h1>
-        <p class="lede">
-          Open a shared channel, catch up on saved history, and continue working
-          with the agents already on your machine.
-        </p>
+        <div class="onboarding-message">
+          <p class="eyebrow">A shared place for your agent team</p>
+          <h1 id="connect-title">Pick up the conversation.</h1>
+          <p class="lede">Bring your agents into one durable workspace, keep every decision in context, and continue from exactly where the team left off.</p>
+        </div>
 
-        <ul class="benefit-list" aria-label="What to expect">
-          <li class="benefit-item">
-            <span aria-hidden="true">01</span>
-            <p>
-              <strong>Pick up where you left off.</strong>
-              Conversations return when you reconnect.
-            </p>
-          </li>
-          <li class="benefit-item">
-            <span aria-hidden="true">02</span>
-            <p>
-              <strong>Speak as yourself.</strong>
-              Your messages stay distinct from workspace access.
-            </p>
-          </li>
+        <div class="onboarding-preview" aria-hidden="true">
+          <div class="preview-presence">
+            <span class="preview-avatar preview-avatar-you">Y</span>
+            <span class="preview-avatar">P</span>
+            <span class="preview-avatar">W</span>
+            <span class="preview-team-label">Your team is here</span>
+          </div>
+          <div class="preview-thread">
+            <p class="preview-message preview-message-self">Where did we leave things?</p>
+            <p class="preview-message preview-message-agent">I have the context. Ready to continue.</p>
+          </div>
+        </div>
+
+        <ul class="benefit-list" aria-label="Workspace benefits">
+          <li class="benefit-item"><span aria-hidden="true">01</span><p><strong>One shared history.</strong> People and agents work from the same conversation.</p></li>
+          <li class="benefit-item"><span aria-hidden="true">02</span><p><strong>Built for continuity.</strong> Reconnect without losing the thread.</p></li>
+          <li class="benefit-item"><span aria-hidden="true">03</span><p><strong>Local by default.</strong> Your workspace stays on this machine.</p></li>
         </ul>
-      </div>
+      </section>
 
-      <form
-        class="connect-form"
-        id="connect-form"
-        autocomplete="off"
-        aria-labelledby="connect-form-title"
-        aria-describedby="credential-promise"
-      >
+      <form class="connect-form" id="connect-form" autocomplete="off" aria-labelledby="connect-form-title" aria-describedby="credential-promise">
         <header class="connect-card-header">
-          <p class="eyebrow">Secure local connection</p>
-          <h2 id="connect-form-title">Open your workspace</h2>
-          <p id="credential-promise">
-            Credentials stay in memory and are cleared from these fields as
-            soon as you connect.
-          </p>
+          <p class="eyebrow">Welcome back</p>
+          <h2 id="connect-form-title">Connect to your team</h2>
+          <p id="credential-promise">Use the local credentials created for this workspace. They are cleared from the form when you connect.</p>
         </header>
 
         <section class="form-section" aria-labelledby="workspace-access-title">
           <header class="form-section-header">
-            <h3 id="workspace-access-title">Workspace access</h3>
-            <p>Used only to find the channels available on this machine.</p>
+            <span class="form-step" aria-hidden="true">1</span>
+            <div><h3 id="workspace-access-title">Workspace</h3><p>Find the conversations available on this machine.</p></div>
           </header>
           <div class="field">
-            <label for="operator-credential">Operator token</label>
-            <input
-              id="operator-credential"
-              name="operator-credential"
-              type="password"
-              required
-              autocomplete="off"
-              aria-describedby="operator-credential-hint"
-            />
-            <p class="field-hint" id="operator-credential-hint">
-              This token cannot author messages on your behalf.
-            </p>
+            <label for="operator-credential">Workspace key</label>
+            <input id="operator-credential" name="operator-credential" type="password" required autocomplete="off" placeholder="Paste workspace key" aria-describedby="operator-credential-hint" />
+            <p class="field-hint" id="operator-credential-hint">Used to discover channels, never to send messages.</p>
           </div>
         </section>
 
         <section class="form-section" aria-labelledby="participant-title">
           <header class="form-section-header">
-            <h3 id="participant-title">Your identity</h3>
-            <p>Choose the human participant that will send and receive.</p>
+            <span class="form-step" aria-hidden="true">2</span>
+            <div><h3 id="participant-title">Your seat</h3><p>Connect as the human participant in your channels.</p></div>
           </header>
-          <div class="field">
-            <label for="participant-id">Participant ID</label>
-            <input
-              id="participant-id"
-              name="participant-id"
-              required
-              autocomplete="off"
-              autocapitalize="off"
-              spellcheck="false"
-              aria-describedby="participant-id-hint"
-            />
-            <p class="field-hint" id="participant-id-hint">
-              The identity added to your shared channels.
-            </p>
-          </div>
-
-          <div class="field">
-            <label for="participant-credential">Participant token</label>
-            <input
-              id="participant-credential"
-              name="participant-credential"
-              type="password"
-              required
-              autocomplete="off"
-              aria-describedby="participant-credential-hint"
-            />
-            <p class="field-hint" id="participant-credential-hint">
-              Used only to read and send as this participant.
-            </p>
+          <div class="participant-fields">
+            <div class="field">
+              <label for="participant-id">Participant ID</label>
+              <input id="participant-id" name="participant-id" required autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Your participant ID" aria-describedby="participant-id-hint" />
+              <p class="field-hint" id="participant-id-hint">The identity shown to your agent team.</p>
+            </div>
+            <div class="field">
+              <label for="participant-credential">Participant key</label>
+              <input id="participant-credential" name="participant-credential" type="password" required autocomplete="off" placeholder="Paste participant key" aria-describedby="participant-credential-hint" />
+              <p class="field-hint" id="participant-credential-hint">Used only to read and send as you.</p>
+            </div>
           </div>
         </section>
 
         <details class="advanced-settings">
-          <summary class="advanced-summary">Message settings</summary>
-          <p class="field-hint" id="message-settings-hint">
-            Keep these defaults unless your agent team uses different message
-            types.
-          </p>
+          <summary class="advanced-summary">Protocol overrides</summary>
+          <p class="field-hint" id="message-settings-hint">Leave these unchanged unless your agent setup uses custom message types.</p>
           <div class="contract-fields" aria-describedby="message-settings-hint">
             <div class="field">
               <label for="request-kind">Outgoing message type</label>
-              <input
-                id="request-kind"
-                name="request-kind"
-                value="conversation.prompt/phase-c-v1"
-                required
-                autocomplete="off"
-                autocapitalize="off"
-                spellcheck="false"
-              />
+              <input id="request-kind" name="request-kind" value="conversation.prompt/phase-c-v1" required autocomplete="off" autocapitalize="off" spellcheck="false" />
             </div>
             <div class="field">
               <label for="result-kind">Agent reply type</label>
-              <input
-                id="result-kind"
-                name="result-kind"
-                value="conversation.result/phase-c-v1"
-                required
-                autocomplete="off"
-                autocapitalize="off"
-                spellcheck="false"
-              />
+              <input id="result-kind" name="result-kind" value="conversation.result/phase-c-v1" required autocomplete="off" autocapitalize="off" spellcheck="false" />
             </div>
           </div>
         </details>
 
-        <div class="security-note">
-          <span class="security-note-icon" aria-hidden="true">✓</span>
-          <p>No credentials are saved in browser storage.</p>
-        </div>
-
         <p class="form-error" id="connect-error" role="alert" hidden></p>
         <div class="connect-actions">
-          <button class="primary-button" type="submit">
-            <span class="button-label">Open conversations</span>
-            <span class="button-icon" aria-hidden="true">→</span>
-          </button>
+          <button class="primary-button" type="submit"><span class="button-label">Continue to conversations</span><span class="button-icon" aria-hidden="true">→</span></button>
         </div>
+        <div class="security-note"><span class="security-note-icon" aria-hidden="true">✓</span><p>Credentials live in memory only and are never saved by this page.</p></div>
       </form>
     </main>
 
-    <main
-      class="conversation-app"
-      id="conversation-app"
-      aria-label="Agent conversations"
-      hidden
-    >
+    <main class="conversation-app" id="conversation-app" aria-label="Agent conversations" hidden>
       <a class="skip-link" href="#conversation-content">Skip to conversation</a>
-
       <aside class="sidebar workspace-sidebar" aria-label="Workspace navigation">
         <header class="brand-row sidebar-brand">
           <div class="site-brand">
             <span class="brand-mark" aria-hidden="true">f</span>
-            <div>
-              <p class="eyebrow">fleetd</p>
-              <p class="workspace-label">Conversations</p>
-            </div>
+            <div class="sidebar-brand-copy"><span class="brand-wordmark">fleetd</span><span class="workspace-label">Conversations</span></div>
           </div>
-          <span
-            class="connection-status"
-            id="connection-status"
-            role="status"
-            aria-live="polite"
-            >Not connected</span
-          >
+          <span class="connection-status" id="connection-status" role="status" aria-live="polite">Not connected</span>
         </header>
 
-        <nav
-          class="channel-navigation"
-          aria-labelledby="channels-heading"
-          aria-describedby="channels-description"
-        >
+        <nav class="channel-navigation" aria-labelledby="channels-heading" aria-describedby="channels-description">
           <header class="navigation-heading">
-            <div>
-              <p class="eyebrow">Workspace</p>
-              <h2 id="channels-heading">Channels</h2>
-            </div>
-            <p id="channels-description">Choose where to continue working.</p>
+            <div><p class="eyebrow">Workspace</p><h2 id="channels-heading">Conversations</h2></div>
+            <p id="channels-description">Choose a conversation to continue.</p>
           </header>
-          <div class="channel-list" id="channel-list">
-            <p class="channel-list-empty">Channels appear here after you connect.</p>
-          </div>
+          <div class="channel-list" id="channel-list"><p class="channel-list-empty">Your conversations will appear here.</p></div>
         </nav>
 
         <footer class="sidebar-footer">
-          <p class="history-note">
-            Your conversation history is saved locally and returns when you
-            reconnect.
-          </p>
-          <button class="quiet-button" id="disconnect" type="button">
-            Disconnect
-          </button>
+          <div class="continuity-note"><span class="continuity-icon" aria-hidden="true">↻</span><p class="history-note">History is saved locally and ready when you return.</p></div>
+          <button class="quiet-button" id="disconnect" type="button">Disconnect</button>
         </footer>
       </aside>
 
-      <section
-        class="conversation-pane"
-        id="conversation-content"
-        aria-labelledby="channel-title"
-      >
+      <section class="conversation-pane" id="conversation-content" aria-labelledby="channel-title">
         <header class="conversation-header conversation-toolbar">
           <div class="channel-identity">
-            <p class="eyebrow">Current channel</p>
-            <h1 id="channel-title">Select a channel</h1>
+            <div class="channel-title-row">
+              <span class="channel-avatar" aria-hidden="true">#</span>
+              <div><p class="eyebrow">Conversation</p><h1 id="channel-title">Select a conversation</h1></div>
+            </div>
             <p id="channel-meta">Your shared conversations will appear here.</p>
           </div>
           <div class="recipient-field">
-            <label class="target-control" for="message-target">
-              <span>Send to</span>
-              <select
-                id="message-target"
-                aria-label="Message recipient"
-                aria-describedby="target-description"
-              >
-                <option value="">Choose a channel first</option>
-              </select>
-            </label>
-            <p class="target-description" id="target-description">
-              Replies stay in the current channel.
-            </p>
+            <label class="target-control" for="message-target"><span>Talking to</span><select id="message-target" aria-label="Message recipient" aria-describedby="target-description"><option value="">Choose a conversation first</option></select></label>
+            <p class="target-description" id="target-description">Replies stay in this conversation.</p>
           </div>
         </header>
 
-        <section
-          class="message-region conversation-content"
-          aria-label="Conversation history"
-        >
-          <div
-            class="empty-conversation"
-            id="empty-conversation"
-            role="status"
-            aria-live="polite"
-          >
-            <div class="empty-illustration" aria-hidden="true">
-              <span>↳</span>
-            </div>
-            <p class="empty-kicker">Ready when you are</p>
-            <h2 id="empty-conversation-title">Choose a channel</h2>
-            <p id="empty-conversation-copy">
-              Select a channel to see its history and new replies.
-            </p>
+        <section class="message-region conversation-content" aria-label="Conversation history">
+          <div class="empty-conversation" id="empty-conversation" role="status" aria-live="polite">
+            <div class="empty-illustration" aria-hidden="true"><span class="empty-avatar">Y</span><span class="empty-avatar">A</span></div>
+            <p class="empty-kicker">Your team is ready</p>
+            <h2 id="empty-conversation-title">Choose a conversation</h2>
+            <p id="empty-conversation-copy">Select one from the sidebar to see its history and new replies.</p>
           </div>
-          <div
-            class="message-list"
-            id="message-list"
-            role="log"
-            aria-label="Messages"
-            aria-live="polite"
-            aria-relevant="additions"
-            tabindex="0"
-          ></div>
+          <div class="message-list" id="message-list" role="log" aria-label="Messages" aria-live="polite" aria-relevant="additions" tabindex="0"></div>
         </section>
 
-        <form
-          class="composer composer-shell"
-          id="composer"
-          aria-label="Write a message"
-        >
+        <form class="composer composer-shell" id="composer" aria-label="Write a message">
           <div class="composer-input">
             <label class="sr-only" for="composer-text">Message</label>
-            <textarea
-              id="composer-text"
-              name="message"
-              rows="1"
-              placeholder="Ask an agent or share an update…"
-              aria-describedby="composer-hint"
-              disabled
-            ></textarea>
+            <textarea id="composer-text" name="message" rows="1" placeholder="Write a message…" aria-describedby="composer-hint" disabled></textarea>
           </div>
           <div class="composer-footer">
-            <p class="composer-hint" id="composer-hint">
-              <span class="keyboard-key">Enter</span> to send
-              <span aria-hidden="true">·</span>
-              <span class="keyboard-key">Shift + Enter</span> for a new line
-            </p>
-            <button
-              class="send-button"
-              id="send-message"
-              type="submit"
-              disabled
-            >
-              <span class="send-button-label">Send</span>
-              <span aria-hidden="true">↗</span>
-            </button>
+            <p class="composer-hint" id="composer-hint"><span class="keyboard-key">Enter</span> to send <span aria-hidden="true">·</span> <span class="keyboard-key">Shift + Enter</span> for a new line</p>
+            <button class="send-button" id="send-message" type="submit" disabled><span class="send-button-label">Send</span><span class="ui-icon ui-icon-send" aria-hidden="true">↑</span></button>
           </div>
         </form>
       </section>

@@ -166,7 +166,7 @@ export interface MemberOptionView {
 export function memberOptionView(member: ChannelMember): MemberOptionView {
   return {
     id: member.agent_id,
-    label: member.agent_name,
+    label: displayName(member.agent_name),
     description: `${member.agent_name} (${shortId(member.agent_id)})`,
     preferred: member.delivery_mode === "inbox",
   };
@@ -194,4 +194,30 @@ export function recipientLabel(
 
 export function shortId(value: string): string {
   return value.length > 12 ? `${value.slice(0, 8)}…` : value;
+}
+
+/**
+ * Turns generated Fleetd names into useful primary labels without hiding the
+ * authoritative value from titles and message details.
+ *
+ * Human-authored names are returned untouched. Only a terminal UUID marks a
+ * name as generated, keeping ordinary punctuation and deliberate casing safe.
+ */
+export function displayName(value: string): string {
+  const trimmed = value.trim();
+  const stem = trimmed.replace(
+    /[-_](?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+    "",
+  );
+  if (stem === trimmed) return value;
+
+  const words = stem.split(/[-_]+/).filter(Boolean);
+  if (words.length === 0) return value;
+  return words
+    .map((word, index) => {
+      if (/^[a-z]$/i.test(word)) return word.toUpperCase();
+      if (index === 0) return `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
+      return word.toLowerCase();
+    })
+    .join(" ");
 }

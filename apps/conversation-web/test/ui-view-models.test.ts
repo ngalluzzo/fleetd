@@ -6,6 +6,7 @@ import type {
 } from "../../../clients/typescript/src/generated/types.gen.ts";
 import {
   connectionStatusView,
+  displayName,
   emptyConversationView,
   memberOptionView,
   recipientLabel,
@@ -102,6 +103,22 @@ describe("conversation UI view models", () => {
       "channel",
     );
     expect(shortId("0123456789abcdef")).toBe("01234567…");
+  });
+
+  test("humanizes generated names while preserving authored names", () => {
+    expect(
+      displayName("phase-c-worker-261804d5-28af-4126-b1c0-ec43f31a784b"),
+    ).toBe("Phase C worker");
+    expect(
+      displayName("research_lead-261804d5-28af-4126-b1c0-ec43f31a784b"),
+    ).toBe("Research lead");
+    expect(
+      displayName("review-seat-0198e62f-6e0d-7cc8-a92a-82e6247bc517"),
+    ).toBe("Review seat");
+    expect(displayName("Piler")).toBe("Piler");
+    expect(displayName("gooir-gooir-001-buzz-event-surface")).toBe(
+      "gooir-gooir-001-buzz-event-surface",
+    );
   });
 });
 

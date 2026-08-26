@@ -1,93 +1,104 @@
 @layer adaptations {
-  @media (max-width: 56rem) {
+  @media (max-width: 64rem) {
     .connect-panel {
-      grid-template-columns: minmax(0, 1fr) minmax(21rem, 25rem);
+      grid-template-columns: minmax(0, 1fr) minmax(24rem, 27rem);
+      gap: var(--fd-space-12);
+    }
+
+    .connect-copy h1 {
+      font-size: clamp(3.25rem, 6.8vw, 4.75rem);
+    }
+
+    .benefit-list {
+      gap: var(--fd-space-3);
+    }
+
+    .conversation-app {
+      grid-template-columns: 15.5rem minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 52rem) {
+    .connect-panel {
+      width: min(100% - var(--fd-space-8), 40rem);
+      grid-template-columns: minmax(0, 1fr);
       gap: var(--fd-space-10);
+      padding-block: var(--fd-space-10);
+    }
+
+    .onboarding-brand-row {
+      margin-bottom: var(--fd-space-10);
+    }
+
+    .connect-copy h1 {
+      max-width: 10ch;
+      font-size: clamp(3.5rem, 11vw, 5.25rem);
+    }
+
+    .onboarding-message,
+    .onboarding-preview,
+    .benefit-list {
+      max-width: none;
+    }
+
+    .connect-form {
+      width: min(100%, 34rem);
+      margin-inline: auto;
     }
 
     .conversation-app {
       grid-template-columns: 14rem minmax(0, 1fr);
     }
 
-    .brand-row {
-      display: block;
-    }
-
-    .brand-row .connection-status {
-      margin-top: var(--fd-space-3);
-    }
-
     .conversation-header {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(12rem, 16rem);
       gap: var(--fd-space-5);
     }
 
     .target-control {
-      min-width: 0;
+      min-width: min(13rem, 32vw);
     }
 
-    .message > header code {
-      display: none;
+    .message {
+      width: min(39rem, 90%);
+    }
+
+    .message-self {
+      width: min(35rem, 84%);
     }
   }
 
   @media (max-width: 44rem) {
-    .connect-panel {
-      width: min(100% - var(--fd-space-8), 32rem);
-      grid-template-columns: minmax(0, 1fr);
-      gap: var(--fd-space-10);
-      padding-block: var(--fd-space-10);
-    }
-
-    .connect-copy h1 {
-      font-size: clamp(3.25rem, 17vw, 5.25rem);
-    }
-
-    .contract-fields {
-      grid-template-columns: 1fr;
-    }
-
     .conversation-app {
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: 3.75rem minmax(0, 1fr);
       grid-template-columns: minmax(0, 1fr);
     }
 
     .sidebar {
+      position: relative;
+      z-index: 5;
       display: grid;
       min-height: 0;
-      grid-template-rows: auto;
+      grid-template-rows: 1fr;
       grid-template-columns: auto minmax(0, 1fr) auto;
       align-items: center;
       border-right: 0;
       border-bottom: 1px solid var(--fd-color-border-subtle);
+      background: var(--fd-color-shell);
     }
 
     .brand-row {
       display: block;
-      min-height: 0;
       border-bottom: 0;
-      padding: var(--fd-space-3) var(--fd-space-4);
+      padding: var(--fd-space-3) 0 var(--fd-space-3) var(--fd-space-4);
     }
 
-    .brand-row .eyebrow,
-    .connection-status,
-    .sidebar-footer p {
+    .brand-row .site-brand {
+      width: auto;
+    }
+
+    .sidebar-brand-copy,
+    .connection-status {
       display: none;
-    }
-
-    .brand-row h1 {
-      margin: 0;
-      font-size: var(--fd-text-sm);
-    }
-
-    .channel-list {
-      min-width: 0;
-      flex-direction: row;
-      gap: var(--fd-space-1);
-      overflow-x: auto;
-      padding: var(--fd-space-2) 0;
-      scrollbar-width: none;
     }
 
     .channel-navigation {
@@ -97,6 +108,15 @@
 
     .navigation-heading {
       display: none;
+    }
+
+    .channel-list {
+      min-width: 0;
+      flex-direction: row;
+      gap: var(--fd-space-1);
+      overflow-x: auto;
+      padding: var(--fd-space-2) var(--fd-space-3);
+      scrollbar-width: none;
     }
 
     .channel-list::-webkit-scrollbar {
@@ -109,20 +129,36 @@
 
     .channel-button {
       width: auto;
-      max-width: min(15rem, 52vw);
+      max-width: min(17rem, 54vw);
+      min-height: 2.5rem;
       flex: 0 0 auto;
-      padding-inline: var(--fd-space-3);
+      border-radius: var(--fd-radius-round);
+      padding: var(--fd-space-1) var(--fd-space-3) var(--fd-space-1) var(--fd-space-2);
+      font-size: var(--fd-text-xs);
+    }
+
+    .channel-marker {
+      width: 1.5rem;
+      height: 1.5rem;
+      border-radius: 50%;
+      font-size: 0.625rem;
     }
 
     .sidebar-footer {
+      display: block;
       border-top: 0;
-      padding: var(--fd-space-2) var(--fd-space-3);
+      padding: var(--fd-space-2) var(--fd-space-3) var(--fd-space-2) 0;
+    }
+
+    .continuity-note {
+      display: none;
     }
 
     .sidebar-footer .quiet-button {
       width: auto;
       min-height: var(--fd-control-sm);
-      padding-inline: var(--fd-space-2);
+      border-radius: var(--fd-radius-round);
+      padding-inline: var(--fd-space-3);
       white-space: nowrap;
     }
 
@@ -134,20 +170,174 @@
       padding: var(--fd-space-3) var(--fd-space-4);
     }
 
+    .channel-avatar {
+      width: 2rem;
+      height: 2rem;
+      border-radius: var(--fd-radius-md);
+    }
+
+    .conversation-header h1,
+    .conversation-header h2 {
+      font-size: var(--fd-text-lg);
+    }
+
+    .conversation-header p:not(.eyebrow) {
+      margin-left: 2.75rem;
+    }
+
+    .recipient-field {
+      min-width: 11rem;
+      align-content: center;
+    }
+
+    .recipient-field .target-description {
+      display: none;
+    }
+
     .target-control {
       min-width: 0;
     }
 
     .message-list {
-      padding: var(--fd-space-5) var(--fd-space-4);
+      padding: var(--fd-space-5) var(--fd-space-4) var(--fd-space-8);
     }
 
     .message {
-      width: 96%;
+      width: min(36rem, 92%);
+      margin-bottom: var(--fd-space-5);
+    }
+
+    .message-self {
+      width: min(33rem, 88%);
     }
 
     .message details pre {
-      width: min(30rem, 74vw);
+      width: min(30rem, 80vw);
+    }
+
+    .composer {
+      width: calc(100% - (var(--fd-space-4) * 2));
+      margin-bottom: var(--fd-space-4);
+    }
+  }
+
+  @media (max-width: 34rem) {
+    .connect-panel {
+      width: calc(100% - var(--fd-space-6));
+      gap: var(--fd-space-8);
+      padding-block: var(--fd-space-6);
+    }
+
+    .onboarding-brand-row {
+      margin-bottom: var(--fd-space-8);
+    }
+
+    .connect-copy h1 {
+      font-size: clamp(3.25rem, 16vw, 4.5rem);
+    }
+
+    .onboarding-preview {
+      padding: var(--fd-space-4);
+    }
+
+    .benefit-list {
+      display: none;
+    }
+
+    .participant-fields,
+    .contract-fields {
+      grid-template-columns: 1fr;
+    }
+
+    .connect-form {
+      padding: var(--fd-space-5);
+    }
+
+    .conversation-app {
+      grid-template-rows: 3.5rem minmax(0, 1fr);
+    }
+
+    .brand-row {
+      padding-left: var(--fd-space-3);
+    }
+
+    .brand-row .brand-mark {
+      width: 1.5rem;
+      height: 1.5rem;
+      font-size: var(--fd-text-xs);
+    }
+
+    .channel-list {
+      padding-inline: var(--fd-space-2);
+    }
+
+    .sidebar-footer {
+      padding-right: var(--fd-space-2);
+    }
+
+    .sidebar-footer .quiet-button {
+      overflow: hidden;
+      max-width: 5.5rem;
+      text-overflow: ellipsis;
+    }
+
+    .conversation-header {
+      display: grid;
+      gap: var(--fd-space-2);
+      padding: var(--fd-space-3);
+    }
+
+    .channel-avatar {
+      display: none;
+    }
+
+    .channel-title-row {
+      display: block;
+    }
+
+    .conversation-header p:not(.eyebrow) {
+      margin-left: 0;
+    }
+
+    .recipient-field {
+      min-width: 0;
+    }
+
+    .target-control {
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      gap: var(--fd-space-3);
+    }
+
+    .target-control select {
+      min-height: 2.25rem;
+    }
+
+    .message-list {
+      padding: var(--fd-space-5) var(--fd-space-3) var(--fd-space-8);
+    }
+
+    .message,
+    .message-self {
+      width: 94%;
+    }
+
+    .message-text,
+    .message-json {
+      border-radius: var(--fd-radius-lg);
+      padding: var(--fd-space-3) var(--fd-space-4);
+    }
+
+    .message > header strong {
+      max-width: 58vw;
+    }
+
+    .message footer {
+      gap: var(--fd-space-2);
+    }
+
+    .message-recipient {
+      max-width: 42vw;
     }
 
     .composer {
@@ -155,36 +345,52 @@
       margin-bottom: var(--fd-space-3);
     }
 
-    .composer-footer > span {
-      display: none;
+    .composer textarea {
+      padding: var(--fd-space-4) var(--fd-space-4) var(--fd-space-2);
     }
 
     .composer-footer {
-      justify-content: flex-end;
-      padding-left: var(--fd-space-2);
+      padding: 0 var(--fd-space-2) var(--fd-space-2) var(--fd-space-4);
     }
-  }
 
-  @media (max-width: 28rem) {
-    .brand-row {
+    .composer-hint {
+      overflow: hidden;
+      max-width: 11rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .composer-hint .keyboard-key:nth-of-type(2),
+    .composer-hint .keyboard-key:nth-of-type(2) ~ * {
       display: none;
     }
 
+    .send-button {
+      min-width: 3.75rem;
+    }
+  }
+
+  @media (max-height: 42rem) and (min-width: 44.01rem) {
+    .onboarding-preview,
+    .benefit-list {
+      display: none;
+    }
+
+    .onboarding-brand-row {
+      margin-bottom: var(--fd-space-8);
+    }
+
+    .connect-copy h1 {
+      font-size: clamp(3rem, 6vw, 4.5rem);
+    }
+
     .connect-panel {
-      width: calc(100% - var(--fd-space-6));
-      padding-block: var(--fd-space-6);
+      padding-block: var(--fd-space-5);
     }
 
     .connect-form {
+      gap: var(--fd-space-2);
       padding: var(--fd-space-5);
-    }
-
-    .message-list {
-      padding-inline: var(--fd-space-3);
-    }
-
-    .message {
-      width: 100%;
     }
   }
 
@@ -200,6 +406,7 @@
   }
 
   @media (prefers-contrast: more) {
+    /* Deliberate literal overrides maximize contrast independent of the theme. */
     :root {
       --fd-color-text-secondary: #c8d0d9;
       --fd-color-text-tertiary: #a6b0bb;
@@ -210,9 +417,7 @@
   }
 
   @media (forced-colors: active) {
-    :root {
-      --fd-shadow-focus: none;
-    }
+    :root { --fd-shadow-focus: none; }
 
     body,
     .connect-form,

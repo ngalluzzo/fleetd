@@ -19,8 +19,27 @@
   h1,
   h2,
   h3,
+  p,
+  figure,
+  blockquote,
+  dl,
+  dd {
+    margin-block: 0;
+  }
+
+  h1,
+  h2,
+  h3,
   p {
     overflow-wrap: break-word;
+  }
+
+  img,
+  picture,
+  svg,
+  canvas {
+    display: block;
+    max-width: 100%;
   }
 
   button,
@@ -29,6 +48,9 @@
   textarea {
     margin: 0;
     border: 0;
+    border-radius: 0;
+    background: none;
+    color: inherit;
     font: inherit;
   }
 
