@@ -51,9 +51,12 @@ may choose only operation ID, recipient, kind, and payload. The runner derives
 sender, channel, correlation, causation, and idempotency from the leased input.
 
 If the runner crashes after appending an effect but before acknowledging its
-input, durable replay either observes the effect in channel history or retries
-the same derived idempotency key. A changed replay conflicts and is blocked
-rather than silently producing a different transition.
+input, durable replay observes logical effects across the complete correlated
+history. Already committed siblings are suppressed while any missing sibling
+is still proposed. A changed replay conflicts and is blocked rather than
+silently producing a different transition. Operation IDs are short per-input
+labels, so bounded semantic request IDs do not overflow Fleetd idempotency
+keys.
 
 ## Build and run
 
@@ -83,6 +86,12 @@ that transcript. The seven declared Draft 2020-12 schemas describe the same
 semantic objects after that extraction, including every variant, closed nested
 objects, required fields, and global bounds. This is an intentional
 first-integration coupling, not a normalization layer.
+
+A completed review is accepted only when its message causation identifies the
+exact `review.requested` assignment. That assignment binds the exact proposed
+artifact message and projection; an absent or mismatched causal assignment, a
+different second artifact at the same revision, or a conflicting second review
+result is rejected.
 
 Submit the root request to the runner with `correlation_id` equal to
 `request_id`:

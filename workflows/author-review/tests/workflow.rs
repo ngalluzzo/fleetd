@@ -118,7 +118,7 @@ fn one_parent_fans_out_revises_and_completes_deterministically() {
     assert_eq!(review_a0.proposals[0].recipient_id, REVIEWER);
     append_proposals(&mut history, &review_a0.proposals);
 
-    history.push(message(
+    let completed = message(
         REVIEWER,
         Some(RUNNER),
         REVIEW_COMPLETED,
@@ -130,7 +130,8 @@ fn one_parent_fans_out_revises_and_completes_deterministically() {
             "summary": "One correction is required",
             "findings": ["Add the missing restart assertion"]
         }),
-    ));
+    );
+    history.push(review_response(&history, completed));
     let revision = run(&history);
     assert_eq!(revision.proposals.len(), 1);
     assert_eq!(revision.proposals[0].kind, REVISION_REQUESTED);
@@ -141,7 +142,8 @@ fn one_parent_fans_out_revises_and_completes_deterministically() {
     history.push(change_artifact(AUTHOR_A, "FLEETD-001-A", 1, "a1"));
     let review_a1 = run(&history);
     append_proposals(&mut history, &review_a1.proposals);
-    history.push(approved_review("FLEETD-001-A", 1));
+    let approved = approved_review("FLEETD-001-A", 1);
+    history.push(review_response(&history, approved));
     let complete_a = run(&history);
     assert_eq!(complete_a.proposals.len(), 1);
     assert_eq!(complete_a.proposals[0].kind, WORK_COMPLETED);
@@ -154,7 +156,8 @@ fn one_parent_fans_out_revises_and_completes_deterministically() {
     history.push(change_artifact(AUTHOR_B, "FLEETD-001-B", 0, "b0"));
     let review_b = run(&history);
     append_proposals(&mut history, &review_b.proposals);
-    history.push(approved_review("FLEETD-001-B", 0));
+    let approved = approved_review("FLEETD-001-B", 0);
+    history.push(review_response(&history, approved));
     let final_review = history.last().expect("final review").clone();
     let complete = run(&history);
     assert_eq!(complete.proposals.len(), 2);
@@ -228,7 +231,8 @@ fn role_selection_and_sender_attribution_are_deterministic() {
     assert_eq!(review.proposals[0].recipient_id, REVIEWER);
     append_proposals(&mut history, &review.proposals);
 
-    history.push(completed_review(AUTHOR_B, "FLEETD-001-A", 0, "approve"));
+    let wrong_review = completed_review(AUTHOR_B, "FLEETD-001-A", 0, "approve");
+    history.push(review_response(&history, wrong_review));
     let error = evaluate(&params(&history)).expect_err("review from wrong reviewer");
     assert!(error.to_string().contains("assigned reviewer"));
 }
@@ -239,7 +243,7 @@ fn correlated_replay_suppresses_committed_effects_but_keeps_missing_effects() {
     history.push(change_artifact(AUTHOR_A, "FLEETD-001-A", 0, "a0"));
     let request_review = run(&history);
     append_proposals(&mut history, &request_review.proposals);
-    let review = approved_review("FLEETD-001-A", 0);
+    let review = review_response(&history, approved_review("FLEETD-001-A", 0));
     history.push(review.clone());
 
     let completion = run(&history);
@@ -253,6 +257,93 @@ fn correlated_replay_suppresses_committed_effects_but_keeps_missing_effects() {
 
     let fully_committed = evaluate(&params_with_input(&history, review)).expect("complete replay");
     assert!(fully_committed.proposals.is_empty());
+
+    let duplicate_review = review_response(&history, approved_review("FLEETD-001-A", 0));
+    history.push(duplicate_review);
+    assert!(run(&history).proposals.is_empty());
+}
+
+#[test]
+fn logical_assignments_are_deduplicated_across_distinct_inputs() {
+    let mut history = vec![message(HUMAN, Some(RUNNER), WORK_REQUESTED, root_request())];
+    let root = run(&history);
+    append_proposals(&mut history, &root.proposals);
+
+    history.push(message(HUMAN, Some(RUNNER), WORK_REQUESTED, root_request()));
+    assert!(run(&history).proposals.is_empty());
+
+    history.push(message(
+        COORDINATOR,
+        Some(RUNNER),
+        ARTIFACT_PROPOSED,
+        decomposition(&["FLEETD-001-A"]),
+    ));
+    let fanout = run(&history);
+    append_proposals(&mut history, &fanout.proposals);
+    history.push(message(
+        COORDINATOR,
+        Some(RUNNER),
+        ARTIFACT_PROPOSED,
+        decomposition(&["FLEETD-001-A"]),
+    ));
+    assert!(run(&history).proposals.is_empty());
+}
+
+#[test]
+fn reviews_bind_to_their_exact_causal_assignment_and_artifact() {
+    let mut history = one_child_history();
+    let first_artifact = change_artifact(AUTHOR_A, "FLEETD-001-A", 0, "same");
+    history.push(first_artifact.clone());
+    let first_review_request = run(&history);
+    append_proposals(&mut history, &first_review_request.proposals);
+
+    let conflicting = change_artifact(AUTHOR_A, "FLEETD-001-A", 0, "different");
+    history.push(conflicting);
+    let error = evaluate(&params(&history)).expect_err("conflicting artifact revision");
+    assert!(error.to_string().contains("different accepted artifact"));
+    history.pop();
+
+    let duplicate_artifact = change_artifact(AUTHOR_A, "FLEETD-001-A", 0, "same");
+    history.push(duplicate_artifact.clone());
+    let mut second_request_payload = first_review_request.proposals[0].payload.clone();
+    second_request_payload["proposal_message_id"] = json!(duplicate_artifact.id);
+    let mut second_review_request = message(
+        RUNNER,
+        Some(REVIEWER),
+        REVIEW_REQUESTED,
+        second_request_payload,
+    );
+    second_review_request.causation_id = Some(duplicate_artifact.id.clone());
+    history.push(second_review_request);
+
+    let without_cause = approved_review("FLEETD-001-A", 0);
+    history.push(without_cause);
+    let error = evaluate(&params(&history)).expect_err("review without exact causation");
+    assert!(error.to_string().contains("precise review assignment"));
+    history.pop();
+
+    let completed = review_response(&history, approved_review("FLEETD-001-A", 0));
+    history.push(completed);
+    let completion = run(&history);
+    assert_eq!(
+        completion.proposals[0].payload["proposal_message_id"],
+        duplicate_artifact.id
+    );
+}
+
+#[test]
+fn maximum_length_request_id_still_produces_bounded_operation_ids() {
+    let request_id = "x".repeat(128);
+    let mut input = message(HUMAN, Some(RUNNER), WORK_REQUESTED, root_request());
+    input.payload["request_id"] = json!(request_id);
+    input.correlation_id = Some(request_id.clone());
+    let history = vec![input.clone()];
+    let mut parameters = params_with_input(&history, input);
+    parameters.workflow_id = request_id;
+
+    let evaluated = evaluate(&parameters).expect("maximum request ID");
+    assert_eq!(evaluated.proposals.len(), 1);
+    assert!(evaluated.proposals[0].operation_id.len() <= 128);
 }
 
 #[test]
@@ -268,7 +359,8 @@ fn revision_round_configuration_and_transition_boundaries_are_consistent() {
     zero_rounds.push(change_artifact(AUTHOR_A, "FLEETD-001-A", 0, "a0"));
     let request_review = run_with_max_rounds(&zero_rounds, 0);
     append_proposals(&mut zero_rounds, &request_review.proposals);
-    zero_rounds.push(completed_review(REVIEWER, "FLEETD-001-A", 0, "revise"));
+    let revise = completed_review(REVIEWER, "FLEETD-001-A", 0, "revise");
+    zero_rounds.push(review_response(&zero_rounds, revise));
     let blocked = run_with_max_rounds(&zero_rounds, 0);
     assert_eq!(blocked.proposals.len(), 2);
     assert!(
@@ -283,7 +375,8 @@ fn revision_round_configuration_and_transition_boundaries_are_consistent() {
     eight_rounds.push(change_artifact(AUTHOR_A, "FLEETD-001-A", 7, "a7"));
     let request_review = run_with_max_rounds(&eight_rounds, 8);
     append_proposals(&mut eight_rounds, &request_review.proposals);
-    eight_rounds.push(completed_review(REVIEWER, "FLEETD-001-A", 7, "revise"));
+    let revise = completed_review(REVIEWER, "FLEETD-001-A", 7, "revise");
+    eight_rounds.push(review_response(&eight_rounds, revise));
     let final_revision = run_with_max_rounds(&eight_rounds, 8);
     assert_eq!(final_revision.proposals.len(), 1);
     assert_eq!(final_revision.proposals[0].kind, REVISION_REQUESTED);
@@ -293,7 +386,8 @@ fn revision_round_configuration_and_transition_boundaries_are_consistent() {
     eight_rounds.push(change_artifact(AUTHOR_A, "FLEETD-001-A", 8, "a8"));
     let request_review = run_with_max_rounds(&eight_rounds, 8);
     append_proposals(&mut eight_rounds, &request_review.proposals);
-    eight_rounds.push(completed_review(REVIEWER, "FLEETD-001-A", 8, "revise"));
+    let revise = completed_review(REVIEWER, "FLEETD-001-A", 8, "revise");
+    eight_rounds.push(review_response(&eight_rounds, revise));
     let blocked = run_with_max_rounds(&eight_rounds, 8);
     assert_eq!(blocked.proposals.len(), 2);
     assert!(
@@ -452,6 +546,26 @@ fn completed_review(
             "findings": if decision == "revise" { vec!["Address the material finding"] } else { Vec::<&str>::new() }
         }),
     )
+}
+
+fn review_response(history: &[WorkflowMessage], mut review: WorkflowMessage) -> WorkflowMessage {
+    let request_id = review.payload["request_id"]
+        .as_str()
+        .expect("review request ID");
+    let revision = review.payload["revision"]
+        .as_u64()
+        .expect("review revision");
+    let assignment = history
+        .iter()
+        .rev()
+        .find(|message| {
+            message.kind == REVIEW_REQUESTED
+                && message.payload["request_id"] == request_id
+                && message.payload["revision"] == revision
+        })
+        .expect("review assignment");
+    review.causation_id = Some(assignment.id.clone());
+    review
 }
 
 fn revision_assignment(revision: u32) -> WorkflowMessage {

@@ -32,6 +32,10 @@ payloads remain bounded. The runner derives:
 - causation from the leased message ID; and
 - idempotency as `workflow/{input_message_id}/{operation_id}`.
 
+Operation IDs are bounded labels unique within one evaluation. Semantic
+request IDs remain in the payload and are not copied into operation IDs, so a
+valid maximum-length request ID cannot overflow the runner's idempotency bound.
+
 ## Wire
 
 The runner launches an absolute executable without a shell, clears its
@@ -137,6 +141,13 @@ completes the child; revision returns it to its original author. The parent
 completes only when every child is complete and blocks when a child exceeds its
 revision bound.
 
+Each `review.completed` input must have `causation_id` equal to the exact
+`review.requested` assignment it answers. That assignment's
+`proposal_message_id` and proposal projection must in turn identify and match
+the exact correlated change artifact from the assigned author. A second,
+different artifact for the same child revision or a second, different result
+for the same review assignment is rejected.
+
 The initial artifact is revision `0` and does not consume a revision round. A
 configuration value `N` permits at most `N` additional author attempts,
 numbered `1` through `N`. A `revise` decision on revision `r` emits revision
@@ -148,8 +159,16 @@ and parent. Thus `0` permits review of the initial artifact but blocks its first
 ## Recovery and failure
 
 The plugin is deterministic and owns no storage. Each evaluation reconstructs
-state from immutable correlated history and returns only missing effects. A
-runner crash after append but before acknowledgement is safe: replacement
+state from immutable correlated history and returns only missing logical
+effects. Deduplication spans the full workflow correlation rather than only the
+current input's causation edge, so a second semantically identical root,
+decomposition, artifact, or review result does not create another transition.
+Each effect in a multi-effect transition is checked separately: committed
+effects are suppressed while missing siblings are still proposed. A
+conflicting committed effect or changed semantic input is rejected instead of
+being mistaken for a replay.
+
+A runner crash after append but before acknowledgement is safe: replacement
 either sees the already committed event or reuses the same Fleetd idempotency
 key. A changed effect for that identity returns conflict and blocks the input.
 

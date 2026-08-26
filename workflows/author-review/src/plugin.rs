@@ -204,7 +204,7 @@ fn evaluate_root_request(
         ));
     }
     let proposal = ProposedMessage {
-        operation_id: format!("assign-coordinator:{}", request.request_id),
+        operation_id: "assign-coordinator".to_owned(),
         recipient_id: configuration.coordinator_agent_id.clone(),
         kind: WORK_REQUESTED.to_owned(),
         payload: json!({
@@ -221,7 +221,7 @@ fn evaluate_root_request(
             }
         }),
     };
-    let proposals = missing_effect(params, proposal).into_iter().collect();
+    let proposals = missing_effect(params, proposal)?.into_iter().collect();
     Ok(EvaluateResult {
         projection: json!({
             "workflow_id": params.workflow_id,
@@ -305,6 +305,7 @@ fn evaluate_decomposition(
             "decomposition sender is not the assigned coordinator".to_owned(),
         ));
     }
+    reject_conflicting_decomposition(params, &params.input.sender_id, request_id, children)?;
     if children.is_empty() || children.len() > configuration.max_children {
         return Err(payload_error(
             ARTIFACT_PROPOSED,
@@ -329,7 +330,7 @@ fn evaluate_decomposition(
     for (index, child) in children.iter().enumerate() {
         let author = &configuration.author_agent_ids[index % configuration.author_agent_ids.len()];
         let proposal = ProposedMessage {
-            operation_id: format!("assign-author:{}:0", child.request_id),
+            operation_id: format!("assign-author:{index}"),
             recipient_id: author.clone(),
             kind: WORK_REQUESTED.to_owned(),
             payload: json!({
@@ -347,7 +348,7 @@ fn evaluate_decomposition(
                 }
             }),
         };
-        proposals.extend(missing_effect(params, proposal));
+        proposals.extend(missing_effect(params, proposal)?);
     }
     Ok(EvaluateResult {
         projection: projection(params, request_id, "awaiting_child_artifacts", children),
@@ -412,12 +413,24 @@ fn evaluate_change_artifact(
             "change artifact sender is not its assigned author".to_owned(),
         ));
     }
+    reject_conflicting_change_artifact(
+        params,
+        artifact.request_id,
+        artifact.revision,
+        &params.input.sender_id,
+        &serde_json::to_value(&ProposedArtifact::Change {
+            schema_version: artifact.schema_version,
+            request_id: artifact.request_id.to_owned(),
+            revision: artifact.revision,
+            summary: artifact.summary.to_owned(),
+            artifacts: artifact.artifacts.to_vec(),
+            evidence: artifact.evidence.to_vec(),
+        })
+        .expect("serializing a semantic artifact cannot fail"),
+    )?;
     let reviewer = select_reviewer(configuration, &params.input.sender_id, artifact.request_id)?;
     let proposal = ProposedMessage {
-        operation_id: format!(
-            "request-review:{}:{}:{}",
-            artifact.request_id, artifact.revision, params.input.id
-        ),
+        operation_id: "request-review".to_owned(),
         recipient_id: reviewer.to_owned(),
         kind: REVIEW_REQUESTED.to_owned(),
         payload: json!({
@@ -438,7 +451,7 @@ fn evaluate_change_artifact(
             }
         }),
     };
-    let proposals = missing_effect(params, proposal).into_iter().collect();
+    let proposals = missing_effect(params, proposal)?.into_iter().collect();
     let children = find_children(&params.history, &params.workflow_id)?;
     Ok(EvaluateResult {
         projection: projection(params, &params.workflow_id, "awaiting_review", &children),
@@ -459,20 +472,28 @@ fn evaluate_review(
     for finding in &review.findings {
         validate_text("review finding", finding)?;
     }
-    let review_request = find_assignment(
-        &params.history,
-        &params.runner_agent_id,
-        REVIEW_REQUESTED,
-        &review.request_id,
-        "reviewer",
-        review.revision,
-    )
-    .ok_or_else(|| {
-        AuthorReviewError::Evaluation(format!(
-            "review {} revision {} has no review assignment",
-            review.request_id, review.revision
-        ))
-    })?;
+    let review_request = params
+        .input
+        .causation_id
+        .as_deref()
+        .and_then(|causation_id| {
+            params.history.iter().find(|message| {
+                message.id == causation_id
+                    && message.sender_id == params.runner_agent_id
+                    && message.kind == REVIEW_REQUESTED
+                    && assignment_identity(message).is_some_and(|identity| {
+                        identity.request_id == review.request_id
+                            && identity.assignment == "reviewer"
+                            && identity.revision == review.revision
+                    })
+            })
+        })
+        .ok_or_else(|| {
+            AuthorReviewError::Evaluation(format!(
+                "review {} revision {} is not caused by its precise review assignment",
+                review.request_id, review.revision
+            ))
+        })?;
     if review_request.recipient_id.as_deref() != Some(&params.input.sender_id) {
         return Err(AuthorReviewError::Evaluation(
             "completed review sender is not its assigned reviewer".to_owned(),
@@ -483,6 +504,14 @@ fn evaluate_review(
         .ok_or_else(|| {
             AuthorReviewError::Evaluation("review request lacks proposal identity".to_owned())
         })?;
+    validate_reviewed_proposal(
+        params,
+        review_request,
+        &proposal_message_id,
+        &review.request_id,
+        review.revision,
+    )?;
+    reject_conflicting_completed_review(params, review_request, &review)?;
     let root = find_root_request(&params.history, &params.workflow_id)?;
     let children = find_children(&params.history, &params.workflow_id)?;
     if !children
@@ -526,7 +555,7 @@ fn approve_review(
 ) -> Result<Vec<ProposedMessage>, AuthorReviewError> {
     let mut proposals = Vec::new();
     let complete_child = ProposedMessage {
-        operation_id: format!("complete-child:{}:{}", review.request_id, review.revision),
+        operation_id: "complete-child".to_owned(),
         recipient_id: root_requester(&params.history, &params.workflow_id)?.to_owned(),
         kind: WORK_COMPLETED.to_owned(),
         payload: json!({
@@ -539,10 +568,10 @@ fn approve_review(
             "summary": review.summary
         }),
     };
-    proposals.extend(missing_effect(params, complete_child));
+    proposals.extend(missing_effect(params, complete_child)?);
     if parent_will_be_complete(params, &review.request_id, children) {
         let complete_parent = ProposedMessage {
-            operation_id: format!("complete-parent:{}", params.workflow_id),
+            operation_id: "complete-parent".to_owned(),
             recipient_id: root_requester(&params.history, &params.workflow_id)?.to_owned(),
             kind: WORK_COMPLETED.to_owned(),
             payload: json!({
@@ -554,7 +583,7 @@ fn approve_review(
                 "summary": "Every child change request completed its author-review policy."
             }),
         };
-        proposals.extend(missing_effect(params, complete_parent));
+        proposals.extend(missing_effect(params, complete_parent)?);
     }
     Ok(proposals)
 }
@@ -576,7 +605,7 @@ fn revise_review(
     if review.revision >= configuration.max_revision_rounds {
         let mut proposals = Vec::new();
         let block_child = ProposedMessage {
-            operation_id: format!("block-child:{}", review.request_id),
+            operation_id: "block-child".to_owned(),
             recipient_id: requester.to_owned(),
             kind: WORK_BLOCKED.to_owned(),
             payload: json!({
@@ -588,9 +617,9 @@ fn revise_review(
                 "findings": review.findings
             }),
         };
-        proposals.extend(missing_effect(params, block_child));
+        proposals.extend(missing_effect(params, block_child)?);
         let block_parent = ProposedMessage {
-            operation_id: format!("block-parent:{}", params.workflow_id),
+            operation_id: "block-parent".to_owned(),
             recipient_id: requester.to_owned(),
             kind: WORK_BLOCKED.to_owned(),
             payload: json!({
@@ -602,7 +631,7 @@ fn revise_review(
                 "blocked_child_id": review.request_id
             }),
         };
-        proposals.extend(missing_effect(params, block_parent));
+        proposals.extend(missing_effect(params, block_parent)?);
         return Ok(proposals);
     }
     let next_revision = review.revision + 1;
@@ -617,7 +646,7 @@ fn revise_review(
     .and_then(|message| message.recipient_id.as_deref())
     .ok_or_else(|| AuthorReviewError::Evaluation("child has no original author".to_owned()))?;
     let proposal = ProposedMessage {
-        operation_id: format!("request-revision:{}:{next_revision}", review.request_id),
+        operation_id: "request-revision".to_owned(),
         recipient_id: original_author.to_owned(),
         kind: REVISION_REQUESTED.to_owned(),
         payload: json!({
@@ -637,7 +666,7 @@ fn revise_review(
             }
         }),
     };
-    Ok(missing_effect(params, proposal).into_iter().collect())
+    Ok(missing_effect(params, proposal)?.into_iter().collect())
 }
 
 fn validate_evaluation(params: &EvaluateParams) -> Result<(), AuthorReviewError> {
@@ -933,16 +962,266 @@ fn extract_semantic_payload(message: &WorkflowMessage) -> Result<Value, AuthorRe
     serde_json::from_str(&text).map_err(|error| payload_error(&message.kind, error.to_string()))
 }
 
-fn missing_effect(params: &EvaluateParams, proposal: ProposedMessage) -> Option<ProposedMessage> {
-    let committed = params.history.iter().any(|message| {
-        message.sender_id == params.runner_agent_id
-            && message.recipient_id.as_deref() == Some(proposal.recipient_id.as_str())
-            && message.kind == proposal.kind
-            && message.payload == proposal.payload
-            && message.correlation_id.as_deref() == Some(params.workflow_id.as_str())
-            && message.causation_id.as_deref() == Some(params.input.id.as_str())
+fn reject_conflicting_decomposition(
+    params: &EvaluateParams,
+    coordinator_id: &str,
+    request_id: &str,
+    children: &[ChildRequest],
+) -> Result<(), AuthorReviewError> {
+    let current = serde_json::to_value(ProposedArtifact::Decomposition {
+        schema_version: 1,
+        request_id: request_id.to_owned(),
+        children: children.to_vec(),
+    })
+    .expect("serializing a semantic artifact cannot fail");
+    for message in &params.history {
+        if message.id == params.input.id
+            || message.kind != ARTIFACT_PROPOSED
+            || message.sender_id != coordinator_id
+            || message.recipient_id.as_deref() != Some(params.runner_agent_id.as_str())
+        {
+            continue;
+        }
+        let Ok(value) = extract_semantic_payload(message) else {
+            continue;
+        };
+        let Ok(ProposedArtifact::Decomposition {
+            schema_version,
+            request_id: prior_request_id,
+            children: prior_children,
+        }) = serde_json::from_value(value)
+        else {
+            continue;
+        };
+        if schema_version != 1 || prior_request_id != request_id {
+            continue;
+        }
+        let prior = serde_json::to_value(ProposedArtifact::Decomposition {
+            schema_version,
+            request_id: prior_request_id,
+            children: prior_children,
+        })
+        .expect("serializing a semantic artifact cannot fail");
+        if prior != current {
+            return Err(AuthorReviewError::Evaluation(
+                "workflow already has a different coordinator decomposition".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_conflicting_change_artifact(
+    params: &EvaluateParams,
+    request_id: &str,
+    revision: u32,
+    author_id: &str,
+    current: &Value,
+) -> Result<(), AuthorReviewError> {
+    for message in &params.history {
+        if message.id == params.input.id
+            || message.kind != ARTIFACT_PROPOSED
+            || message.sender_id != author_id
+            || message.recipient_id.as_deref() != Some(params.runner_agent_id.as_str())
+        {
+            continue;
+        }
+        let Ok(value) = extract_semantic_payload(message) else {
+            continue;
+        };
+        let Ok(prior) = serde_json::from_value::<ProposedArtifact>(value) else {
+            continue;
+        };
+        let ProposedArtifact::Change {
+            request_id: prior_request_id,
+            revision: prior_revision,
+            ..
+        } = &prior
+        else {
+            continue;
+        };
+        if prior_request_id != request_id || *prior_revision != revision {
+            continue;
+        }
+        let prior =
+            serde_json::to_value(&prior).expect("serializing a semantic artifact cannot fail");
+        if &prior != current {
+            return Err(AuthorReviewError::Evaluation(format!(
+                "change {request_id} revision {revision} already has a different accepted artifact"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn reject_conflicting_completed_review(
+    params: &EvaluateParams,
+    review_request: &WorkflowMessage,
+    current: &CompletedReview,
+) -> Result<(), AuthorReviewError> {
+    let current_request_id = current.request_id.clone();
+    let current_revision = current.revision;
+    let current =
+        serde_json::to_value(current).expect("serializing a completed review cannot fail");
+    for message in &params.history {
+        if message.id == params.input.id
+            || message.kind != REVIEW_COMPLETED
+            || message.sender_id != params.input.sender_id
+            || message.recipient_id.as_deref() != Some(params.runner_agent_id.as_str())
+            || message.causation_id.as_deref() != Some(review_request.id.as_str())
+        {
+            continue;
+        }
+        let Ok(value) = extract_semantic_payload(message) else {
+            continue;
+        };
+        let Ok(prior) = serde_json::from_value::<CompletedReview>(value) else {
+            continue;
+        };
+        if prior.request_id != current_request_id || prior.revision != current_revision {
+            continue;
+        }
+        let prior =
+            serde_json::to_value(prior).expect("serializing a completed review cannot fail");
+        if prior != current {
+            return Err(AuthorReviewError::Evaluation(
+                "review assignment already has a different completed review".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_reviewed_proposal(
+    params: &EvaluateParams,
+    review_request: &WorkflowMessage,
+    proposal_message_id: &str,
+    request_id: &str,
+    revision: u32,
+) -> Result<(), AuthorReviewError> {
+    let proposal_message = params
+        .history
+        .iter()
+        .find(|message| {
+            message.id == proposal_message_id
+                && message.kind == ARTIFACT_PROPOSED
+                && message.recipient_id.as_deref() == Some(params.runner_agent_id.as_str())
+        })
+        .ok_or_else(|| {
+            AuthorReviewError::Evaluation(
+                "review assignment does not identify a correlated artifact".to_owned(),
+            )
+        })?;
+    if review_request.causation_id.as_deref() != Some(proposal_message_id) {
+        return Err(AuthorReviewError::Evaluation(
+            "review assignment is not caused by its exact artifact".to_owned(),
+        ));
+    }
+    let value = extract_semantic_payload(proposal_message)?;
+    let artifact = decode_value::<ProposedArtifact>(ARTIFACT_PROPOSED, value)?;
+    let ProposedArtifact::Change {
+        schema_version,
+        request_id: artifact_request_id,
+        revision: artifact_revision,
+        summary,
+        artifacts,
+        evidence,
+        ..
+    } = artifact
+    else {
+        return Err(AuthorReviewError::Evaluation(
+            "review assignment does not identify a change artifact".to_owned(),
+        ));
+    };
+    require_schema_one(schema_version, ARTIFACT_PROPOSED)?;
+    if artifact_request_id != request_id || artifact_revision != revision {
+        return Err(AuthorReviewError::Evaluation(
+            "review assignment identifies the wrong artifact revision".to_owned(),
+        ));
+    }
+    let author_assignment = find_assignment(
+        &params.history,
+        &params.runner_agent_id,
+        if revision == 0 {
+            WORK_REQUESTED
+        } else {
+            REVISION_REQUESTED
+        },
+        request_id,
+        "author",
+        revision,
+    )
+    .ok_or_else(|| {
+        AuthorReviewError::Evaluation("reviewed artifact has no author assignment".to_owned())
+    })?;
+    if author_assignment.recipient_id.as_deref() != Some(proposal_message.sender_id.as_str()) {
+        return Err(AuthorReviewError::Evaluation(
+            "reviewed artifact sender is not its assigned author".to_owned(),
+        ));
+    }
+    let expected = json!({
+        "summary": summary,
+        "artifacts": artifacts,
+        "evidence": evidence
     });
-    (!committed).then_some(proposal)
+    if review_request.payload.get("proposal") != Some(&expected) {
+        return Err(AuthorReviewError::Evaluation(
+            "review assignment proposal does not match its exact artifact".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn missing_effect(
+    params: &EvaluateParams,
+    proposal: ProposedMessage,
+) -> Result<Option<ProposedMessage>, AuthorReviewError> {
+    let mut committed = false;
+    for message in &params.history {
+        if message.sender_id != params.runner_agent_id || !same_logical_effect(message, &proposal) {
+            continue;
+        }
+        if message.recipient_id.as_deref() != Some(proposal.recipient_id.as_str())
+            || stable_effect_payload(&proposal.kind, &message.payload)
+                != stable_effect_payload(&proposal.kind, &proposal.payload)
+        {
+            return Err(AuthorReviewError::Evaluation(format!(
+                "correlated history contains a conflicting committed {} effect",
+                proposal.kind
+            )));
+        }
+        committed = true;
+    }
+    Ok((!committed).then_some(proposal))
+}
+
+fn same_logical_effect(message: &WorkflowMessage, proposal: &ProposedMessage) -> bool {
+    if message.kind != proposal.kind
+        || message.payload.get("request_id") != proposal.payload.get("request_id")
+    {
+        return false;
+    }
+    match proposal.kind.as_str() {
+        WORK_REQUESTED | REVIEW_REQUESTED | REVISION_REQUESTED => {
+            message.payload.get("assignment") == proposal.payload.get("assignment")
+                && message.payload.get("revision") == proposal.payload.get("revision")
+        }
+        WORK_COMPLETED | WORK_BLOCKED => true,
+        _ => false,
+    }
+}
+
+fn stable_effect_payload(kind: &str, payload: &Value) -> Value {
+    let mut payload = payload.clone();
+    if let Some(object) = payload.as_object_mut() {
+        if kind == REVIEW_REQUESTED {
+            object.remove("proposal_message_id");
+        }
+        if kind == REVISION_REQUESTED || kind == WORK_COMPLETED {
+            object.remove("review_message_id");
+        }
+    }
+    payload
 }
 
 fn find_assignment<'a>(
