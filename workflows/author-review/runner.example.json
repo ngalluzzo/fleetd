@@ -24,6 +24,6 @@
   },
   "lease_duration_ms": 30000,
   "poll_interval_ms": 1000,
-  "retry_base_delay_ms": 11000,
+  "retry_base_delay_ms": 16000,
   "retry_max_delay_ms": 60000
 }

@@ -36,9 +36,11 @@ const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
 const HISTORY_PAGE_SIZE: u32 = 500;
 const MAX_RETRY_DELAY_MS: u64 = 86_400_000;
 const FLEETD_REQUEST_TIMEOUT_MS: u64 = 10_000;
-const MIN_RETRY_BASE_DELAY_MS: u64 = FLEETD_REQUEST_TIMEOUT_MS + 1_000;
-const DEFAULT_RETRY_BASE_DELAY_MS: u64 = MIN_RETRY_BASE_DELAY_MS;
-const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 60_000;
+const MAX_PLUGIN_REQUEST_TIMEOUT_MS: u64 = 60_000;
+const RETRY_SCHEDULING_MARGIN_MS: u64 = 1_000;
+const DEFAULT_RETRY_BASE_DELAY_MS: u64 =
+    FLEETD_REQUEST_TIMEOUT_MS + MAX_PLUGIN_REQUEST_TIMEOUT_MS + RETRY_SCHEDULING_MARGIN_MS;
+const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 300_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -440,10 +442,10 @@ fn validate_configuration(configuration: &RunnerConfiguration) -> Result<(), Run
             "plugin args must contain at most {MAX_ARGS} values of at most {MAX_ARG_BYTES} bytes"
         )));
     }
-    if !(100..=60_000).contains(&configuration.plugin.request_timeout_ms) {
-        return Err(RunnerError::Configuration(
-            "plugin request_timeout_ms must be between 100 and 60000".to_owned(),
-        ));
+    if !(100..=MAX_PLUGIN_REQUEST_TIMEOUT_MS).contains(&configuration.plugin.request_timeout_ms) {
+        return Err(RunnerError::Configuration(format!(
+            "plugin request_timeout_ms must be between 100 and {MAX_PLUGIN_REQUEST_TIMEOUT_MS}"
+        )));
     }
     if configuration.lease_duration_ms
         < configuration
@@ -462,11 +464,12 @@ fn validate_configuration(configuration: &RunnerConfiguration) -> Result<(), Run
             "poll_interval_ms must be between 100 and 60000".to_owned(),
         ));
     }
-    if configuration.retry_base_delay_ms < MIN_RETRY_BASE_DELAY_MS
+    let minimum_retry_base_delay_ms = minimum_retry_base_delay_ms(configuration);
+    if configuration.retry_base_delay_ms < minimum_retry_base_delay_ms
         || configuration.retry_base_delay_ms > MAX_RETRY_DELAY_MS
     {
         return Err(RunnerError::Configuration(format!(
-            "retry_base_delay_ms must be between {MIN_RETRY_BASE_DELAY_MS} and {MAX_RETRY_DELAY_MS}"
+            "retry_base_delay_ms must be between {minimum_retry_base_delay_ms} and {MAX_RETRY_DELAY_MS} for the configured plugin timeout"
         )));
     }
     if configuration.retry_max_delay_ms < configuration.retry_base_delay_ms
@@ -485,6 +488,12 @@ const fn default_retry_base_delay_ms() -> u64 {
 
 const fn default_retry_max_delay_ms() -> u64 {
     DEFAULT_RETRY_MAX_DELAY_MS
+}
+
+const fn minimum_retry_base_delay_ms(configuration: &RunnerConfiguration) -> u64 {
+    FLEETD_REQUEST_TIMEOUT_MS
+        .saturating_add(configuration.plugin.request_timeout_ms)
+        .saturating_add(RETRY_SCHEDULING_MARGIN_MS)
 }
 
 fn retry_delay(base_delay_ms: u64, max_delay_ms: u64, attempt: i64) -> u64 {

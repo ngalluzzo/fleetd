@@ -95,7 +95,7 @@ mod tests {
     fn retry_outcome_claims_other_work_before_sleeping() {
         let poll_interval = std::time::Duration::from_mins(1);
         let retried = TickOutcome::Retried {
-            retry_after_ms: 11_000,
+            retry_after_ms: 71_000,
             diagnostic: "bounded retry".to_owned(),
         };
 

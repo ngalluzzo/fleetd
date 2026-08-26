@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, process::Stdio, time::Duration};
 
 use fleetd::{
     AppState, AuthService, ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel,
@@ -222,59 +222,98 @@ async fn dead_child_is_replaced_and_delayed_input_does_not_starve_later_work() {
         .directory
         .path()
         .join("first-generation-failed");
-    let script = replacement_plugin_script(&marker);
+    let script = slow_replacement_plugin_script(&marker);
     let mut configuration = fixture.configuration.clone();
     configuration.plugin.executable = fixture.write_plugin("replacement-plugin", &script);
-    configuration.retry_base_delay_ms = 11_000;
-    configuration.retry_max_delay_ms = 44_000;
-    let mut runner = AuthorReviewRunner::start(configuration)
+    configuration.plugin.request_timeout_ms = 1_000;
+    configuration.retry_base_delay_ms = 12_000;
+    configuration.retry_max_delay_ms = 48_000;
+    let delay_runner = AuthorReviewRunner::start(configuration.clone())
         .await
-        .expect("start runner");
+        .expect("validate bounded retry configuration");
+    assert_eq!(delay_runner.retry_delay_for_attempt(1), 12_000);
+    assert_eq!(delay_runner.retry_delay_for_attempt(2), 24_000);
+    assert_eq!(delay_runner.retry_delay_for_attempt(3), 48_000);
+    assert_eq!(delay_runner.retry_delay_for_attempt(100), 48_000);
+    drop(delay_runner);
 
-    assert_eq!(runner.retry_delay_for_attempt(1), 11_000);
-    assert_eq!(runner.retry_delay_for_attempt(2), 22_000);
-    assert_eq!(runner.retry_delay_for_attempt(3), 44_000);
-    assert_eq!(runner.retry_delay_for_attempt(100), 44_000);
-    let first = runner.tick().await.expect("retry dead child");
-    let TickOutcome::Retried {
-        retry_after_ms,
-        diagnostic,
-    } = first
-    else {
-        panic!("dead child should be retried, got {first:?}");
-    };
-    assert_eq!(retry_after_ms, 22_000);
-    assert!(diagnostic.contains("response read phase is unavailable"));
-    assert!(marker.exists());
+    let config_path = fixture.server.directory.path().join("runner-loop.json");
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&configuration).expect("encode loop configuration"),
+    )
+    .expect("write loop configuration");
+    let mut process =
+        tokio::process::Command::new(env!("CARGO_BIN_EXE_fleetd-author-review-runner"))
+            .arg("--config")
+            .arg(&config_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("launch production runner loop");
 
-    assert_eq!(
-        runner
-            .tick()
-            .await
-            .expect("replacement processes later work"),
-        TickOutcome::Acknowledged
-    );
-    let acknowledged = fixture
+    wait_for_acknowledged(&fixture, &second.id, &mut process).await;
+    process.start_kill().expect("stop production runner loop");
+    process.wait().await.expect("join production runner loop");
+    assert!(marker.exists(), "the first child generation failed");
+    let pending = fixture
         .server
         .store
         .list_deliveries(
             Some(&fixture.runner_agent.agent.id),
-            Some(DeliveryState::Acknowledged),
+            Some(DeliveryState::Pending),
             10,
         )
         .await
-        .expect("list acknowledged delivery");
-    assert!(
-        acknowledged
-            .iter()
-            .any(|record| record.message.id == second.id),
-        "later claimable work progressed through the replacement child"
-    );
+        .expect("list delayed delivery");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message.id, fixture.root.id);
+    assert_eq!(pending[0].attempt, 2);
     let immediately_claimable = claim_root(&fixture.server, &fixture.runner_agent).await;
     assert!(
         immediately_claimable.deliveries.is_empty(),
         "the transiently failing input remains delayed beyond the poll interval"
     );
+}
+
+async fn wait_for_acknowledged(
+    fixture: &WorkflowFixture,
+    message_id: &str,
+    process: &mut tokio::process::Child,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let acknowledged = fixture
+            .server
+            .store
+            .list_deliveries(
+                Some(&fixture.runner_agent.agent.id),
+                Some(DeliveryState::Acknowledged),
+                10,
+            )
+            .await
+            .expect("list acknowledged delivery");
+        if acknowledged
+            .iter()
+            .any(|record| record.message.id == message_id)
+        {
+            return;
+        }
+        assert!(
+            process
+                .try_wait()
+                .expect("inspect production runner")
+                .is_none(),
+            "production runner exited before later work progressed"
+        );
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "slow replacement did not progress later work"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]
@@ -354,10 +393,25 @@ fn retry_controls_reject_poll_interval_reclaim_and_unbounded_delays() {
     )
     .expect("rewrite configuration without optional retry controls");
     let compatible = load_configuration(&path).expect("schema-v1 defaults remain compatible");
-    assert_eq!(compatible.retry_base_delay_ms, 11_000);
-    assert_eq!(compatible.retry_max_delay_ms, 60_000);
+    assert_eq!(compatible.retry_base_delay_ms, 71_000);
+    assert_eq!(compatible.retry_max_delay_ms, 300_000);
 
-    configuration["retry_base_delay_ms"] = json!(11_000);
+    configuration["plugin"]["request_timeout_ms"] = json!(60_000);
+    configuration["lease_duration_ms"] = json!(70_000);
+    configuration["retry_base_delay_ms"] = json!(70_000);
+    configuration["retry_max_delay_ms"] = json!(300_000);
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&configuration).expect("encode configuration"),
+    )
+    .expect("rewrite configuration with unsafe readiness window");
+    let error = load_configuration(&path)
+        .expect_err("retry delay must cover maximum plugin readiness timeout");
+    assert!(error.to_string().contains("71000"));
+
+    configuration["plugin"]["request_timeout_ms"] = json!(5_000);
+    configuration["lease_duration_ms"] = json!(15_000);
+    configuration["retry_base_delay_ms"] = json!(16_000);
     configuration["retry_max_delay_ms"] = json!(86_400_001_u64);
     std::fs::write(
         &path,
@@ -670,7 +724,7 @@ fn runner_configuration(
         }),
         lease_duration_ms: 15_000,
         poll_interval_ms: 100,
-        retry_base_delay_ms: 11_000,
+        retry_base_delay_ms: 16_000,
         retry_max_delay_ms: 60_000,
     }
 }
@@ -725,13 +779,14 @@ fn plugin_script(description_response: &str, evaluation_response: &str) -> Strin
     )
 }
 
-fn replacement_plugin_script(marker: &std::path::Path) -> String {
+fn slow_replacement_plugin_script(marker: &std::path::Path) -> String {
     let description = description_response_with_interface(INTERFACE_ID);
     let evaluation =
         json!({"jsonrpc": "2.0", "id": 2, "result": {"projection": {}, "proposals": []}})
             .to_string();
     format!(
-        "#!/bin/sh\nIFS= read -r _request || exit 1\nprintf '%s\\n' {}\nIFS= read -r _request || exit 1\nif [ ! -e {} ]; then\n  : > {}\n  exit 17\nfi\nprintf '%s\\n' {}\n",
+        "#!/bin/sh\nif [ -e {} ]; then\n  /bin/sleep 0.25\nfi\nIFS= read -r _request || exit 1\nprintf '%s\\n' {}\nIFS= read -r _request || exit 1\nif [ ! -e {} ]; then\n  : > {}\n  exit 17\nfi\nprintf '%s\\n' {}\n",
+        shell_literal(&marker.to_string_lossy()),
         shell_literal(&description),
         shell_literal(&marker.to_string_lossy()),
         shell_literal(&marker.to_string_lossy()),
