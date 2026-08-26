@@ -168,12 +168,12 @@ impl ServerHandler for PublishMessageService {}
 
 #[tool_router(router = tool_router)]
 impl PublishMessageService {
-    /// Publishes one direct, durable Fleetd message under the current
+    /// Publishes one addressed, durable Fleetd message under the current
     /// invocation. Fleetd derives sender, channel, correlation, causation, and
     /// idempotency; the caller controls only the peer, kind, and payload.
     #[tool(
         name = "publish_durable_message",
-        description = "Commit a direct message to a peer in the current Fleetd channel. Returns the committed message identity; it does not wait for a reply. Reuse operation_id for exact retries."
+        description = "Commit an addressed message to a peer in the current Fleetd channel. Returns the committed message identity; it does not wait for a reply. Reuse operation_id for exact retries."
     )]
     async fn publish_durable_message(
         &self,
@@ -271,12 +271,7 @@ mod tests {
         assert_eq!(after_revocation.is_error, Some(true));
         let page = fixture
             .store
-            .list_messages(
-                &fixture.channel.id,
-                Some(&fixture.peer.id),
-                fixture.source.seq,
-                20,
-            )
+            .list_messages(&fixture.channel.id, fixture.source.seq, 20)
             .await
             .expect("read peer messages");
         assert_eq!(

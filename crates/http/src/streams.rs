@@ -73,7 +73,7 @@ async fn issue_browser_stream_grant(
     require_channel_access(&state, &principal, &channel_id).await?;
     state
         .store
-        .list_messages(&channel_id, principal.agent_id(), input.after.get(), 1)
+        .list_messages(&channel_id, input.after.get(), 1)
         .await?;
     let authorization =
         AuthorizedChannelStream::from_principal(channel_id, input.after.get(), &principal);
@@ -128,7 +128,7 @@ struct StreamQuery {
     operation_id = "streamChannelMessages",
     tag = "channels",
     summary = "Replay and stream channel messages",
-    description = "WebSocket upgrade for operators or channel members. Each server text frame is one Message JSON object. Reconnect with the highest durably processed seq as `after`. Client frames other than Close are ignored.",
+    description = "WebSocket upgrade for operators or channel members. Every member receives the same channel log; recipient_id controls addressing and inbox delivery, not visibility. Each server text frame is one Message JSON object. Reconnect with the highest durably processed seq as `after`. Client frames other than Close are ignored.",
     security(("bearerAuth" = [])),
     params(
         ("channel_id" = String, Path, description = "Channel ID"),
@@ -162,7 +162,7 @@ async fn stream(
     require_channel_access(&state, &principal, &channel_id).await?;
     state
         .store
-        .list_messages(&channel_id, principal.agent_id(), query.after, 1)
+        .list_messages(&channel_id, query.after, 1)
         .await?;
     let receiver = state.messages.subscribe();
     let authorization =
@@ -311,12 +311,7 @@ async fn redeem_browser_channel_stream(
     }
     match state
         .store
-        .list_messages(
-            authorization.channel_id(),
-            authorization.viewer_agent_id(),
-            authorization.after(),
-            1,
-        )
+        .list_messages(authorization.channel_id(), authorization.after(), 1)
         .await
     {
         Ok(_) => {}

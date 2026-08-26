@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "1.4.0"
+    "version": "1.5.0"
   },
   "paths": {
     "/health": {
@@ -1724,7 +1724,7 @@
           "channels"
         ],
         "summary": "Read channel history",
-        "description": "Operators or channel members. Direct-message visibility is filtered to the authenticated member.",
+        "description": "Operators or channel members. Every member reads the same channel history; recipient_id controls addressing and inbox delivery, not visibility.",
         "operationId": "listChannelMessages",
         "parameters": [
           {
@@ -1953,7 +1953,7 @@
           "channels"
         ],
         "summary": "Replay and stream channel messages",
-        "description": "WebSocket upgrade for operators or channel members. Each server text frame is one Message JSON object. Reconnect with the highest durably processed seq as `after`. Client frames other than Close are ignored.",
+        "description": "WebSocket upgrade for operators or channel members. Every member receives the same channel log; recipient_id controls addressing and inbox delivery, not visibility. Each server text frame is one Message JSON object. Reconnect with the highest durably processed seq as `after`. Client frames other than Close are ignored.",
         "operationId": "streamChannelMessages",
         "parameters": [
           {

@@ -195,7 +195,7 @@ const APPLICATION_SEND_DEADLINE: Duration = Duration::from_secs(10);
 const CAPACITY_OBSERVATION_DEADLINE: Duration = Duration::from_secs(20);
 
 #[tokio::test]
-async fn browser_stream_replays_filters_continues_and_reconnects() {
+async fn browser_stream_replays_every_channel_message_and_reconnects() {
     let daemon = BrowserDaemon::start().await;
     let author = daemon.register("browser-author").await;
     let recipient = daemon.register("browser-recipient").await;
@@ -210,13 +210,13 @@ async fn browser_stream_replays_filters_continues_and_reconnects() {
             ],
         )
         .await;
-    let hidden = daemon
+    let targeted = daemon
         .send(
             &channel.id,
             &author.credential.token,
             Some(recipient.agent.id.clone()),
-            "private.unknown/v7",
-            json!({"must_not_leak": true}),
+            "targeted.unknown/v7",
+            json!({"addressed_to": "recipient"}),
         )
         .await;
     let visible = daemon
@@ -248,6 +248,7 @@ async fn browser_stream_replays_filters_continues_and_reconnects() {
     );
     redeem(&mut socket, issued).await;
     assert_ready(next_server_frame(&mut socket).await, &channel.id, 0);
+    assert_message(next_server_frame(&mut socket).await, &targeted);
     assert_message(next_server_frame(&mut socket).await, &visible);
 
     let live = daemon
@@ -274,11 +275,11 @@ async fn browser_stream_replays_filters_continues_and_reconnects() {
         visible.seq,
     );
     assert_message(next_server_frame(&mut reconnected).await, &live);
-    assert!(hidden.seq < visible.seq);
+    assert!(targeted.seq < visible.seq);
 }
 
 #[tokio::test]
-async fn browser_stream_preserves_operator_scope_and_revokes_before_delivery() {
+async fn browser_stream_revalidates_member_credentials_before_delivery() {
     let daemon = BrowserDaemon::start().await;
     let author = daemon.register("operator-scope-author").await;
     let recipient = daemon.register("operator-scope-recipient").await;
@@ -288,12 +289,12 @@ async fn browser_stream_preserves_operator_scope_and_revokes_before_delivery() {
             vec![author.agent.id.clone(), recipient.agent.id.clone()],
         )
         .await;
-    let private = daemon
+    let addressed = daemon
         .send(
             &channel.id,
             &author.credential.token,
             Some(recipient.agent.id.clone()),
-            "operator-visible-private/v1",
+            "operator-visible-addressed/v1",
             json!({"opaque": true}),
         )
         .await;
@@ -308,10 +309,10 @@ async fn browser_stream_preserves_operator_scope_and_revokes_before_delivery() {
         &channel.id,
         0,
     );
-    assert_message(next_server_frame(&mut operator_socket).await, &private);
+    assert_message(next_server_frame(&mut operator_socket).await, &addressed);
 
     let member_grant = daemon
-        .issue(&channel.id, &recipient.credential.token, private.seq)
+        .issue(&channel.id, &recipient.credential.token, addressed.seq)
         .await;
     let (mut member_socket, _) = connect_browser(&daemon, None, None)
         .await
@@ -320,7 +321,7 @@ async fn browser_stream_preserves_operator_scope_and_revokes_before_delivery() {
     assert_ready(
         next_server_frame(&mut member_socket).await,
         &channel.id,
-        private.seq,
+        addressed.seq,
     );
     daemon
         .auth
@@ -685,13 +686,13 @@ async fn browser_and_native_streams_have_identical_visibility_at_every_cursor() 
         )
         .await;
 
-    let hidden_first = daemon
+    let targeted_first = daemon
         .send(
             &channel.id,
             &author.credential.token,
             Some(recipient.agent.id.clone()),
-            "private.future-contract/v41",
-            json!({"private_extension": {"must_not_leak": [true, null, 7]}}),
+            "targeted.future-contract/v41",
+            json!({"addressed_extension": {"preserved": [true, null, 7]}}),
         )
         .await;
     let broadcast = daemon
@@ -717,13 +718,13 @@ async fn browser_and_native_streams_have_identical_visibility_at_every_cursor() 
             json!({"opaque": {"array": [3, 2, 1], "enabled": false}}),
         )
         .await;
-    let hidden_last = daemon
+    let targeted_last = daemon
         .send(
             &channel.id,
             &recipient.credential.token,
             Some(author.agent.id.clone()),
-            "private.reply/v2",
-            json!({"also": "hidden"}),
+            "targeted.reply/v2",
+            json!({"addressed_to": "author"}),
         )
         .await;
     let final_broadcast = daemon
@@ -737,13 +738,15 @@ async fn browser_and_native_streams_have_identical_visibility_at_every_cursor() 
         .await;
 
     let all = [
-        hidden_first,
+        targeted_first,
         broadcast.clone(),
         direct.clone(),
-        hidden_last,
+        targeted_last,
         final_broadcast.clone(),
     ];
-    let visible = [broadcast, direct, final_broadcast];
+    // Both transports now replay the whole log, so every cursor sees every
+    // message after it rather than skipping the addressed ones.
+    let visible = all.clone();
     let cursors = std::iter::once(0)
         .chain(all.iter().map(|message| message.seq))
         .collect::<Vec<_>>();

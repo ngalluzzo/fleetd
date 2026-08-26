@@ -46,11 +46,12 @@ an immutable operational membership property and never infers it from agent
 metadata. See [ADR 0023](adr/0023-membership-delivery-mode.md) and the
 [stable membership contract](contracts/channel-membership-delivery-v1.md).
 
-Direct-message visibility remains principal-relative. An operator stream sees
-every message in the selected channel. A participant stream sees broadcasts
-plus direct messages that participant sent or received. A UI that offers both
-views must label which principal owns the view; it must not union records from
-two principals and present the result as one authority.
+Channel visibility follows the familiar team-room model: every member sees the
+same ordered log, including messages addressed to a particular teammate.
+`recipient_id` affects inbox delivery, not channel visibility. Private exchange
+uses a two-member direct conversation rather than a hidden message inside a
+shared channel. See
+[ADR 0027](adr/0027-channel-visible-addressed-messages.md).
 
 ## Human-to-agent turn
 
@@ -86,7 +87,7 @@ transcript.
 A valid conversation subscription must provide:
 
 - authentication before any application data is released;
-- the same principal-relative visibility as HTTP history;
+- the same channel-wide member visibility as HTTP history;
 - ordered replay for every message with `seq > after`;
 - live continuation without a replay/live race;
 - recovery from in-memory broadcast lag through the durable log;
@@ -127,11 +128,10 @@ cookie, Web Storage, IndexedDB, generated artifact, or log. Static assets keep
 the existing no-third-party-script content security policy and `no-store`
 responses.
 
-For viewing an operator-scoped channel and sending as a human participant, the
-surface holds two separately labelled in-memory credentials. It mints a
-single-use stream grant with the viewing credential and sends messages with the
-human participant credential. A future native shell may source those
-credentials from an operating-system secret store without changing either
+The surface uses the operator credential for fleet-wide discovery and the
+human participant credential for channel history, streaming, and attributed
+sends. Both remain separately labelled and memory-only. A future native shell
+may source them from an operating-system secret store without changing either
 principal or the Fleetd protocol.
 
 ## Semantic integration boundary
@@ -252,7 +252,7 @@ and its
 
 Presentation work begins above a versioned headless session, not in the
 messaging kernel. The session consumes a replaceable transport for channel and
-membership discovery, principal-relative replay/live continuation, and
+membership discovery, channel-authorized replay/live continuation, and
 attributed sends. Browser, desktop, and future TUI targets share selection,
 cursor, stable-identity, and teardown behavior while supplying their own wire
 edge and rendering. See

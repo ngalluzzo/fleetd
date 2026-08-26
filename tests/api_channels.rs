@@ -304,11 +304,15 @@ async fn sender_attribution_and_inbox_access_are_bound_to_the_agent_credential()
 }
 
 #[tokio::test]
-async fn channel_history_scopes_direct_messages_to_their_participants() {
+async fn channel_history_is_shared_while_targeted_delivery_stays_addressed() {
     let server = Daemon::start().await;
     let alice = server.register("alice").await;
     let bob = server.register("bob").await;
-    let channel = server.channel(&[&alice.agent.id, &bob.agent.id]).await;
+    let charlie = server.register("charlie").await;
+    let outsider = server.register("outsider").await;
+    let channel = server
+        .channel(&[&alice.agent.id, &bob.agent.id, &charlie.agent.id])
+        .await;
 
     let direct = send_message(&server, &channel.id, &alice, &bob.agent.id).await;
     let broadcast: Message = server
@@ -337,6 +341,7 @@ async fn channel_history_scopes_direct_messages_to_their_participants() {
     for (role, token) in [
         ("sender", &alice.credential.token),
         ("recipient", &bob.credential.token),
+        ("uninvolved member", &charlie.credential.token),
     ] {
         let page: MessagePage = server
             .get(
@@ -353,6 +358,33 @@ async fn channel_history_scopes_direct_messages_to_their_participants() {
             .expect("member history body");
         assert_eq!(page.messages, expected, "{role} history");
     }
+
+    // Reading the addressed message did not enqueue it: `recipient_id` still
+    // decides who owes work, so the uninvolved member's inbox holds only the
+    // broadcast.
+    let charlie_inbox = claim(&server, &charlie.agent.id, &charlie.credential.token)
+        .await
+        .error_for_status()
+        .expect("uninvolved member inbox status")
+        .json::<ClaimBatch>()
+        .await
+        .expect("uninvolved member inbox body");
+    assert_eq!(charlie_inbox.deliveries.len(), 1);
+    assert_eq!(charlie_inbox.deliveries[0].message, broadcast);
+
+    let outsider_history = server
+        .get(
+            &format!("/v1/channels/{}/messages", channel.id),
+            Some(&outsider.credential.token),
+        )
+        .send()
+        .await
+        .expect("non-member history response");
+    assert_eq!(
+        outsider_history.status(),
+        reqwest::StatusCode::FORBIDDEN,
+        "channel membership remains the visibility boundary"
+    );
 
     let operator_page: MessagePage = server
         .get(

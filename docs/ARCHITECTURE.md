@@ -86,7 +86,7 @@ sequence number, and recover lag from SQLite.
 A local continuous worker commits results from a separate process against the
 same SQLite authority. After a newly created message commits, that writer emits
 one content-free best-effort Unix datagram. The daemon converts it to a stream
-wake and every affected consumer reconciles its principal-relative cursor from
+wake and every affected consumer reconciles its authorized channel cursor from
 SQLite. The hint carries no message or authority, and loss or duplication is
 safe because reconnect replay remains the recovery path. See
 [ADR 0024](adr/0024-cross-process-message-commit-hints.md).
@@ -285,11 +285,16 @@ actual-client real-browser qualification matrices pass. See the
 
 Addressable membership does not imply a leased work inbox. The stable
 membership delivery mode keeps autonomous `inbox` seats distinct from
-`stream_only` human or passive clients while preserving the same durable log
-and visibility. Fleetd stores that operational choice on exact channel
+`stream_only` human or passive clients while preserving the same complete
+channel log. Fleetd stores that operational choice on exact channel
 membership rather than interpreting participant metadata. See
 [ADR 0023](adr/0023-membership-delivery-mode.md) and the
 [membership contract](contracts/channel-membership-delivery-v1.md).
+
+Addressing and visibility are deliberately separate. Every channel member
+reads the same ordered log; `recipient_id` selects inbox delivery, while a
+two-member direct conversation supplies privacy. See
+[ADR 0027](adr/0027-channel-visible-addressed-messages.md).
 
 Conversation messages and execution telemetry remain distinct. Immutable
 channel messages already have durable replay plus live continuation. Mutable

@@ -32,7 +32,7 @@ process memory.
 The grant:
 
 - expires 15 seconds after issuance using a monotonic enforcement deadline;
-- is bound to the issuing credential ID and principal visibility;
+- is bound to the issuing credential ID and authorized channel;
 - is bound to one channel, cursor, protocol, and daemon process;
 - can be redeemed exactly once through an atomic remove-before-use operation;
 - is never accepted in a URI, cookie, HTTP authorization header, or WebSocket
@@ -71,7 +71,7 @@ unbounded memory. It reconnects with a newly minted grant and its last accepted
 cursor.
 
 The existing bearer-authenticated WebSocket remains the native/TUI transport.
-Both entry paths call the same principal-relative replay/live implementation.
+Both entry paths call the same channel-authorized replay/live implementation.
 Neither path grants message-send authority over the socket.
 
 The exact stable wire contract is

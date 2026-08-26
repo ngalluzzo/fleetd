@@ -41,8 +41,9 @@ unauthenticated compatibility mode.
 
 - Tokens never appear in logs, list responses, or persisted plaintext.
 - Cross-agent claim, settlement, and sender spoofing fail in integration tests.
-- Direct messages surface in history and streams only to their sender,
-  recipient, and operator scope.
+- Channel history and streams require exact channel access; every member sees
+  the same log, while private communication uses a two-member direct
+  conversation.
 - Revocation takes effect on the next request.
 - Operator revocation is permanent: a restored file holding a revoked digest
   fails startup instead of reactivating the credential.

@@ -90,7 +90,7 @@ const fn default_page_limit() -> u32 {
     operation_id = "listChannelMessages",
     tag = "channels",
     summary = "Read channel history",
-    description = "Operators or channel members. Direct-message visibility is filtered to the authenticated member.",
+    description = "Operators or channel members. Every member reads the same channel history; recipient_id controls addressing and inbox delivery, not visibility.",
     security(("bearerAuth" = [])),
     params(
         ("channel_id" = String, Path, description = "Channel ID"),
@@ -115,7 +115,7 @@ async fn list_messages(
     Ok(Json(
         state
             .store
-            .list_messages(&channel_id, principal.agent_id(), query.after, query.limit)
+            .list_messages(&channel_id, query.after, query.limit)
             .await?,
     ))
 }

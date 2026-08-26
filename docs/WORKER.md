@@ -67,7 +67,7 @@ evidence, and logs never receive that token. Unknown or duplicate grant names
 fail configuration validation before a plugin starts.
 
 The exposed `publish_durable_message` tool requires `operation_id`,
-`recipient_id`, `kind`, and `payload`. It is direct-message only, rejects
+`recipient_id`, `kind`, and `payload`. It is addressed-message only, rejects
 self-send, permits at most eight committed messages per invocation, and caps
 the encoded payload at 64 KiB. Exact retries reuse the operation ID and return
 the same committed message. The agent cannot choose sender, channel,

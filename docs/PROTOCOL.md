@@ -40,11 +40,13 @@ membership change because it creates no new effect; the first use always
 requires current sender and recipient membership. See
 [ADR 0006](adr/0006-idempotent-message-append.md).
 
-A channel message with no recipient is visible to every member. A direct
-message is visible only to its sender, its recipient, and an operator; HTTP
-history and WebSocket streams enforce this against the authenticated
-principal. A direct recipient must also be a member of the channel. Consumers
-should retain unknown envelope fields when they proxy or persist messages.
+Every channel member sees the same immutable message log through HTTP history
+and WebSocket replay. `recipient_id` addresses a message and controls its inbox
+delivery; it is not a visibility boundary. A recipient must be a member of the
+channel. Communication that must be private belongs in a `direct`
+conversation, whose membership is exactly two participants. Consumers should
+retain unknown envelope fields when they proxy or persist messages. See
+[ADR 0027](adr/0027-channel-visible-addressed-messages.md).
 
 Membership is permanent for a channel's lifetime: fleetd offers no member
 removal, and an agent added later still replays full history from any cursor.
@@ -71,14 +73,14 @@ including exact member identities and delivery modes plus the latest message
 sequence and timestamp. Archived shared channels are omitted by default and
 may be included explicitly. These lifecycle and discovery operations require
 the operator principal; message history and streaming retain their existing
-principal-relative membership rules.
+channel-wide membership rules.
 
 Each membership has one immutable delivery mode. `inbox` preserves the leased
-work guarantee: direct and broadcast append snapshot a delivery row under the
-existing rules. `stream_only` remains fully addressable and retains identical
-history and live-stream visibility, but message append creates no leased inbox
-row for that membership. Existing memberships, omitted add-member modes, and
-the `CreateChannel.member_ids` shorthand all use `inbox`.
+work guarantee: addressed and broadcast append snapshot delivery rows under
+the existing rules. `stream_only` remains fully addressable and retains
+identical history and live-stream visibility, but message append creates no
+leased inbox row for that membership. Existing memberships, omitted add-member
+modes, and the `CreateChannel.member_ids` shorthand all use `inbox`.
 
 `CreateChannel.members` accepts exact agent and delivery-mode pairs in the same
 atomic creation transaction. Duplicate agents across either initial input are
@@ -101,9 +103,9 @@ no duplicate message because replay advances only by sequence. See
 
 ## Agent inbox delivery
 
-Appending a direct message creates one delivery for its recipient. Appending a
-broadcast snapshots all current channel members except the sender. Membership
-changes never create or remove deliveries for an existing message.
+Appending an addressed message creates one delivery for its recipient.
+Appending a broadcast snapshots all current channel members except the sender.
+Membership changes never create or remove deliveries for an existing message.
 
 `POST /v1/agents/{agent_id}/deliveries/claim` accepts a bounded batch size and
 lease duration. It atomically returns the oldest eligible deliveries, one lease
@@ -237,4 +239,4 @@ challenge; valid credentials without the necessary authority return `403`.
 The browser authentication and tagged-frame edge is fixed by the stable
 [`browser-channel-stream-v1.md`](contracts/browser-channel-stream-v1.md)
 contract. The native bearer-authenticated stream and browser grant-authenticated
-stream share the same principal-relative replay/live engine.
+stream share the same channel-authorized replay/live engine.

@@ -87,7 +87,7 @@ async fn membership_delivery_modes_control_only_the_delivery_snapshot() {
     assert_eq!(replay.message, direct_to_human.message);
     assert!(claim_all(&store, &human.id).await.deliveries.is_empty());
     let human_history = store
-        .list_messages(&channel.id, Some(&human.id), 0, 100)
+        .list_messages(&channel.id, 0, 100)
         .await
         .expect("stream member history");
     assert_eq!(human_history.messages, vec![direct_to_human.message]);
@@ -238,7 +238,7 @@ async fn messages_are_durable_ordered_and_cursor_addressable() {
 
     assert!(second.seq > first.seq);
     let page = store
-        .list_messages(&channel.id, None, first.seq, 100)
+        .list_messages(&channel.id, first.seq, 100)
         .await
         .expect("list after cursor");
     assert_eq!(page.messages, vec![second.clone()]);
@@ -249,23 +249,23 @@ async fn messages_are_durable_ordered_and_cursor_addressable() {
         .await
         .expect("reopen store");
     let durable = reopened
-        .list_messages(&channel.id, None, 0, 100)
+        .list_messages(&channel.id, 0, 100)
         .await
         .expect("read durable messages");
     assert_eq!(durable.messages, vec![first, second]);
 }
 
 #[tokio::test]
-async fn direct_messages_are_scoped_to_their_sender_and_recipient() {
+async fn addressed_messages_stay_visible_to_the_whole_channel() {
     let (_directory, store) = test_store().await;
     let piler = agent(&store, "piler").await;
     let weaver = agent(&store, "weaver").await;
-    let eavesdropper = agent(&store, "eavesdropper").await;
+    let bystander = agent(&store, "bystander").await;
     let channel = store
         .create_channel(CreateChannel {
             name: "scoped".to_owned(),
             metadata: json!({}),
-            member_ids: vec![piler.id.clone(), weaver.id.clone(), eavesdropper.id.clone()],
+            member_ids: vec![piler.id.clone(), weaver.id.clone(), bystander.id.clone()],
             members: Vec::new(),
         })
         .await
@@ -290,50 +290,45 @@ async fn direct_messages_are_scoped_to_their_sender_and_recipient() {
     .await;
     let later_broadcast = append_text(&store, &channel.id, &weaver.id, None, "standup again").await;
 
-    let operator_view = store
-        .list_messages(&channel.id, None, 0, 100)
-        .await
-        .expect("operator view");
-    assert_eq!(
-        operator_view.messages,
-        vec![
-            broadcast.clone(),
-            inbound.clone(),
-            outbound.clone(),
-            later_broadcast.clone()
-        ]
-    );
+    let whole_log = vec![
+        broadcast.clone(),
+        inbound.clone(),
+        outbound.clone(),
+        later_broadcast.clone(),
+    ];
 
-    let participant_view = store
-        .list_messages(&channel.id, Some(&piler.id), 0, 100)
+    // The reader's identity does not narrow the log. A bystander who never sent
+    // or received either addressed message reads exactly what the operator and
+    // the addressed participant read.
+    let page = store
+        .list_messages(&channel.id, 0, 100)
         .await
-        .expect("participant view");
-    assert_eq!(
-        participant_view.messages,
-        vec![
-            broadcast.clone(),
-            inbound,
-            outbound,
-            later_broadcast.clone()
-        ]
-    );
+        .expect("read channel history");
+    assert_eq!(page.messages, whole_log);
+    assert_eq!(page.next_cursor, later_broadcast.seq);
 
-    let first_page = store
-        .list_messages(&channel.id, Some(&eavesdropper.id), 0, 1)
-        .await
-        .expect("eavesdropper first page");
-    assert_eq!(first_page.messages, vec![broadcast.clone()]);
-    assert_eq!(first_page.next_cursor, broadcast.seq);
-    let second_page = store
-        .list_messages(
-            &channel.id,
-            Some(&eavesdropper.id),
-            first_page.next_cursor,
-            1,
-        )
-        .await
-        .expect("eavesdropper second page");
-    assert_eq!(second_page.messages, vec![later_broadcast]);
+    // Addressing survives on the envelope; it just stopped gating reads.
+    assert_eq!(inbound.recipient_id.as_deref(), Some(piler.id.as_str()));
+    assert_eq!(outbound.recipient_id.as_deref(), Some(weaver.id.as_str()));
+    assert_eq!(broadcast.recipient_id, None);
+
+    // Paging walks the addressed messages too, rather than skipping past them
+    // to the next broadcast.
+    let mut walked = Vec::new();
+    let mut cursor = 0;
+    loop {
+        let step = store
+            .list_messages(&channel.id, cursor, 1)
+            .await
+            .expect("walk one message at a time");
+        if step.messages.is_empty() {
+            break;
+        }
+        assert_eq!(step.messages.len(), 1);
+        cursor = step.next_cursor;
+        walked.extend(step.messages);
+    }
+    assert_eq!(walked, whole_log);
 }
 
 #[tokio::test]

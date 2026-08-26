@@ -53,7 +53,7 @@ Prove the public composition rather than adding another feature.
 - Complete an invocation back to the human and prove the result creates no
   human inbox delivery while remaining present in history and native live
   replay.
-- Prove operator and participant visibility remain different and exact.
+- Prove operator and participant replay the same complete member-visible log.
 - Restart the daemon and replay the result from the prior cursor.
 - Exercise broadcast behavior with both membership modes.
 
@@ -77,9 +77,9 @@ Extract the already-qualified replay/live engine without changing its wire
 behavior.
 
 - Represent an authorized stream as exact channel, cursor, credential ID,
-  principal kind, and optional viewer agent ID.
+  principal kind, and optional agent ID for credential revalidation.
 - Keep access checks outside the shared engine.
-- Keep subscription-before-replay, visibility filtering, lag recovery, and
+- Keep subscription-before-replay, channel-wide replay, lag recovery, and
   ascending cursor behavior in one implementation.
 - Retain raw `Message` frames for the existing native/TUI endpoint.
 - Add parity tests proving the refactor emits the identical sequence for every

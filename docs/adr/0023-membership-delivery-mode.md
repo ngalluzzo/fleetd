@@ -43,11 +43,11 @@ channel generation.
 Message append continues to require current sender and direct-recipient
 membership. Within the append transaction:
 
-- a direct message creates a delivery only when its recipient's membership is
-  `inbox`;
+- an addressed message creates a delivery only when its recipient's membership
+  is `inbox`;
 - a broadcast snapshots only other `inbox` members; and
-- every member, regardless of mode, retains the same principal-relative
-  history and live-stream visibility.
+- every member, regardless of mode, sees the same complete channel history and
+  live stream under [ADR 0027](0027-channel-visible-addressed-messages.md).
 
 The public API will expose a channel-membership read model containing channel
 ID, agent ID, agent name, join timestamp, and delivery mode. It will not expose

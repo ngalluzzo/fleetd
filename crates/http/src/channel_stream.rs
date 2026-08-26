@@ -26,7 +26,7 @@ const REPLAY_PAGE_SIZE: u32 = 500;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AuthorizedStreamPrincipal {
     Operator,
-    Agent { viewer_agent_id: String },
+    Agent { agent_id: String },
 }
 
 /// Exact authority and replay position for one channel stream.
@@ -46,7 +46,7 @@ impl AuthorizedChannelStream {
         let stream_principal = match principal {
             Principal::Operator { .. } => AuthorizedStreamPrincipal::Operator,
             Principal::Agent { agent_id, .. } => AuthorizedStreamPrincipal::Agent {
-                viewer_agent_id: agent_id.clone(),
+                agent_id: agent_id.clone(),
             },
         };
         Self {
@@ -74,17 +74,10 @@ impl AuthorizedChannelStream {
             AuthorizedStreamPrincipal::Operator => Principal::Operator {
                 credential_id: self.credential_id.clone(),
             },
-            AuthorizedStreamPrincipal::Agent { viewer_agent_id } => Principal::Agent {
+            AuthorizedStreamPrincipal::Agent { agent_id } => Principal::Agent {
                 credential_id: self.credential_id.clone(),
-                agent_id: viewer_agent_id.clone(),
+                agent_id: agent_id.clone(),
             },
-        }
-    }
-
-    pub(crate) fn viewer_agent_id(&self) -> Option<&str> {
-        match &self.principal {
-            AuthorizedStreamPrincipal::Operator => None,
-            AuthorizedStreamPrincipal::Agent { viewer_agent_id } => Some(viewer_agent_id),
         }
     }
 }
@@ -321,12 +314,7 @@ async fn replay(
 ) -> Result<(), StreamTermination> {
     loop {
         let page = store
-            .list_messages(
-                authorization.channel_id(),
-                authorization.viewer_agent_id(),
-                *cursor,
-                REPLAY_PAGE_SIZE,
-            )
+            .list_messages(authorization.channel_id(), *cursor, REPLAY_PAGE_SIZE)
             .await
             .map_err(|_| StreamTermination::Internal)?;
         let count = page.messages.len();

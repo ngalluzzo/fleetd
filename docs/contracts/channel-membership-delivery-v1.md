@@ -83,7 +83,7 @@ remains `(channel_id, agent_id)`.
 Message append keeps one transaction for the immutable message and delivery
 snapshot.
 
-For a direct message:
+For an addressed message:
 
 1. sender and recipient membership are validated;
 2. the message is appended; and
@@ -107,12 +107,12 @@ The stable contract is qualified by tests that prove:
 2. omitted mode preserves current direct and broadcast delivery behavior;
 3. mixed-mode initial membership commits atomically and duplicate agents across
    the legacy and exact inputs fail without creating a channel;
-4. a direct message to `stream_only` commits and appears in history and live
-   streams without a delivery row;
+4. an addressed message to `stream_only` commits and appears in history and
+   live streams without a delivery row;
 5. a broadcast reaches both modes through history and live streams while only
    `inbox` members receive delivery rows;
-6. direct-message visibility remains limited to sender, recipient, and
-   operator regardless of delivery mode;
+6. every member sees addressed and broadcast messages in the channel log while
+   only the addressed `inbox` member receives a delivery row;
 7. exact member-add replay is idempotent and a mode mismatch conflicts;
 8. agent and channel existence and membership checks fail before append;
 9. the member list exposes only the bounded read model to an exact member and

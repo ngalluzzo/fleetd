@@ -37,7 +37,7 @@ completion and invocation-scoped peer-message publication. Idempotent replays
 that create no message send no hint.
 
 The daemon translates the datagram into an in-process stream wake. Every
-authorized stream then replays its own exact channel and principal-relative
+authorized stream then replays its own exact channel and durable
 cursor from SQLite. The datagram carries no channel ID, message ID, payload,
 credential, or settlement authority.
 

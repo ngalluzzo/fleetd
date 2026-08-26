@@ -200,7 +200,7 @@ async fn shared_channel_rename_and_archive_preserve_history_and_close_writes() {
         .expect_err("archived channel rejects append");
     assert!(matches!(append, fleetd::error::FleetError::Conflict(_)));
     let history = store
-        .list_messages(&channel.id, None, 0, 100)
+        .list_messages(&channel.id, 0, 100)
         .await
         .expect("archived history remains readable");
     assert_eq!(history.messages, vec![message]);

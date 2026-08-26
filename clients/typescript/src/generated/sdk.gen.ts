@@ -262,7 +262,7 @@ export const addChannelMember = <ThrowOnError extends boolean = false>(options: 
 /**
  * Read channel history
  *
- * Operators or channel members. Direct-message visibility is filtered to the authenticated member.
+ * Operators or channel members. Every member reads the same channel history; recipient_id controls addressing and inbox delivery, not visibility.
  */
 export const listChannelMessages = <ThrowOnError extends boolean = false>(options: Options<ListChannelMessagesData, ThrowOnError>) => (options.client ?? client).get<ListChannelMessagesResponses, ListChannelMessagesErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],

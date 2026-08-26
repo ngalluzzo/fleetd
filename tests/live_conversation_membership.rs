@@ -267,21 +267,21 @@ async fn qualify_visibility_and_broadcast(
     participants: &Participants,
     result: &Message,
 ) {
-    let private = post_message(
+    let addressed = post_message(
         daemon,
         &participants.channel_id,
         &participants.worker.credential.token,
         SendMessage {
-            idempotency_key: Some("qualification/private/peer".to_owned()),
+            idempotency_key: Some("qualification/addressed/peer".to_owned()),
             recipient_id: Some(participants.peer.agent.id.clone()),
-            kind: "private.opaque/v1".to_owned(),
-            payload: json!({ "private": true }),
+            kind: "addressed.opaque/v1".to_owned(),
+            payload: json!({ "addressed_to": "peer" }),
             correlation_id: None,
             causation_id: None,
         },
     )
     .await;
-    assert_delivery_recipients(&daemon.database_path, private.seq, &[]).await;
+    assert_delivery_recipients(&daemon.database_path, addressed.seq, &[]).await;
     let human_history = history(
         daemon,
         &participants.channel_id,
@@ -289,7 +289,7 @@ async fn qualify_visibility_and_broadcast(
         result.seq,
     )
     .await;
-    assert!(human_history.messages.is_empty());
+    assert_eq!(human_history.messages, vec![addressed.clone()]);
     let operator_history = history(
         daemon,
         &participants.channel_id,
@@ -297,13 +297,13 @@ async fn qualify_visibility_and_broadcast(
         result.seq,
     )
     .await;
-    assert_eq!(operator_history.messages, vec![private.clone()]);
+    assert_eq!(operator_history.messages, vec![addressed.clone()]);
 
     let mut human_live = open_stream(
         daemon.address,
         &participants.channel_id,
         &participants.human.credential.token,
-        private.seq,
+        addressed.seq,
     )
     .await;
     let broadcast = post_message(
@@ -331,10 +331,10 @@ async fn qualify_visibility_and_broadcast(
         daemon,
         &participants.channel_id,
         &participants.peer.credential.token,
-        private.seq,
+        result.seq,
     )
     .await;
-    assert_eq!(peer_history.messages, vec![broadcast]);
+    assert_eq!(peer_history.messages, vec![addressed, broadcast]);
 }
 
 async fn assert_membership_storage(path: &PathBuf, participants: &Participants) {

@@ -46,8 +46,8 @@ Content-Type: application/json
 `after` is an exclusive non-negative global message cursor. Unknown fields,
 another protocol value, an unknown channel, or insufficient channel access are
 rejected. The ordinary bearer middleware authenticates this request. Operators
-may mint an operator-visible stream; agents must be channel members and receive
-their normal member-relative visibility.
+may mint a stream for any channel; agents must be channel members. Operator and
+member streams replay the same complete channel log.
 
 Success returns `201 Created` and `Cache-Control: no-store`:
 
@@ -176,7 +176,7 @@ immutable Fleetd envelope. The envelope itself is closed: Fleetd rejects
 unknown top-level message fields instead of silently discarding or assigning
 semantics to them. Ecosystem contracts extend messages through the versioned
 `kind` and opaque `payload`; Fleetd stores and forwards both unchanged. Replay
-emits every principal-visible message with `seq > after` in bounded pages. The
+emits every channel message with `seq > after` in bounded pages. The
 live receiver then continues from the last emitted cursor. Broadcast lag
 returns to durable replay rather than skipping records.
 
@@ -222,7 +222,7 @@ response and every static asset carrying authentication code use
 
 The protocol is not complete until automated tests prove:
 
-1. operator and member issuance produce their exact existing visibility;
+1. operator and member issuance replay the same complete channel log;
 2. a real browser `WebSocket` constructor negotiates the constant protocol;
 3. no application frame is emitted before successful redemption;
 4. missing, malformed, oversized, late, expired, reused, and concurrent
@@ -237,7 +237,8 @@ The protocol is not complete until automated tests prove:
    is delivered exactly through replay or live continuation;
 10. broadcast lag and send backpressure close or replay without a silent gap;
 11. reconnect from every prior cursor is ordered and duplicate-tolerant;
-12. direct messages never leak across another member's browser stream;
+12. addressed messages remain visible to every channel member while a
+    non-member cannot mint or redeem that channel's stream;
 13. unknown kinds and opaque payloads survive unchanged, while unknown
     top-level envelope fields fail closed;
 14. daemon restart invalidates unused grants without affecting durable replay;

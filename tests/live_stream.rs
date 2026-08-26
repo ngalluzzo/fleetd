@@ -168,7 +168,7 @@ async fn websocket_replays_a_message_committed_by_another_local_process_store() 
 }
 
 #[tokio::test]
-async fn streams_do_not_leak_direct_messages_between_other_members() {
+async fn streams_show_targeted_messages_to_every_channel_member() {
     let temporary = common::temp_store().await;
     let store = temporary.store.clone();
     let author = create_member(&store, "author").await;
@@ -203,7 +203,7 @@ async fn streams_do_not_leak_direct_messages_between_other_members() {
     .await
     .expect("connect live stream");
 
-    post_message(
+    let targeted = post_message(
         address,
         &channel.id,
         &author_credential.token,
@@ -211,13 +211,14 @@ async fn streams_do_not_leak_direct_messages_between_other_members() {
             idempotency_key: None,
             recipient_id: Some(recipient),
             kind: "text".to_owned(),
-            payload: json!({ "text": "only for recipient" }),
+            payload: json!({ "text": "addressed to recipient" }),
             correlation_id: None,
             causation_id: None,
         },
     )
     .await;
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    // The watcher is neither sender nor recipient, and still sees it live.
+    assert_eq!(next_message(&mut live_socket).await, targeted);
 
     let broadcast = post_message(
         address,
@@ -234,8 +235,7 @@ async fn streams_do_not_leak_direct_messages_between_other_members() {
     )
     .await;
 
-    let delivered = next_message(&mut live_socket).await;
-    assert_eq!(delivered, broadcast);
+    assert_eq!(next_message(&mut live_socket).await, broadcast);
 
     let (mut replay_socket, _) = tokio_tungstenite::connect_async(authenticated_socket_request(
         &stream_url,
@@ -243,8 +243,8 @@ async fn streams_do_not_leak_direct_messages_between_other_members() {
     ))
     .await
     .expect("connect replay stream");
-    let replayed = next_message(&mut replay_socket).await;
-    assert_eq!(replayed, broadcast);
+    assert_eq!(next_message(&mut replay_socket).await, targeted);
+    assert_eq!(next_message(&mut replay_socket).await, broadcast);
     server.abort();
 }
 

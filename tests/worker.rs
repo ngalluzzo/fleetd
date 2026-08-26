@@ -238,7 +238,7 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
     assert_eq!(sessions[0].binding.owner_epoch, 1);
     let history = fixture
         .store
-        .list_messages(&fixture.channel_id, Some(&fixture.sender_id), 0, 100)
+        .list_messages(&fixture.channel_id, 0, 100)
         .await
         .expect("list history");
     assert_eq!(
