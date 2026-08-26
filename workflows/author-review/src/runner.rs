@@ -38,8 +38,12 @@ const MAX_RETRY_DELAY_MS: u64 = 86_400_000;
 const FLEETD_REQUEST_TIMEOUT_MS: u64 = 10_000;
 const MAX_PLUGIN_REQUEST_TIMEOUT_MS: u64 = 60_000;
 const RETRY_SCHEDULING_MARGIN_MS: u64 = 1_000;
-const DEFAULT_RETRY_BASE_DELAY_MS: u64 =
-    FLEETD_REQUEST_TIMEOUT_MS + MAX_PLUGIN_REQUEST_TIMEOUT_MS + RETRY_SCHEDULING_MARGIN_MS;
+const PRE_CLAIM_FLEETD_REQUEST_WINDOWS: u64 = 2;
+const PLUGIN_READINESS_REQUEST_WINDOWS: u64 = 2;
+const DEFAULT_RETRY_BASE_DELAY_MS: u64 = FLEETD_REQUEST_TIMEOUT_MS
+    .saturating_mul(PRE_CLAIM_FLEETD_REQUEST_WINDOWS)
+    .saturating_add(MAX_PLUGIN_REQUEST_TIMEOUT_MS.saturating_mul(PLUGIN_READINESS_REQUEST_WINDOWS))
+    .saturating_add(RETRY_SCHEDULING_MARGIN_MS);
 const DEFAULT_RETRY_MAX_DELAY_MS: u64 = 300_000;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -469,7 +473,7 @@ fn validate_configuration(configuration: &RunnerConfiguration) -> Result<(), Run
         || configuration.retry_base_delay_ms > MAX_RETRY_DELAY_MS
     {
         return Err(RunnerError::Configuration(format!(
-            "retry_base_delay_ms must be between {minimum_retry_base_delay_ms} and {MAX_RETRY_DELAY_MS} for the configured plugin timeout"
+            "retry_base_delay_ms must be between {minimum_retry_base_delay_ms} and {MAX_RETRY_DELAY_MS} to cover retry settlement, plugin readiness write and read, the next claim, and the scheduling margin"
         )));
     }
     if configuration.retry_max_delay_ms < configuration.retry_base_delay_ms
@@ -492,7 +496,13 @@ const fn default_retry_max_delay_ms() -> u64 {
 
 const fn minimum_retry_base_delay_ms(configuration: &RunnerConfiguration) -> u64 {
     FLEETD_REQUEST_TIMEOUT_MS
-        .saturating_add(configuration.plugin.request_timeout_ms)
+        .saturating_mul(PRE_CLAIM_FLEETD_REQUEST_WINDOWS)
+        .saturating_add(
+            configuration
+                .plugin
+                .request_timeout_ms
+                .saturating_mul(PLUGIN_READINESS_REQUEST_WINDOWS),
+        )
         .saturating_add(RETRY_SCHEDULING_MARGIN_MS)
 }
 

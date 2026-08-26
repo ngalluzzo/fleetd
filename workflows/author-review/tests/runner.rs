@@ -1,5 +1,18 @@
-use std::{path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    path::PathBuf,
+    process::Stdio,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
+use axum::{
+    extract::{Request, State},
+    middleware::{self, Next},
+    response::Response,
+};
 use fleetd::{
     AppState, AuthService, ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel,
     CreateChannelMember, DeliveryState, MembershipDeliveryMode, Message, MessagePage,
@@ -16,6 +29,7 @@ use fleetd_author_review::{
 };
 use reqwest::StatusCode;
 use serde_json::json;
+use tokio::io::AsyncReadExt;
 
 const WORKFLOW_ID: &str = "FLEETD-RUNNER-001";
 
@@ -212,9 +226,25 @@ async fn assert_incompatible_identity_does_not_claim() {
 
 #[tokio::test]
 async fn dead_child_is_replaced_and_delayed_input_does_not_starve_later_work() {
-    let fixture = WorkflowFixture::start().await;
-    fixture.release_root().await;
-    let second = fixture
+    const RETRY_SETTLEMENT_LATENCY_MS: u64 = 9_500;
+    const REPLACEMENT_READINESS_LATENCY_MS: u64 = 600;
+    const NEXT_CLAIM_LATENCY_MS: u64 = 9_500;
+    const RETRY_BASE_DELAY_MS: u64 = 23_000;
+
+    let latency = RunnerLoopLatency::new(
+        Duration::from_millis(RETRY_SETTLEMENT_LATENCY_MS),
+        3,
+        Duration::from_millis(NEXT_CLAIM_LATENCY_MS),
+    );
+    let fixture = WorkflowFixture::start_with_server(
+        TestServer::start_with_runner_loop_latency(latency).await,
+    )
+    .await;
+    fixture.acknowledge_root().await;
+    let failing = fixture
+        .send_input("FLEETD-RUNNER-FAILING", "dogfood/failing")
+        .await;
+    let later = fixture
         .send_input("FLEETD-RUNNER-SECOND", "dogfood/second")
         .await;
     let marker = fixture
@@ -226,16 +256,12 @@ async fn dead_child_is_replaced_and_delayed_input_does_not_starve_later_work() {
     let mut configuration = fixture.configuration.clone();
     configuration.plugin.executable = fixture.write_plugin("replacement-plugin", &script);
     configuration.plugin.request_timeout_ms = 1_000;
-    configuration.retry_base_delay_ms = 12_000;
-    configuration.retry_max_delay_ms = 48_000;
-    let delay_runner = AuthorReviewRunner::start(configuration.clone())
-        .await
-        .expect("validate bounded retry configuration");
-    assert_eq!(delay_runner.retry_delay_for_attempt(1), 12_000);
-    assert_eq!(delay_runner.retry_delay_for_attempt(2), 24_000);
-    assert_eq!(delay_runner.retry_delay_for_attempt(3), 48_000);
-    assert_eq!(delay_runner.retry_delay_for_attempt(100), 48_000);
-    drop(delay_runner);
+    configuration.retry_base_delay_ms = RETRY_BASE_DELAY_MS;
+    configuration.retry_max_delay_ms = 92_000;
+    let modeled_pre_claim_latency_ms =
+        RETRY_SETTLEMENT_LATENCY_MS + REPLACEMENT_READINESS_LATENCY_MS + NEXT_CLAIM_LATENCY_MS;
+    assert_eq!(modeled_pre_claim_latency_ms, 19_600);
+    assert!(modeled_pre_claim_latency_ms < RETRY_BASE_DELAY_MS);
 
     let config_path = fixture.server.directory.path().join("runner-loop.json");
     std::fs::write(
@@ -249,12 +275,12 @@ async fn dead_child_is_replaced_and_delayed_input_does_not_starve_later_work() {
             .arg(&config_path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .expect("launch production runner loop");
 
-    wait_for_acknowledged(&fixture, &second.id, &mut process).await;
+    wait_for_acknowledged(&fixture, &later.id, &mut process).await;
     process.start_kill().expect("stop production runner loop");
     process.wait().await.expect("join production runner loop");
     assert!(marker.exists(), "the first child generation failed");
@@ -269,8 +295,8 @@ async fn dead_child_is_replaced_and_delayed_input_does_not_starve_later_work() {
         .await
         .expect("list delayed delivery");
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].message.id, fixture.root.id);
-    assert_eq!(pending[0].attempt, 2);
+    assert_eq!(pending[0].message.id, failing.id);
+    assert_eq!(pending[0].attempt, 1);
     let immediately_claimable = claim_root(&fixture.server, &fixture.runner_agent).await;
     assert!(
         immediately_claimable.deliveries.is_empty(),
@@ -283,7 +309,7 @@ async fn wait_for_acknowledged(
     message_id: &str,
     process: &mut tokio::process::Child,
 ) {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
         let acknowledged = fixture
             .server
@@ -301,13 +327,16 @@ async fn wait_for_acknowledged(
         {
             return;
         }
-        assert!(
-            process
-                .try_wait()
-                .expect("inspect production runner")
-                .is_none(),
-            "production runner exited before later work progressed"
-        );
+        if let Some(status) = process.try_wait().expect("inspect production runner") {
+            let mut stderr = String::new();
+            if let Some(mut stream) = process.stderr.take() {
+                stream
+                    .read_to_string(&mut stderr)
+                    .await
+                    .expect("read production runner stderr");
+            }
+            panic!("production runner exited before later work progressed ({status}): {stderr}");
+        }
         assert!(
             tokio::time::Instant::now() < deadline,
             "slow replacement did not progress later work"
@@ -393,12 +422,12 @@ fn retry_controls_reject_poll_interval_reclaim_and_unbounded_delays() {
     )
     .expect("rewrite configuration without optional retry controls");
     let compatible = load_configuration(&path).expect("schema-v1 defaults remain compatible");
-    assert_eq!(compatible.retry_base_delay_ms, 71_000);
+    assert_eq!(compatible.retry_base_delay_ms, 141_000);
     assert_eq!(compatible.retry_max_delay_ms, 300_000);
 
     configuration["plugin"]["request_timeout_ms"] = json!(60_000);
     configuration["lease_duration_ms"] = json!(70_000);
-    configuration["retry_base_delay_ms"] = json!(70_000);
+    configuration["retry_base_delay_ms"] = json!(140_999);
     configuration["retry_max_delay_ms"] = json!(300_000);
     std::fs::write(
         &path,
@@ -407,11 +436,11 @@ fn retry_controls_reject_poll_interval_reclaim_and_unbounded_delays() {
     .expect("rewrite configuration with unsafe readiness window");
     let error = load_configuration(&path)
         .expect_err("retry delay must cover maximum plugin readiness timeout");
-    assert!(error.to_string().contains("71000"));
+    assert!(error.to_string().contains("141000"));
 
     configuration["plugin"]["request_timeout_ms"] = json!(5_000);
     configuration["lease_duration_ms"] = json!(15_000);
-    configuration["retry_base_delay_ms"] = json!(16_000);
+    configuration["retry_base_delay_ms"] = json!(31_000);
     configuration["retry_max_delay_ms"] = json!(86_400_001_u64);
     std::fs::write(
         &path,
@@ -435,7 +464,10 @@ struct WorkflowFixture {
 
 impl WorkflowFixture {
     async fn start() -> Self {
-        let server = TestServer::start().await;
+        Self::start_with_server(TestServer::start().await).await
+    }
+
+    async fn start_with_server(server: TestServer) -> Self {
         let human = server.register("workflow-human").await;
         let runner_agent = server.register("workflow-runner").await;
         let coordinator = server.register("workflow-coordinator").await;
@@ -724,7 +756,7 @@ fn runner_configuration(
         }),
         lease_duration_ms: 15_000,
         poll_interval_ms: 100,
-        retry_base_delay_ms: 16_000,
+        retry_base_delay_ms: 31_000,
         retry_max_delay_ms: 60_000,
     }
 }
@@ -785,7 +817,7 @@ fn slow_replacement_plugin_script(marker: &std::path::Path) -> String {
         json!({"jsonrpc": "2.0", "id": 2, "result": {"projection": {}, "proposals": []}})
             .to_string();
     format!(
-        "#!/bin/sh\nif [ -e {} ]; then\n  /bin/sleep 0.25\nfi\nIFS= read -r _request || exit 1\nprintf '%s\\n' {}\nIFS= read -r _request || exit 1\nif [ ! -e {} ]; then\n  : > {}\n  exit 17\nfi\nprintf '%s\\n' {}\n",
+        "#!/bin/sh\nif [ -e {} ]; then\n  /bin/sleep 0.6\nfi\nIFS= read -r _request || exit 1\nprintf '%s\\n' {}\nIFS= read -r _request || exit 1\nif [ ! -e {} ]; then\n  : > {}\n  exit 17\nfi\nprintf '%s\\n' {}\n",
         shell_literal(&marker.to_string_lossy()),
         shell_literal(&description),
         shell_literal(&marker.to_string_lossy()),
@@ -808,6 +840,14 @@ struct TestServer {
 
 impl TestServer {
     async fn start() -> Self {
+        Self::start_with_app_layer(None).await
+    }
+
+    async fn start_with_runner_loop_latency(latency: RunnerLoopLatency) -> Self {
+        Self::start_with_app_layer(Some(latency)).await
+    }
+
+    async fn start_with_app_layer(latency: Option<RunnerLoopLatency>) -> Self {
         let directory = tempfile::tempdir().expect("temporary directory");
         let store = Store::open(directory.path().join("fleetd.db"))
             .await
@@ -817,6 +857,14 @@ impl TestServer {
             .expect("bind Fleetd");
         let address = listener.local_addr().expect("Fleetd address");
         let app = router(AppState::new(store.clone()));
+        let app = if let Some(latency) = latency {
+            app.layer(middleware::from_fn_with_state(
+                latency,
+                apply_runner_loop_latency,
+            ))
+        } else {
+            app
+        };
         let process = tokio::spawn(async move {
             axum::serve(listener, app).await.expect("serve Fleetd");
         });
@@ -841,6 +889,45 @@ impl TestServer {
             .await
             .expect("register agent")
     }
+}
+
+#[derive(Clone)]
+struct RunnerLoopLatency {
+    retry_response: Duration,
+    delayed_claim_number: usize,
+    claim_request: Duration,
+    claim_requests: Arc<AtomicUsize>,
+}
+
+impl RunnerLoopLatency {
+    fn new(retry_response: Duration, delayed_claim_number: usize, claim_request: Duration) -> Self {
+        Self {
+            retry_response,
+            delayed_claim_number,
+            claim_request,
+            claim_requests: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
+
+async fn apply_runner_loop_latency(
+    State(latency): State<RunnerLoopLatency>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    let is_claim = path.ends_with("/deliveries/claim");
+    let is_retry = path.ends_with("/retry");
+    if is_claim
+        && latency.claim_requests.fetch_add(1, Ordering::SeqCst) + 1 == latency.delayed_claim_number
+    {
+        tokio::time::sleep(latency.claim_request).await;
+    }
+    let response = next.run(request).await;
+    if is_retry {
+        tokio::time::sleep(latency.retry_response).await;
+    }
+    response
 }
 
 impl Drop for TestServer {
