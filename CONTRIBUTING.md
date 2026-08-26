@@ -12,17 +12,20 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
 ```
 
-Those commands do not cover the TypeScript client or the presentation hosts, so
-run their suites too when a change touches `clients/` or `apps/`:
+The JavaScript packages are one npm workspace. Install once from the root and
+run them together when a change touches `clients/` or `apps/`:
 
 ```sh
-(cd clients/typescript && npm ci && npm test && npm run typecheck)
-(cd apps/conversation-web && bun test && npm run typecheck)
-(cd apps/conversation-desktop && npm ci && bun test && npm run typecheck)
+npm ci && npm run verify
 ```
 
-`apps/conversation-web` has no dependencies of its own and type-checks with the
-client package's `tsc`, so install `clients/typescript` before it.
+`npm run verify` runs every workspace's tests and typecheck, then regenerates
+each committed artifact and fails if the result differs: the TypeScript client
+against `openapi/fleetd-v1.json`, the served bundle against
+`apps/conversation-web`, and the client's version against the contract's.
+
+`web/` is build output. Edit `apps/conversation-web` and rebuild; the shell and
+its target contract are sources of that app.
 
 `.github/workflows/ci.yml` runs exactly these commands on every pull request.
 A change is not complete until that workflow is green.

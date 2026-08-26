@@ -1,19 +1,19 @@
 import {
   ConversationSession,
   type ConversationSnapshot,
-} from "../../../clients/typescript/src/conversation-session.ts";
-import { createBrowserConversationTransport } from "../../../clients/typescript/src/conversation-transport.ts";
+} from "@fleetd/client/conversation";
+import { createBrowserConversationTransport } from "@fleetd/client/conversation-transport";
 import {
   createFleetdOperatorClient,
   FleetdOperatorClientError,
   type FleetdOperatorClient,
-} from "../../../clients/typescript/src/operator-client.ts";
+} from "@fleetd/client/operator";
 import type {
   Agent,
   ConversationSummary,
   PluginGeneration,
   SessionBinding,
-} from "../../../clients/typescript/src/generated/types.gen.ts";
+} from "@fleetd/client/types";
 import type { ConversationPresentationContract } from "./presentation-contract.ts";
 import {
   applyComposerAvailability,

@@ -4,7 +4,7 @@ import type {
   Agent,
   PluginGeneration,
   SessionBinding,
-} from "../../../clients/typescript/src/generated/types.gen.ts";
+} from "@fleetd/client/types";
 import {
   agentDirectoryItem,
   agentDirectoryItems,

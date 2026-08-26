@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const htmlPath = fileURLToPath(
-  new URL("../../../web/conversation/index.html", import.meta.url),
+  new URL("../index.html", import.meta.url),
 );
 const sourcePath = fileURLToPath(new URL("../src", import.meta.url));
 const html = readFileSync(htmlPath, "utf8");

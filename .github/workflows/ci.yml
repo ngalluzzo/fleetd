@@ -62,37 +62,31 @@ jobs:
           # clients/typescript declares engines.node >=22.13.0.
           node-version: "22"
           cache: npm
-          cache-dependency-path: clients/typescript/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      # Bun is required: apps/* run `bun test`, and the client's own test script
-      # runs one suite under bun and two under node --experimental-strip-types.
+      # Bun is required: the apps run `bun test`, and it builds the served
+      # bundle. The client's own suites run under Node, which is what its
+      # engines field promises.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.0"
 
-      - name: Install client dependencies
-        working-directory: clients/typescript
+      # One root install for every workspace.
+      - name: Install
         run: npm ci
 
-      - name: Client tests
-        working-directory: clients/typescript
-        run: npm test
+      - name: Tests
+        run: npm run test -w @fleetd/client -w @fleetd/conversation-web
 
-      - name: Client typecheck
-        working-directory: clients/typescript
-        run: npm run typecheck
+      - name: Typecheck
+        run: npm run typecheck -w @fleetd/client -w @fleetd/conversation-web
 
-      - name: Conversation web tests
-        working-directory: apps/conversation-web
-        run: bun test
-
-      # apps/conversation-web has no node_modules of its own; its typecheck
-      # script invokes tsc out of clients/typescript/node_modules. The client
-      # install above is therefore a prerequisite, not a coincidence of order.
-      # Unifying the JavaScript workspace removes this coupling.
-      - name: Conversation web typecheck
-        working-directory: apps/conversation-web
-        run: npm run typecheck
+      # Every committed generated artifact must match the source it came from:
+      # the client against the contract, the served bundle against the app, and
+      # the client's version against the contract's. The daemon embeds that
+      # bundle, so stale UI would otherwise ship with a green build.
+      - name: Generated artifacts match their sources
+        run: npm run verify:generated
 
   desktop:
     name: desktop
@@ -106,20 +100,17 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: apps/conversation-desktop/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.0"
 
-      - name: Install desktop dependencies
-        working-directory: apps/conversation-desktop
+      - name: Install
         run: npm ci
 
       - name: Desktop tests
-        working-directory: apps/conversation-desktop
-        run: bun test
+        run: npm run test -w @fleetd/conversation-desktop
 
       - name: Desktop typecheck
-        working-directory: apps/conversation-desktop
-        run: npm run typecheck
+        run: npm run typecheck -w @fleetd/conversation-desktop

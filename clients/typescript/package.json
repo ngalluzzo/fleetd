@@ -13,7 +13,8 @@
     "./conversation": "./src/conversation-session.ts",
     "./conversation-transport": "./src/conversation-transport.ts",
     "./operator": "./src/operator-client.ts",
-    "./client": "./src/generated/client.gen.ts"
+    "./client": "./src/generated/client.gen.ts",
+    "./types": "./src/generated/types.gen.ts"
   },
   "scripts": {
     "generate": "openapi-ts",

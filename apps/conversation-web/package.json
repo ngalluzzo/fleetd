@@ -4,10 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "bun run build:application && bun run build:styles",
+    "build": "npm run build:application && npm run build:styles && npm run build:shell",
     "build:application": "bun build src/main.ts --target browser --format=iife --outfile=../../web/conversation/conversation.js",
     "build:styles": "bun build src/styles/index.css --target browser --outfile=../../web/conversation/conversation.css",
     "test": "bun test",
-    "typecheck": "../../clients/typescript/node_modules/.bin/tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build:shell": "cp index.html contract.json ../../web/conversation/"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
   }
 }

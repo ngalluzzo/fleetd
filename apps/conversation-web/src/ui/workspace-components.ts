@@ -1,7 +1,7 @@
 import type {
   Agent,
   ChannelMember,
-} from "../../../../clients/typescript/src/generated/types.gen.ts";
+} from "@fleetd/client/types";
 import { displayName, shortId } from "./view-models.ts";
 import type { AgentDirectoryItem } from "./workspace-view-models.ts";
 

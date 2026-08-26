@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
 
 const html = readFileSync(
-  fileURLToPath(new URL("../../../web/conversation/index.html", import.meta.url)),
+  fileURLToPath(new URL("../index.html", import.meta.url)),
   "utf8",
 );
 

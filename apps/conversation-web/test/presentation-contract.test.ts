@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type { Message } from "../../../clients/typescript/src/generated/types.gen.ts";
+import type { Message } from "@fleetd/client/types";
 import { renderMessageBody } from "../src/presentation-contract.ts";
 
 const contract = {

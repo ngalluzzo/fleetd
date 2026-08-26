@@ -1,8 +1,8 @@
-import type { ConversationSessionPhase } from "../../../../clients/typescript/src/conversation-session.ts";
+import type { ConversationSessionPhase } from "@fleetd/client/conversation";
 import type {
   ChannelMember,
   Message,
-} from "../../../../clients/typescript/src/generated/types.gen.ts";
+} from "@fleetd/client/types";
 
 export interface ConnectionStatusInput {
   readonly phase: ConversationSessionPhase;

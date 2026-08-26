@@ -1,4 +1,4 @@
-import type { Message } from "../../../clients/typescript/src/generated/types.gen.ts";
+import type { Message } from "@fleetd/client/types";
 
 export interface ConversationPresentationContract {
   requestKind: string;

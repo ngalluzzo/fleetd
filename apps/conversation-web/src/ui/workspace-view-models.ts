@@ -2,7 +2,7 @@ import type {
   Agent,
   PluginGeneration,
   SessionBinding,
-} from "../../../../clients/typescript/src/generated/types.gen.ts";
+} from "@fleetd/client/types";
 import { displayName, shortId } from "./view-models.ts";
 
 export type AgentHealth =

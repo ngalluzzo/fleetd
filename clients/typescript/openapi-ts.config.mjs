@@ -21,5 +21,10 @@ export default {
   output: {
     path: 'src/generated',
     clean: true,
+    // This package resolves modules as NodeNext, which requires an explicit
+    // extension on every relative import. The generator infers that from the
+    // tsconfig it happens to find, so state it here instead: the output must
+    // not depend on which directory the generator was run from.
+    importFileExtension: '.js',
   },
 };

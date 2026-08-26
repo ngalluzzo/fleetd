@@ -1,10 +1,10 @@
-import type { ConversationSnapshot } from "../../../../clients/typescript/src/conversation-session.ts";
+import type { ConversationSnapshot } from "@fleetd/client/conversation";
 import type {
   Channel,
   ChannelMember,
   ConversationSummary,
   Message,
-} from "../../../../clients/typescript/src/generated/types.gen.ts";
+} from "@fleetd/client/types";
 import {
   renderMessageBody,
   type ConversationPresentationContract,
