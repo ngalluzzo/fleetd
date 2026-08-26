@@ -121,3 +121,60 @@ fn inspect(path: &Path, checked: &mut usize) {
         );
     }
 }
+
+/// Route modules that own one domain each.
+///
+/// A handler module may reach composition (`super::AppState`) and the shared
+/// guards. Reaching a sibling means two domains now change together, which is
+/// the coupling splitting the router was meant to remove.
+const API_DOMAINS: [&str; 7] = [
+    "agents",
+    "channels",
+    "deliveries",
+    "invocations",
+    "messages",
+    "operations",
+    "streams",
+];
+
+#[test]
+fn api_domains_do_not_import_each_other() {
+    let directory = workspace_root().join("src/api");
+    for domain in API_DOMAINS {
+        let source = fs::read_to_string(directory.join(format!("{domain}.rs")))
+            .unwrap_or_else(|_| panic!("api domain module {domain}"));
+        for sibling in API_DOMAINS {
+            if sibling == domain {
+                continue;
+            }
+            for reference in [
+                format!("super::{sibling}"),
+                format!("crate::api::{sibling}"),
+            ] {
+                assert!(
+                    !source.contains(&reference),
+                    "api domain `{domain}` reaches sibling `{sibling}`. Domains share \
+                     composition and `guard`, not each other; duplicate the small thing or \
+                     lift it into `guard`."
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn api_composition_module_registers_every_domain() {
+    let composition = fs::read_to_string(workspace_root().join("src/api/mod.rs"))
+        .expect("api composition module");
+    for domain in API_DOMAINS {
+        assert!(
+            composition.contains(&format!("mod {domain};")),
+            "api composition does not declare `{domain}`"
+        );
+        assert!(
+            composition.contains(&format!("{domain}::routes()")),
+            "api domain `{domain}` is declared but never merged into a contract, so its \
+             routes are unreachable"
+        );
+    }
+}

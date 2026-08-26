@@ -174,6 +174,20 @@ That lift/bridge/lower package is independently versioned and outside Fleetd.
 Fleetd transports any documents it emits as ordinary opaque messages. See
 [the integration boundary](INTEGRATION_BOUNDARY.md).
 
+## HTTP surface
+
+One module owns composition: shared state, the route graph, the generated
+document, and the authentication layer every protected route sits behind. One
+module per domain owns its handlers and declares its own routes, and domains
+reach composition and the shared authorization guards but never each other.
+
+The merge order in the composition module fixes the order operations register
+in, and therefore their order in the generated contract.
+
+`tests/crate_boundaries.rs` rejects a cross-domain import and a domain that is
+declared but never merged into a contract, which would leave its routes
+unreachable while still compiling.
+
 ## Operator surface
 
 The first browser surface is a static adapter over one checked-in target
