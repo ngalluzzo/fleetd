@@ -831,8 +831,41 @@
     });
   }
 
-  // ../../clients/typescript/src/conversation-transport.ts
+  // ../../clients/typescript/src/client-options.ts
   var DEFAULT_REQUEST_TIMEOUT_MS = 1e4;
+  function boundedRequestTimeout(value) {
+    const timeout = value ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    if (!Number.isSafeInteger(timeout) || timeout < 100 || timeout > 60000) {
+      throw new Error("requestTimeoutMs must be between 100 and 60000");
+    }
+    return timeout;
+  }
+  function exactHttpOrigin(value) {
+    let parsed;
+    try {
+      parsed = new URL(value);
+    } catch (cause) {
+      throw new Error("origin must be an absolute HTTP(S) origin", { cause });
+    }
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== "/" && parsed.pathname !== "" || parsed.search || parsed.hash) {
+      throw new Error("origin must contain only an HTTP(S) authority");
+    }
+    return parsed.origin;
+  }
+  function boundedIdentifier(value, name) {
+    if (typeof value !== "string" || value.trim().length === 0 || value.length > 256) {
+      throw new Error(`${name} must contain between 1 and 256 characters`);
+    }
+    return value;
+  }
+  function boundedCredential(value, name) {
+    if (typeof value !== "string" || value.length === 0 || value.length > 4096) {
+      throw new Error(`${name} must contain between 1 and 4096 characters`);
+    }
+    return value;
+  }
+
+  // ../../clients/typescript/src/conversation-transport.ts
   function createBrowserConversationTransport(options) {
     const origin = exactHttpOrigin(options.origin);
     const participantId = boundedIdentifier(options.participantId, "participantId");
@@ -928,37 +961,6 @@
       clearTimeout(timeout);
       activeRequests.delete(controller);
     }
-  }
-  function boundedRequestTimeout(value) {
-    const timeout = value ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    if (!Number.isSafeInteger(timeout) || timeout < 100 || timeout > 60000) {
-      throw new Error("requestTimeoutMs must be between 100 and 60000");
-    }
-    return timeout;
-  }
-  function exactHttpOrigin(value) {
-    let parsed;
-    try {
-      parsed = new URL(value);
-    } catch (cause) {
-      throw new Error("origin must be an absolute HTTP(S) origin", { cause });
-    }
-    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== "/" && parsed.pathname !== "" || parsed.search || parsed.hash) {
-      throw new Error("origin must contain only an HTTP(S) authority");
-    }
-    return parsed.origin;
-  }
-  function boundedIdentifier(value, name) {
-    if (typeof value !== "string" || value.trim().length === 0 || value.length > 256) {
-      throw new Error(`${name} must contain between 1 and 256 characters`);
-    }
-    return value;
-  }
-  function boundedCredential(value, name) {
-    if (typeof value !== "string" || value.length === 0 || value.length > 4096) {
-      throw new Error(`${name} must contain between 1 and 4096 characters`);
-    }
-    return value;
   }
 
   // ../../clients/typescript/src/generated/core/bodySerializer.gen.ts
@@ -1806,8 +1808,6 @@
   });
 
   // ../../clients/typescript/src/operator-client.ts
-  var DEFAULT_REQUEST_TIMEOUT_MS2 = 1e4;
-
   class FleetdOperatorClientError extends Error {
     status;
     body;
@@ -1819,9 +1819,9 @@
     }
   }
   function createFleetdOperatorClient(options) {
-    const origin = exactHttpOrigin2(options.origin);
-    let operatorCredential = boundedCredential2(options.operatorCredential);
-    const requestTimeoutMs = boundedRequestTimeout2(options.requestTimeoutMs);
+    const origin = exactHttpOrigin(options.origin);
+    let operatorCredential = boundedCredential(options.operatorCredential, "operatorCredential");
+    const requestTimeoutMs = boundedRequestTimeout(options.requestTimeoutMs);
     const fetchImplementation = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
     const wireClient = createClient({
       auth: () => operatorCredential,
@@ -1885,31 +1885,6 @@
         operatorCredential = "";
       }
     };
-  }
-  function boundedRequestTimeout2(value) {
-    const timeout = value ?? DEFAULT_REQUEST_TIMEOUT_MS2;
-    if (!Number.isSafeInteger(timeout) || timeout < 100 || timeout > 60000) {
-      throw new Error("requestTimeoutMs must be between 100 and 60000");
-    }
-    return timeout;
-  }
-  function exactHttpOrigin2(value) {
-    let parsed;
-    try {
-      parsed = new URL(value);
-    } catch (cause) {
-      throw new Error("origin must be an absolute HTTP(S) origin", { cause });
-    }
-    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== "/" && parsed.pathname !== "" || parsed.search || parsed.hash) {
-      throw new Error("origin must contain only an HTTP(S) authority");
-    }
-    return parsed.origin;
-  }
-  function boundedCredential2(value) {
-    if (typeof value !== "string" || value.length === 0 || value.length > 4096) {
-      throw new Error("operatorCredential must contain between 1 and 4096 characters");
-    }
-    return value;
   }
 
   // src/ui/composer.ts

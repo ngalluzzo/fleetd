@@ -25,8 +25,11 @@ import type {
   RenameChannel,
   SessionBinding,
 } from "./generated/types.gen.ts";
-
-const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+import {
+  boundedCredential,
+  boundedRequestTimeout,
+  exactHttpOrigin,
+} from "./client-options.ts";
 
 export type ListConversationsOptions = NonNullable<
   ListConversationsData["query"]
@@ -115,7 +118,10 @@ export function createFleetdOperatorClient(
   options: FleetdOperatorClientOptions,
 ): FleetdOperatorClient {
   const origin = exactHttpOrigin(options.origin);
-  let operatorCredential = boundedCredential(options.operatorCredential);
+  let operatorCredential = boundedCredential(
+    options.operatorCredential,
+    "operatorCredential",
+  );
   const requestTimeoutMs = boundedRequestTimeout(options.requestTimeoutMs);
   const fetchImplementation: typeof globalThis.fetch =
     options.fetch ?? ((input, init) => globalThis.fetch(input, init));
@@ -213,41 +219,4 @@ export function createFleetdOperatorClient(
       operatorCredential = "";
     },
   };
-}
-
-function boundedRequestTimeout(value: number | undefined): number {
-  const timeout = value ?? DEFAULT_REQUEST_TIMEOUT_MS;
-  if (!Number.isSafeInteger(timeout) || timeout < 100 || timeout > 60_000) {
-    throw new Error("requestTimeoutMs must be between 100 and 60000");
-  }
-  return timeout;
-}
-
-function exactHttpOrigin(value: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch (cause) {
-    throw new Error("origin must be an absolute HTTP(S) origin", { cause });
-  }
-  if (
-    !["http:", "https:"].includes(parsed.protocol) ||
-    parsed.username ||
-    parsed.password ||
-    (parsed.pathname !== "/" && parsed.pathname !== "") ||
-    parsed.search ||
-    parsed.hash
-  ) {
-    throw new Error("origin must contain only an HTTP(S) authority");
-  }
-  return parsed.origin;
-}
-
-function boundedCredential(value: string): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 4_096) {
-    throw new Error(
-      "operatorCredential must contain between 1 and 4096 characters",
-    );
-  }
-  return value;
 }
