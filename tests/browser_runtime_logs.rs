@@ -346,10 +346,10 @@ async fn wait_for_ready_address(
 
 /// Removes ANSI escape sequences from captured runtime output.
 ///
-/// The daemon's subscriber colorizes unconditionally, so the ready line arrives
-/// as `\e[3mlisten\e[0m\e[2m=\e[0m127.0.0.1:0`. Parsing the decorated stream
-/// keeps this qualification on the exact production log configuration instead of
-/// forcing the daemon into a test-only rendering mode.
+/// The daemon now colors only an interactive stdout, and this harness captures
+/// a pipe, so the ready line normally arrives undecorated. Parsing tolerantly
+/// keeps the qualification on whatever the production configuration actually
+/// emits rather than on a test-only rendering mode.
 fn strip_ansi(output: &str) -> String {
     let mut plain = String::with_capacity(output.len());
     let mut characters = output.chars();
