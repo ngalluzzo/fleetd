@@ -9,7 +9,10 @@ use std::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleetd::{
     auth::AuthService,
-    execution::worker::{ContinuousHarnessWorker, ContinuousWorkerConfig, EnvelopeTurnAdapter},
+    execution::{
+        invocation,
+        worker::{ContinuousHarnessWorker, ContinuousWorkerConfig, EnvelopeTurnAdapter},
+    },
     http::{AppState, router},
     model::{
         AckDelivery, AddMember, ArmInvocation, BlockDelivery, BlockResolution, ClaimDeliveries,
@@ -22,6 +25,7 @@ use fleetd::{
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 pub type MainResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -651,18 +655,36 @@ async fn serve(args: ServeArgs) -> MainResult<()> {
     );
     let listener = tokio::net::TcpListener::bind(args.listen).await?;
     let listen_address = listener.local_addr()?;
+    let recovery_store = store.clone();
     let state = AppState::new(store)
         .with_browser_stream_listener(listen_address)?
         .with_external_message_commit_hints(&args.db)?;
+    // An attempt whose worker died leaves a leased delivery and an armed
+    // invocation behind. Nothing else reclaims those: a worker only recovers the
+    // agent it is running, so an agent with no worker stays stuck. The daemon
+    // reconciles them for every agent instead.
+    let recovery_cancellation = CancellationToken::new();
+    let recovery_task = tokio::spawn(invocation::run_expired_invocation_reaper(
+        recovery_store,
+        recovery_cancellation.clone(),
+        Duration::from_secs(1),
+    ));
     tracing::info!(
         listen = %listen_address,
         browser_origin = state.browser_origin().expect("configured browser origin"),
         database = %args.db.display(),
         "fleetd ready"
     );
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let shutdown = recovery_cancellation.clone();
+    let server = axum::serve(listener, router(state))
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            shutdown.cancel();
+        })
+        .await;
+    recovery_cancellation.cancel();
+    recovery_task.await?;
+    server?;
     Ok(())
 }
 

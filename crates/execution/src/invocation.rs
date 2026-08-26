@@ -1,6 +1,7 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Duration};
 
 use sqlx::Row;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use fleetd_kernel::{
@@ -81,7 +82,7 @@ async fn reserve_invocations_filtered(
     let lease_token = Uuid::new_v4().to_string();
     let message_kinds_json = message_kinds.map(serde_json::to_string).transpose()?;
     let mut transaction = store.begin_immediate().await?;
-    recover_expired_invocations(&mut transaction, agent_id, now).await?;
+    recover_expired_invocations_transaction(&mut transaction, agent_id, now).await?;
     fleetd_kernel::delivery::lease_claimable(
         &mut transaction,
         agent_id,
@@ -357,12 +358,12 @@ async fn reserve_row(
     })
 }
 
-pub(crate) async fn recover_expired_invocations(
+pub(crate) async fn recover_expired_invocations_transaction(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     now: i64,
-) -> Result<(), FleetError> {
-    terminalize_expired_reservations(transaction, agent_id, now).await?;
+) -> Result<u64, FleetError> {
+    let mut recovered = terminalize_expired_reservations(transaction, agent_id, now).await?;
     let rows = sqlx::query(
         r"
         SELECT i.id, i.message_seq, i.lease_token, d.attempt
@@ -385,16 +386,83 @@ pub(crate) async fn recover_expired_invocations(
     .await?;
     for row in rows {
         park_expired_armed_invocation(transaction, &row, agent_id, now).await?;
+        recovered = recovered.saturating_add(1);
     }
-    Ok(())
+    Ok(recovered)
+}
+
+/// Reconciles every expired managed invocation, including agents with no
+/// currently running worker. Armed attempts are parked and their bound session
+/// is fenced uncertain; unarmed reservations are proven not started.
+///
+/// # Errors
+///
+/// Returns an error when recovery evidence cannot be committed atomically.
+pub async fn recover_all_expired_invocations(store: &Store) -> Result<u64, FleetError> {
+    let now = now_ms();
+    let agents = sqlx::query_scalar::<_, String>(
+        r"
+        SELECT DISTINCT i.agent_id
+        FROM invocations i
+        JOIN agent_deliveries d
+          ON d.message_seq = i.message_seq AND d.agent_id = i.agent_id
+        WHERE i.state IN ('reserved', 'dispatch_armed')
+          AND i.lease_expires_at_ms <= ?
+          AND d.state = 'leased'
+          AND d.lease_token = i.lease_token
+          AND d.lease_expires_at_ms <= ?
+        ORDER BY i.agent_id
+        ",
+    )
+    .bind(now)
+    .bind(now)
+    .fetch_all(store.pool())
+    .await?;
+    if agents.is_empty() {
+        return Ok(0);
+    }
+    let mut transaction = store.begin_immediate().await?;
+    let mut recovered = 0_u64;
+    for agent_id in agents {
+        recovered = recovered.saturating_add(
+            recover_expired_invocations_transaction(&mut transaction, &agent_id, now).await?,
+        );
+    }
+    transaction.commit().await?;
+    Ok(recovered)
+}
+
+/// Continuously reconciles expired attempts until daemon shutdown. A transient
+/// store failure is reported and retried; it never weakens or skips the durable
+/// invocation fence.
+pub async fn run_expired_invocation_reaper(
+    store: Store,
+    cancellation: CancellationToken,
+    interval: Duration,
+) {
+    loop {
+        match recover_all_expired_invocations(&store).await {
+            Ok(recovered) if recovered > 0 => {
+                tracing::warn!(recovered, "expired managed invocations were reconciled");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, "expired invocation reconciliation failed");
+            }
+        }
+        tokio::select! {
+            () = cancellation.cancelled() => return,
+            () = tokio::time::sleep(interval) => {}
+        }
+    }
 }
 
 async fn terminalize_expired_reservations(
     transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     agent_id: &str,
     now: i64,
-) -> Result<(), FleetError> {
-    sqlx::query(
+) -> Result<u64, FleetError> {
+    let updated = sqlx::query(
         r"
         UPDATE invocations
         SET state = 'terminal', terminal_at_ms = ?,
@@ -417,7 +485,7 @@ async fn terminalize_expired_reservations(
     .bind(now)
     .execute(&mut **transaction)
     .await?;
-    Ok(())
+    Ok(updated.rows_affected())
 }
 
 async fn park_expired_armed_invocation(

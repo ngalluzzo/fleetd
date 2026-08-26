@@ -61,46 +61,63 @@ impl Store {
         block_id: i64,
         input: ResolveDeliveryBlock,
     ) -> Result<(), FleetError> {
-        validate_resolution(block_id, &input)?;
-        let retry_after_ms = i64::try_from(input.retry_after_ms)
-            .map_err(|_| FleetError::Invalid("retry delay is too large".to_owned()))?;
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let row = resolution_row(&mut transaction, block_id).await?;
-        if resolution_is_replay(&row, &input, retry_after_ms)? {
-            transaction.commit().await?;
-            return Ok(());
-        }
-        let state: String = row.try_get("delivery_state")?;
-        if state != "blocked" {
-            return Err(FleetError::Conflict(
-                "delivery block is not the current unresolved block".to_owned(),
-            ));
-        }
-        let now = now_ms();
-        resolve_delivery_row(&mut transaction, &row, &input, retry_after_ms, now).await?;
-        let resolution = resolution_name(&input.resolution);
-        let result = sqlx::query(
-            r"
-            UPDATE delivery_blocks
-            SET resolved_at_ms = ?, resolution = ?, resolution_note = ?, retry_after_ms = ?
-            WHERE id = ? AND resolved_at_ms IS NULL
-            ",
-        )
-        .bind(now)
-        .bind(resolution)
-        .bind(&input.note)
-        .bind(retry_after_ms)
-        .bind(block_id)
-        .execute(&mut *transaction)
-        .await?;
-        if result.rows_affected() != 1 {
-            return Err(FleetError::Conflict(
-                "delivery block changed during resolution".to_owned(),
-            ));
-        }
+        let mut transaction = self.begin_immediate().await?;
+        resolve_delivery_block_transaction(&mut transaction, block_id, &input, now_ms()).await?;
         transaction.commit().await?;
         Ok(())
     }
+}
+
+/// Applies one delivery-block resolution inside a caller-owned transaction.
+///
+/// The kernel owns this row transition, but resolving a block may also have to
+/// retire the native session that attempt was bound to, and that decision lives
+/// above the kernel. Exposing the transition lets one transaction carry both.
+///
+/// # Errors
+///
+/// Returns an error for invalid input, an unknown block, a conflicting replay,
+/// an unexpected block state, or a persistence failure.
+pub async fn resolve_delivery_block_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    block_id: i64,
+    input: &ResolveDeliveryBlock,
+    now: i64,
+) -> Result<(), FleetError> {
+    validate_resolution(block_id, input)?;
+    let retry_after_ms = i64::try_from(input.retry_after_ms)
+        .map_err(|_| FleetError::Invalid("retry delay is too large".to_owned()))?;
+    let row = resolution_row(transaction, block_id).await?;
+    if resolution_is_replay(&row, input, retry_after_ms)? {
+        return Ok(());
+    }
+    let state: String = row.try_get("delivery_state")?;
+    if state != "blocked" {
+        return Err(FleetError::Conflict(
+            "delivery block is not the current unresolved block".to_owned(),
+        ));
+    }
+    resolve_delivery_row(transaction, &row, input, retry_after_ms, now).await?;
+    let result = sqlx::query(
+        r"
+        UPDATE delivery_blocks
+        SET resolved_at_ms = ?, resolution = ?, resolution_note = ?, retry_after_ms = ?
+        WHERE id = ? AND resolved_at_ms IS NULL
+        ",
+    )
+    .bind(now)
+    .bind(resolution_name(&input.resolution))
+    .bind(&input.note)
+    .bind(retry_after_ms)
+    .bind(block_id)
+    .execute(&mut **transaction)
+    .await?;
+    if result.rows_affected() != 1 {
+        return Err(FleetError::Conflict(
+            "delivery block changed during resolution".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Kernel operation used by the layers above.

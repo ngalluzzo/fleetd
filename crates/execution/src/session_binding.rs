@@ -19,7 +19,10 @@ use fleetd_kernel::{
     store::{Store, now_ms},
 };
 use fleetd_plugin_host::{Binding, SessionPersistence};
-use fleetd_proto::model::{ArmInvocation, CompleteInvocation, Invocation, InvocationCompletion};
+use fleetd_proto::model::{
+    ArmInvocation, BlockResolution, CompleteInvocation, ExecutionCertainty, Invocation,
+    InvocationCompletion,
+};
 
 const MAX_ID_BYTES: usize = 256;
 const MAX_LANE_KEY_BYTES: usize = 4_096;
@@ -338,6 +341,114 @@ pub async fn retire_session_binding(
     let session = binding_by_identity(&mut transaction, agent_id, binding).await?;
     transaction.commit().await?;
     Ok(session)
+}
+
+/// Retires the exact uncertain native-session generation bound to an
+/// operator-resolved delivery block.
+///
+/// A block with no bound session is a no-op. The retirement reason is derived
+/// from the block and its resolution, which is what makes replaying an exact
+/// resolution idempotent rather than conflicting.
+///
+/// # Errors
+///
+/// Returns an error when the block's invocation, turn, and session evidence
+/// disagree, when the session was already retired for another reason, or when
+/// the session changed during recovery.
+pub(crate) async fn retire_uncertain_session_for_delivery_block(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    block_id: i64,
+    resolution: &BlockResolution,
+    now: i64,
+) -> Result<bool, FleetError> {
+    let row = sqlx::query(
+        r"
+        SELECT i.id AS invocation_id, i.state AS invocation_state,
+               i.execution_certainty, t.state AS turn_state,
+               s.binding_id, s.binding_generation, s.agent_id, s.owner_epoch,
+               s.state AS binding_state, s.active_invocation_id,
+               s.retired_reason
+        FROM delivery_blocks b
+        JOIN invocations i
+          ON i.message_seq = b.message_seq
+         AND i.agent_id = b.agent_id
+         AND i.lease_token = b.lease_token
+        JOIN session_binding_turns t ON t.invocation_id = i.id
+        JOIN session_bindings s
+          ON s.binding_id = t.binding_id
+         AND s.binding_generation = t.binding_generation
+        WHERE b.id = ?
+        ",
+    )
+    .bind(block_id)
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+    let invocation_id: String = row.try_get("invocation_id")?;
+    let reason = format!(
+        "operator_resolved_delivery_block_{block_id}_{}",
+        match resolution {
+            BlockResolution::Requeue => "requeued",
+            BlockResolution::Abandon => "abandoned",
+        }
+    );
+    let binding_state: String = row.try_get("binding_state")?;
+    if binding_state == "retired" {
+        if row
+            .try_get::<Option<String>, _>("retired_reason")?
+            .as_deref()
+            == Some(&reason)
+        {
+            return Ok(true);
+        }
+        return Err(FleetError::Conflict(
+            "delivery block session was already retired differently".to_owned(),
+        ));
+    }
+    if row.try_get::<String, _>("invocation_state")? != "terminal"
+        || row
+            .try_get::<Option<String>, _>("execution_certainty")?
+            .as_deref()
+            != Some(ExecutionCertainty::OutcomeUnknown.as_str())
+        || row.try_get::<String, _>("turn_state")? != "uncertain"
+        || binding_state != "uncertain"
+        || row
+            .try_get::<Option<String>, _>("active_invocation_id")?
+            .as_deref()
+            != Some(invocation_id.as_str())
+    {
+        return Err(FleetError::Conflict(
+            "delivery block does not identify one recoverable uncertain session".to_owned(),
+        ));
+    }
+    let binding_id: String = row.try_get("binding_id")?;
+    let agent_id: String = row.try_get("agent_id")?;
+    let fence = OwnerFence::from_stored(
+        &binding_id,
+        row.try_get("binding_generation")?,
+        &agent_id,
+        row.try_get("owner_epoch")?,
+    );
+    let statement = OwnerFence::update(
+        "state = 'retired', active_invocation_id = NULL, \
+         retired_reason = ?, retired_at_ms = ?, updated_at_ms = ?",
+        "state = 'uncertain' AND active_invocation_id = ?",
+    );
+    let updated = sqlx::query(&statement)
+        .bind(&reason)
+        .bind(now)
+        .bind(now)
+        .bind_fence(fence)
+        .bind(&invocation_id)
+        .execute(&mut **transaction)
+        .await?;
+    require_one(
+        updated.rows_affected(),
+        "uncertain session changed during operator recovery",
+    )?;
+    Ok(true)
 }
 
 /// Lists durable session generations for controller or operator inspection.
@@ -1223,6 +1334,26 @@ impl<'a> OwnerFence<'a> {
             agent_id,
             owner_epoch: as_i64("owner epoch", binding.owner_epoch)?,
         })
+    }
+
+    /// Builds a fence from values a query already returned.
+    ///
+    /// Separate from [`OwnerFence::new`] because there is nothing to validate: a
+    /// stored row holds these as `i64` already. A recovery path that identifies
+    /// a binding by query rather than by handle uses this, and still cannot
+    /// choose the order they bind in.
+    const fn from_stored(
+        binding_id: &'a str,
+        binding_generation: i64,
+        agent_id: &'a str,
+        owner_epoch: i64,
+    ) -> Self {
+        Self {
+            binding_id,
+            binding_generation,
+            agent_id,
+            owner_epoch,
+        }
     }
 
     /// Builds `UPDATE session_bindings SET {set} WHERE <fence> AND {state}`.

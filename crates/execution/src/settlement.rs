@@ -12,19 +12,21 @@
 use uuid::Uuid;
 
 use crate::invocation::{
-    ensure_retry_is_safe, recover_expired_invocations, terminalize_invocation,
+    ensure_retry_is_safe, recover_expired_invocations_transaction, terminalize_invocation,
 };
 use fleetd_kernel::{
     delivery::{
         blocked_delivery_by_id, blocked_delivery_by_lease, ensure_agent, insert_block_record,
-        lease_claimable, leased_batch, mark_acknowledged, mark_blocked, mark_retry, settle_miss,
-        validate_block, validate_claim, validate_retry, validate_token,
+        lease_claimable, leased_batch, mark_acknowledged, mark_blocked, mark_retry,
+        resolve_delivery_block_transaction, settle_miss, validate_block, validate_claim,
+        validate_retry, validate_token,
     },
     error::FleetError,
     store::{Store, now_ms},
 };
 use fleetd_proto::model::{
-    BlockDelivery, BlockedDelivery, ClaimBatch, ClaimDeliveries, ExecutionCertainty, RetryDelivery,
+    BlockDelivery, BlockedDelivery, ClaimBatch, ClaimDeliveries, ExecutionCertainty,
+    ResolveDeliveryBlock, RetryDelivery,
 };
 
 /// Atomically leases the oldest eligible entries from one agent inbox.
@@ -52,7 +54,7 @@ pub async fn claim_deliveries(
     let lease_token = Uuid::new_v4().to_string();
     ensure_agent(store, agent_id).await?;
     let mut transaction = store.begin_immediate().await?;
-    recover_expired_invocations(&mut transaction, agent_id, now).await?;
+    recover_expired_invocations_transaction(&mut transaction, agent_id, now).await?;
     lease_claimable(
         &mut transaction,
         agent_id,
@@ -211,4 +213,35 @@ pub async fn block_delivery(
     Err(FleetError::LeaseConflict(
         "blocked settlement evidence is missing".to_owned(),
     ))
+}
+
+/// Applies one operator decision to a blocked delivery and atomically retires
+/// any uncertain native-session generation bound to that exact attempt.
+///
+/// A requeue therefore starts in a fresh session generation, and an abandon
+/// frees the lane for later conversation work. The kernel owns the delivery row
+/// transition and this layer owns the session decision; both commit here or
+/// neither does.
+///
+/// # Errors
+///
+/// Returns an error for invalid or conflicting block resolution, inconsistent
+/// session evidence, or persistence failure.
+pub async fn resolve_delivery_block(
+    store: &Store,
+    block_id: i64,
+    input: ResolveDeliveryBlock,
+) -> Result<(), FleetError> {
+    let now = now_ms();
+    let mut transaction = store.begin_immediate().await?;
+    resolve_delivery_block_transaction(&mut transaction, block_id, &input, now).await?;
+    crate::session_binding::retire_uncertain_session_for_delivery_block(
+        &mut transaction,
+        block_id,
+        &input.resolution,
+        now,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
 }

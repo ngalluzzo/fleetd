@@ -314,7 +314,7 @@ export const listDeliveryBlocks = <ThrowOnError extends boolean = false>(options
 /**
  * Resolve a blocked delivery
  *
- * Operator-only. An identical decision is idempotent; a changed second decision conflicts.
+ * Operator-only. An identical decision is idempotent; a changed second decision conflicts. Resolving a session-bound uncertain attempt atomically retires that native-session generation so later work can acquire a clean seat.
  */
 export const resolveDeliveryBlock = <ThrowOnError extends boolean = false>(options: Options<ResolveDeliveryBlockData, ThrowOnError>) => (options.client ?? client).post<ResolveDeliveryBlockResponses, ResolveDeliveryBlockErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],

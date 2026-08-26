@@ -9,8 +9,9 @@ use fleetd::{
         AcquireSessionBinding, SessionAcquisitionMode, SessionBinding, SessionBindingState,
     },
     model::{
-        ArmInvocation, BlockDelivery, ClaimDeliveries, CompleteInvocation, CreateAgent,
-        CreateChannel, CreateMessage, Invocation, InvocationState,
+        ArmInvocation, BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries,
+        CompleteInvocation, CreateAgent, CreateChannel, CreateMessage, Invocation, InvocationState,
+        ResolveDeliveryBlock,
     },
     plugin::{
         DescribeResult, DriverIdentity, HarnessLimits, PluginIdentity, RuntimeIdentity,
@@ -86,6 +87,39 @@ async fn fixture_with_lease(lease_duration_ms: u64) -> Fixture {
         invocation,
         generation_id,
     }
+}
+
+/// Runs the daemon's reaper until it parks the orphaned attempt, and returns
+/// the block it created.
+///
+/// The point of the fix is that this needs no worker for the agent: a worker
+/// only recovers the agent it is running, so an interrupted seat with no worker
+/// used to stay stuck.
+async fn reap_expired_invocation(store: &Store, agent_id: &str) -> BlockedDelivery {
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let reaper = tokio::spawn(invocation::run_expired_invocation_reaper(
+        store.clone(),
+        cancellation.clone(),
+        std::time::Duration::from_millis(5),
+    ));
+    let block = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if let Some(block) = store
+                .list_blocked_deliveries(Some(agent_id))
+                .await
+                .expect("list recovered block")
+                .pop()
+            {
+                return block;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("daemon recovery sweep did not park the orphaned invocation");
+    cancellation.cancel();
+    reaper.await.expect("stop daemon recovery sweep");
+    block
 }
 
 async fn generation(store: &Store, agent_id: &str) -> String {
@@ -563,7 +597,7 @@ async fn generation_evidence_and_dispatch_arm_are_one_transaction() {
 }
 
 #[tokio::test]
-async fn lease_recovery_atomically_parks_delivery_and_marks_bound_session_uncertain() {
+async fn daemon_recovery_parks_an_orphaned_turn_and_resolution_restores_the_seat() {
     let fixture = fixture_with_lease(25).await;
     let path = fixture.directory.path().join("fleetd.db");
     let agent_id = fixture.receiver.id.clone();
@@ -590,17 +624,8 @@ async fn lease_recovery_atomically_parks_delivery_and_marks_bound_session_uncert
     tokio::time::sleep(std::time::Duration::from_millis(75)).await;
 
     let reopened = Store::open(path).await.expect("reopen expired store");
-    let recovered = invocation::reserve_invocations(
-        &reopened,
-        &agent_id,
-        ClaimDeliveries {
-            limit: 1,
-            lease_duration_ms: 30_000,
-        },
-    )
-    .await
-    .expect("run managed recovery");
-    assert!(recovered.invocations.is_empty());
+    // No worker is running for this agent. The daemon's sweep is what recovers it.
+    let block = reap_expired_invocation(&reopened, &agent_id).await;
     let session = session_binding::list_session_bindings(&reopened, Some(&agent_id))
         .await
         .expect("list recovered session")
@@ -633,6 +658,44 @@ async fn lease_recovery_atomically_parks_delivery_and_marks_bound_session_uncert
     .await
     .expect_err("recovered uncertain session cannot be adopted");
     assert!(matches!(adoption, FleetError::Conflict(_)));
+
+    // Resolving the block is what frees the seat: the uncertain generation is
+    // retired in the same transaction, so the next acquisition is a clean one.
+    let resolution = ResolveDeliveryBlock {
+        resolution: BlockResolution::Requeue,
+        retry_after_ms: 0,
+        note: Some("operator verified the interrupted attempt is safe to repeat".to_owned()),
+    };
+    settlement::resolve_delivery_block(&reopened, block.block_id, resolution.clone())
+        .await
+        .expect("resolve block and retire uncertain session");
+    settlement::resolve_delivery_block(&reopened, block.block_id, resolution)
+        .await
+        .expect("recovery replay is idempotent");
+    let retired = session_binding::list_session_bindings(&reopened, Some(&agent_id))
+        .await
+        .expect("list retired session")
+        .pop()
+        .expect("one retired session");
+    assert_eq!(retired.state, SessionBindingState::Retired);
+    assert_eq!(retired.active_invocation_id, None);
+    let expected_retirement = format!(
+        "operator_resolved_delivery_block_{}_requeued",
+        block.block_id
+    );
+    assert_eq!(
+        retired.retired_reason.as_deref(),
+        Some(expected_retirement.as_str())
+    );
+    let replacement = session_binding::acquire_session_binding(
+        &reopened,
+        &agent_id,
+        acquisition("controller-2", "sha256:profile-a"),
+    )
+    .await
+    .expect("acquire a fresh seat after resolution");
+    assert_eq!(replacement.session.binding.binding_generation, 2);
+    assert_eq!(replacement.mode, SessionAcquisitionMode::Create);
 }
 
 #[tokio::test]

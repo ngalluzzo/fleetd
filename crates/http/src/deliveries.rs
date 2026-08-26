@@ -213,7 +213,7 @@ async fn list_delivery_blocks(
     operation_id = "resolveDeliveryBlock",
     tag = "deliveries",
     summary = "Resolve a blocked delivery",
-    description = "Operator-only. An identical decision is idempotent; a changed second decision conflicts.",
+    description = "Operator-only. An identical decision is idempotent; a changed second decision conflicts. Resolving a session-bound uncertain attempt atomically retires that native-session generation so later work can acquire a clean seat.",
     security(("bearerAuth" = [])),
     params(("block_id" = i64, Path, minimum = 1, description = "Positive delivery block ID")),
     request_body = ResolveDeliveryBlock,
@@ -234,6 +234,6 @@ async fn resolve_delivery_block(
     Json(input): Json<ResolveDeliveryBlock>,
 ) -> Result<StatusCode, ApiError> {
     require_operator(&principal)?;
-    state.store.resolve_delivery_block(block_id, input).await?;
+    settlement::resolve_delivery_block(&state.store, block_id, input).await?;
     Ok(StatusCode::NO_CONTENT)
 }
