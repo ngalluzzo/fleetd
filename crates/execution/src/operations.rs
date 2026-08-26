@@ -6,9 +6,10 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 
 pub use fleetd_proto::operations::{
-    AgentSeat, AgentSeatReason, AgentSeatState, InvocationEventCounts, InvocationObservation,
-    ObservedPluginInterface, PluginGeneration, PluginGenerationDisposition, PluginGenerationHealth,
-    PluginGenerationState, PluginShutdownOutcome,
+    AgentSeat, AgentSeatReason, AgentSeatState, DeliveryCensus, FleetHealth, InvocationEventCounts,
+    InvocationObservation, InvocationTrace, ObservedPluginInterface, PluginGeneration,
+    PluginGenerationDisposition, PluginGenerationHealth, PluginGenerationState,
+    PluginShutdownOutcome,
 };
 
 use fleetd_kernel::{
@@ -232,6 +233,64 @@ pub async fn list_plugin_generations(
         }
     };
     rows.iter().map(generation_from_row).collect()
+}
+
+/// Builds one exact invocation trace from durable evidence.
+///
+/// A reserved invocation may not yet have an observation, a session, a plugin
+/// generation, or a result. Once an observation exists, the session and
+/// generation it names must still be readable, so a missing one surfaces as an
+/// error rather than an absent field.
+///
+/// # Errors
+///
+/// Returns not found for an unknown invocation, or a read or decoding error
+/// for referenced durable evidence.
+pub async fn invocation_trace(
+    store: &Store,
+    invocation_id: &str,
+) -> Result<InvocationTrace, FleetError> {
+    let invocation = crate::invocation::get_invocation(store, invocation_id).await?;
+    let observation = invocation_observation(store, invocation_id).await?;
+    let (session, plugin_generation) = match &observation {
+        Some(observation) => (
+            Some(
+                crate::session_binding::get_session_binding(
+                    store,
+                    &observation.binding_id,
+                    observation.binding_generation,
+                )
+                .await?,
+            ),
+            Some(plugin_generation(store, &observation.generation_id).await?),
+        ),
+        None => (None, None),
+    };
+    let result = match invocation.result_message_id.as_deref() {
+        Some(message_id) => Some(store.get_message(message_id).await?),
+        None => None,
+    };
+    Ok(InvocationTrace {
+        invocation,
+        observation,
+        session,
+        plugin_generation,
+        result,
+    })
+}
+
+async fn invocation_observation(
+    store: &Store,
+    invocation_id: &str,
+) -> Result<Option<InvocationObservation>, FleetError> {
+    let row = sqlx::query(&format!(
+        "{} WHERE o.invocation_id = ?",
+        observation_select()
+    ))
+    .bind(invocation_id)
+    .fetch_optional(store.pool())
+    .await?;
+    row.as_ref().map(observation_from_row).transpose()
 }
 
 async fn plugin_generation(

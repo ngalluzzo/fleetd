@@ -14,6 +14,7 @@
 //! appears in this crate's dependencies.
 
 pub mod controller;
+pub mod health;
 pub mod invocation;
 pub mod message_grant;
 pub mod operations;

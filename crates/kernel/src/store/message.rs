@@ -91,6 +91,31 @@ impl Store {
         })
     }
 
+    /// Reads one exact immutable message by stable identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns not found for an unknown message, or a decoding error for
+    /// invalid persisted state.
+    pub async fn get_message(&self, message_id: &str) -> Result<Message, FleetError> {
+        let row = sqlx::query(
+            r"
+            SELECT seq, id, channel_id, sender_id, recipient_id, kind,
+                   payload_json, correlation_id, causation_id, created_at_ms
+            FROM messages
+            WHERE id = ?
+            ",
+        )
+        .bind(message_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| FleetError::NotFound {
+            entity: "message",
+            id: message_id.to_owned(),
+        })?;
+        message_from_row(&row)
+    }
+
     /// Reads a page of channel messages strictly after the supplied cursor.
     ///
     /// Every authorized reader of a channel sees the same immutable history.

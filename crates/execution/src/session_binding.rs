@@ -451,6 +451,33 @@ pub(crate) async fn retire_uncertain_session_for_delivery_block(
     Ok(true)
 }
 
+/// Reads one exact session binding generation for invocation tracing.
+///
+/// # Errors
+///
+/// Returns not found for an unknown generation, or a decoding error for
+/// invalid persisted state.
+pub async fn get_session_binding(
+    store: &Store,
+    binding_id: &str,
+    binding_generation: u64,
+) -> Result<SessionBinding, FleetError> {
+    let generation = as_i64("binding generation", binding_generation)?;
+    let row = sqlx::query(&format!(
+        "{} WHERE binding_id = ? AND binding_generation = ?",
+        binding_select()
+    ))
+    .bind(binding_id)
+    .bind(generation)
+    .fetch_optional(store.pool())
+    .await?
+    .ok_or_else(|| FleetError::NotFound {
+        entity: "session binding",
+        id: format!("{binding_id}/{binding_generation}"),
+    })?;
+    binding_from_row(&row)
+}
+
 /// Lists durable session generations for controller or operator inspection.
 ///
 /// # Errors

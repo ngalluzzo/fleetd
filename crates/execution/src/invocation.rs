@@ -182,6 +182,24 @@ pub async fn complete_invocation(
     Ok(completion)
 }
 
+/// Reads one exact durable invocation for operator tracing.
+///
+/// # Errors
+///
+/// Returns not found for an unknown invocation, or a decoding error for
+/// invalid persisted state.
+pub async fn get_invocation(store: &Store, invocation_id: &str) -> Result<Invocation, FleetError> {
+    let row = sqlx::query(&format!("{} WHERE i.id = ?", invocation_select()))
+        .bind(invocation_id)
+        .fetch_optional(store.pool())
+        .await?
+        .ok_or_else(|| FleetError::NotFound {
+            entity: "invocation",
+            id: invocation_id.to_owned(),
+        })?;
+    invocation_from_row(&row)
+}
+
 /// Lists the latest durable invocation records for operator inspection.
 ///
 /// # Errors

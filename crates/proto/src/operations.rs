@@ -9,8 +9,10 @@ use utoipa::ToSchema;
 
 use crate::{
     harness_acp::SessionPersistence,
-    model::{DeliveryState, ExecutionCertainty, InvocationState},
-    session::SessionBindingState,
+    model::{
+        DeliveryRecord, DeliveryState, ExecutionCertainty, Invocation, InvocationState, Message,
+    },
+    session::{SessionBinding, SessionBindingState},
 };
 
 /// One exact operational interface observed on a plugin generation.
@@ -259,6 +261,53 @@ pub struct InvocationObservation {
     pub session_quiescent: Option<bool>,
     pub session_persistence: Option<SessionPersistence>,
     pub usage: Option<Value>,
+}
+
+/// A census of durable delivery rows by state, plus the leases among them
+/// whose window has already closed.
+///
+/// `inspected` is how many rows the census actually read, which a bounded
+/// read model may cap below the true total.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, ToSchema)]
+pub struct DeliveryCensus {
+    pub inspected: usize,
+    pub pending: usize,
+    pub leased: usize,
+    pub expired_leases: usize,
+    pub blocked: usize,
+    pub acknowledged: usize,
+    pub dead: usize,
+}
+
+/// What a fleet is doing right now, as one durable read.
+///
+/// "Current" means the newest generation for each agent and the newest
+/// generation of each session binding; older rows for the same key are
+/// history, not health. Invocations are the ones still owed an outcome.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
+pub struct FleetHealth {
+    pub agent_id: Option<String>,
+    pub current_plugin_generations: Vec<PluginGeneration>,
+    pub current_session_bindings: Vec<SessionBinding>,
+    pub active_invocations: Vec<Invocation>,
+    pub deliveries: DeliveryCensus,
+    pub delivery_records: Vec<DeliveryRecord>,
+}
+
+/// Exact operator trace joining one invocation to its bounded harness,
+/// plugin-generation, native-session, and result evidence.
+///
+/// A reserved invocation carries none of it yet. Once an observation exists,
+/// the session and plugin generation it names must still be readable, so a
+/// present observation with an absent session is an integrity error rather
+/// than an empty field.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
+pub struct InvocationTrace {
+    pub invocation: Invocation,
+    pub observation: Option<InvocationObservation>,
+    pub session: Option<SessionBinding>,
+    pub plugin_generation: Option<PluginGeneration>,
+    pub result: Option<Message>,
 }
 
 #[cfg(test)]
