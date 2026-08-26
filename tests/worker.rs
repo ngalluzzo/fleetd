@@ -176,6 +176,55 @@ async fn append_direct_kind(
         .expect("append selected request")
 }
 
+/// Asserts the trace over a turn that really ran.
+///
+/// Every arm is populated, and each names the same evidence the individual read
+/// models reported, so the join cannot drift from its sources.
+async fn assert_trace_joins_the_executed_turn(
+    store: &Store,
+    observation: &operations::InvocationObservation,
+    generation: &operations::PluginGeneration,
+) {
+    let trace = operations::invocation_trace(store, &observation.invocation_id)
+        .await
+        .expect("trace a completed invocation");
+    assert_eq!(trace.invocation.id, observation.invocation_id);
+    assert_eq!(
+        trace
+            .observation
+            .as_ref()
+            .map(|observed| observed.invocation_id.as_str()),
+        Some(observation.invocation_id.as_str())
+    );
+    assert_eq!(
+        trace
+            .plugin_generation
+            .as_ref()
+            .map(|value| value.id.as_str()),
+        Some(generation.id.as_str())
+    );
+    let session = trace
+        .session
+        .as_ref()
+        .expect("an executed turn has a session");
+    assert_eq!(session.binding.binding_id, observation.binding_id.as_str());
+    assert_eq!(
+        trace.result.as_ref().map(|message| message.kind.as_str()),
+        Some("work.result/v1")
+    );
+    assert_eq!(
+        trace.result.as_ref().map(|message| message.id.as_str()),
+        observation.result_message_id.as_deref()
+    );
+
+    // Tracing an unknown invocation is a not-found, never an empty trace.
+    assert!(
+        operations::invocation_trace(store, "no-such-invocation")
+            .await
+            .is_err()
+    );
+}
+
 #[tokio::test]
 async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
     let fixture = fixture(2).await;
@@ -228,6 +277,9 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
             && observation.session_quiescent == Some(true)
             && observation.usage == Some(json!({}))
     }));
+
+    assert_trace_joins_the_executed_turn(&fixture.store, &observations[0], &generations[0]).await;
+
     let sessions =
         session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver_id))
             .await

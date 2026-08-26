@@ -3,7 +3,7 @@ use fleetd::{
     error::FleetError,
     model::{
         BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries, CreateAgent,
-        CreateChannel, CreateMessage, ResolveDeliveryBlock, RetryDelivery,
+        CreateChannel, CreateMessage, DeliveryState, ResolveDeliveryBlock, RetryDelivery,
     },
     store::Store,
 };
@@ -453,4 +453,91 @@ async fn concurrent_block_retries_create_one_evidence_record() {
             .expect("list blocks"),
         vec![first.0]
     );
+}
+
+#[tokio::test]
+async fn the_operator_projection_tracks_each_state_without_exposing_a_lease() {
+    let (_directory, store, sender, receiver, channel) = fixture().await;
+    let message = send(
+        &store,
+        &channel.id,
+        &sender.id,
+        Some(receiver.id.clone()),
+        "inspect me",
+    )
+    .await;
+
+    let pending = store
+        .list_deliveries(Some(&receiver.id), Some(DeliveryState::Pending), 10)
+        .await
+        .expect("list pending delivery");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].message, message);
+    assert_eq!(pending[0].attempt, 0);
+    assert_eq!(pending[0].unresolved_block_id, None);
+    assert_eq!(pending[0].lease_expires_at_ms, None);
+    assert!(!pending[0].lease_expired);
+
+    let claimed = settlement::claim_deliveries(&store, &receiver.id, claim(1, 10_000))
+        .await
+        .expect("claim delivery");
+    let leased = store
+        .list_deliveries(Some(&receiver.id), Some(DeliveryState::Leased), 10)
+        .await
+        .expect("list leased delivery");
+    assert_eq!(leased.len(), 1);
+    // Claiming is what advances the attempt, so the projection reports the
+    // attempt the worker is actually on rather than the one it will try next.
+    assert_eq!(leased[0].attempt, 1);
+    assert!(!leased[0].lease_expired);
+    assert!(leased[0].lease_expires_at_ms.is_some());
+
+    let (block, _) = settlement::block_delivery(
+        &store,
+        &receiver.id,
+        &message.id,
+        BlockDelivery {
+            lease_token: claimed.lease_token.clone(),
+            reason: "external outcome is unknown".to_owned(),
+        },
+    )
+    .await
+    .expect("block delivery");
+    let blocked = store
+        .list_deliveries(Some(&receiver.id), Some(DeliveryState::Blocked), 10)
+        .await
+        .expect("list blocked delivery");
+    assert_eq!(blocked.len(), 1);
+    assert_eq!(blocked[0].unresolved_block_id, Some(block.block_id));
+    assert_eq!(
+        blocked[0].last_error.as_deref(),
+        Some("external outcome is unknown")
+    );
+
+    // A filter for a state nothing is in returns nothing, rather than falling
+    // back to every row.
+    assert!(
+        store
+            .list_deliveries(Some(&receiver.id), Some(DeliveryState::Acknowledged), 10)
+            .await
+            .expect("list acknowledged")
+            .is_empty()
+    );
+
+    // The lease token never appears in the projection, in any state.
+    for state in [
+        DeliveryState::Pending,
+        DeliveryState::Leased,
+        DeliveryState::Blocked,
+    ] {
+        let records = store
+            .list_deliveries(Some(&receiver.id), Some(state), 10)
+            .await
+            .expect("list for the credential check");
+        let serialized = serde_json::to_string(&records).expect("serialize records");
+        assert!(
+            !serialized.contains(&claimed.lease_token),
+            "{state:?} projection must not carry the lease token"
+        );
+    }
 }
