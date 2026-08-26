@@ -313,9 +313,10 @@ fn collect_sources(path: &Path, sources: &mut Vec<PathBuf>) {
 /// `only_the_kernel_writes_kernel_tables`. That makes the list of places it is
 /// checked load-bearing: a new crate above the substrate that is missing here is
 /// unchecked, not compliant.
-const ABOVE_SUBSTRATE_CRATES: [&str; 4] = [
+const ABOVE_SUBSTRATE_CRATES: [&str; 5] = [
     "crates/conversation/src",
     "crates/execution/src",
+    "crates/fleet/src",
     "crates/http/src",
     "crates/mcp/src",
 ];

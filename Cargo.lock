@@ -858,6 +858,7 @@ dependencies = [
  "clap",
  "fleetd-conversation",
  "fleetd-execution",
+ "fleetd-fleet",
  "fleetd-http",
  "fleetd-kernel",
  "fleetd-mcp",
@@ -962,6 +963,17 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "fleetd-fleet"
+version = "0.1.0"
+dependencies = [
+ "fleetd-kernel",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

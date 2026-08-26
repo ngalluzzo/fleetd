@@ -7,6 +7,8 @@ use std::{
 };
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use fleetd_fleet::{base_url, validate_listen_address};
+
 use fleetd::{
     auth::AuthService,
     execution::{
@@ -16,8 +18,9 @@ use fleetd::{
     http::{AppState, router},
     model::{
         AckDelivery, AddMember, ArmInvocation, BlockDelivery, BlockResolution, ClaimDeliveries,
-        CompleteInvocation, CreateAgent, CreateChannel, IssuedCredential, MembershipDeliveryMode,
-        MessagePage, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery, SendMessage,
+        CompleteInvocation, CreateAgent, CreateChannel, DeliveryState, IssuedCredential,
+        MembershipDeliveryMode, MessagePage, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery,
+        SendMessage,
     },
     plugin::{PluginSpec, ToolBudget, TurnPolicy, harness_acp_interface},
     store::Store,
@@ -30,11 +33,29 @@ use tokio_util::sync::CancellationToken;
 
 pub type MainResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
+/// Flattens a typed error to its message.
+///
+/// `main` reports failures through `Debug` on a boxed error, which prints a
+/// string error as its text but a typed error as its variant. Every message an
+/// operator sees should read the same way.
+fn flatten(error: impl std::fmt::Display) -> Box<dyn Error + Send + Sync> {
+    error.to_string().into()
+}
+
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
-    #[arg(long, env = "FLEETD_SERVER", default_value = "http://127.0.0.1:7419")]
-    server: String,
+    /// Local fleet configuration, as created by `fleetd init`.
+    #[arg(
+        long = "fleet-config",
+        env = "FLEETD_CONFIG",
+        global = true,
+        default_value = fleetd_fleet::DEFAULT_CONFIG_PATH
+    )]
+    fleet_config: PathBuf,
+    /// Override the server named by the fleet configuration.
+    #[arg(long, env = "FLEETD_SERVER", global = true)]
+    server: Option<String>,
     #[arg(long, env = "FLEETD_TOKEN_FILE", global = true)]
     token_file: Option<PathBuf>,
     #[command(subcommand)]
@@ -69,14 +90,86 @@ enum Command {
         #[command(subcommand)]
         command: WorkerCommand,
     },
+    /// Report what the fleet is doing now.
+    Status(StatusArgs),
+    /// Read durable delivery state across every agent.
+    ///
+    /// Settling one is `inbox retry` or `inbox resolve`, which already exist.
+    Deliveries(DeliveriesArgs),
+    /// Join one invocation to its session, plugin, and result evidence.
+    Trace(TraceArgs),
+    /// Create one local fleet: its directory, database, and operator credential.
+    Init(InitArgs),
+}
+
+#[derive(Args)]
+struct InitArgs {
+    #[arg(long, default_value = "127.0.0.1:7419")]
+    listen: SocketAddr,
+}
+
+#[derive(Args)]
+struct StatusArgs {
+    /// Limit the report to one agent ID.
+    #[arg(long)]
+    agent: Option<String>,
+    /// Bound how many delivery rows the census reads.
+    #[arg(long, default_value_t = 500)]
+    delivery_limit: u32,
+}
+
+#[derive(Args)]
+struct TraceArgs {
+    /// Stable invocation ID.
+    invocation: String,
+}
+
+#[derive(Args)]
+struct DeliveriesArgs {
+    /// Limit results to one agent ID.
+    #[arg(long)]
+    agent: Option<String>,
+    /// Limit results to one durable delivery state.
+    #[arg(long, value_enum)]
+    state: Option<DeliveryStateArg>,
+    /// Bound the returned read model.
+    #[arg(long, default_value_t = 100)]
+    limit: u32,
+}
+
+/// The delivery states an operator may filter on.
+///
+/// This mirrors `DeliveryState` for clap's sake only; the wire spelling comes
+/// from the codec so the CLI never becomes a second source of the names.
+#[derive(Clone, Copy, ValueEnum)]
+enum DeliveryStateArg {
+    Pending,
+    Leased,
+    Blocked,
+    Acknowledged,
+    Dead,
+}
+
+impl From<DeliveryStateArg> for DeliveryState {
+    fn from(value: DeliveryStateArg) -> Self {
+        match value {
+            DeliveryStateArg::Pending => Self::Pending,
+            DeliveryStateArg::Leased => Self::Leased,
+            DeliveryStateArg::Blocked => Self::Blocked,
+            DeliveryStateArg::Acknowledged => Self::Acknowledged,
+            DeliveryStateArg::Dead => Self::Dead,
+        }
+    }
 }
 
 #[derive(Args)]
 struct ServeArgs {
-    #[arg(long, env = "FLEETD_LISTEN", default_value = "127.0.0.1:7419")]
-    listen: SocketAddr,
-    #[arg(long, env = "FLEETD_DB", default_value = "fleetd.db")]
-    db: PathBuf,
+    /// Override the listen address named by the fleet configuration.
+    #[arg(long, env = "FLEETD_LISTEN")]
+    listen: Option<SocketAddr>,
+    /// Override the database named by the fleet configuration.
+    #[arg(long, env = "FLEETD_DB")]
+    db: Option<PathBuf>,
     #[arg(long)]
     operator_token_file: Option<PathBuf>,
 }
@@ -373,45 +466,86 @@ impl From<ResolutionArg> for BlockResolution {
 
 pub async fn run() -> MainResult<()> {
     let cli = Cli::parse();
+    // One read of the fleet configuration supplies defaults for every command;
+    // an explicit flag still wins over it.
+    let fleet = fleetd_fleet::load(&cli.fleet_config).map_err(flatten)?;
+    let server = cli.server.clone().unwrap_or_else(|| fleet.server.clone());
+    let token_file = cli
+        .token_file
+        .clone()
+        .or_else(|| Some(fleet.operator_token_file.clone()));
     match cli.command {
-        Command::Serve(args) => serve(args).await,
+        Command::Init(args) => init_command(&cli.fleet_config, &args).await,
+        Command::Serve(args) => serve(args, &fleet).await,
         Command::Agent { command } => {
-            agent_command(
-                &ApiClient::load(&cli.server, cli.token_file.as_deref())?,
-                command,
-            )
-            .await
+            agent_command(&ApiClient::load(&server, token_file.as_deref())?, command).await
         }
         Command::Channel { command } => {
-            channel_command(
-                &ApiClient::load(&cli.server, cli.token_file.as_deref())?,
-                command,
-            )
-            .await
+            channel_command(&ApiClient::load(&server, token_file.as_deref())?, command).await
         }
         Command::Message { command } => {
-            message_command(
-                &ApiClient::load(&cli.server, cli.token_file.as_deref())?,
-                command,
-            )
-            .await
+            message_command(&ApiClient::load(&server, token_file.as_deref())?, command).await
         }
         Command::Inbox { command } => {
-            inbox_command(
-                &ApiClient::load(&cli.server, cli.token_file.as_deref())?,
-                command,
-            )
-            .await
+            inbox_command(&ApiClient::load(&server, token_file.as_deref())?, command).await
         }
         Command::Invocation { command } => {
-            invocation_command(
-                &ApiClient::load(&cli.server, cli.token_file.as_deref())?,
-                command,
-            )
-            .await
+            invocation_command(&ApiClient::load(&server, token_file.as_deref())?, command).await
         }
         Command::Worker { command } => worker_command(command).await,
+        Command::Status(args) => {
+            status_command(&ApiClient::load(&server, token_file.as_deref())?, args).await
+        }
+        Command::Deliveries(args) => {
+            deliveries_command(&ApiClient::load(&server, token_file.as_deref())?, args).await
+        }
+        Command::Trace(args) => {
+            trace_command(&ApiClient::load(&server, token_file.as_deref())?, args).await
+        }
     }
+}
+
+/// Prints the fleet health report.
+///
+/// The report is composed by the daemon in one read, so this is a single
+/// request and a print. It deliberately holds no rule about what "current" or
+/// "active" means; see `fleetd_execution::health`.
+async fn status_command(api: &ApiClient, args: StatusArgs) -> MainResult<()> {
+    let mut parameters = vec![format!("delivery_limit={}", args.delivery_limit)];
+    if let Some(agent) = args.agent {
+        parameters.push(format!("agent={agent}"));
+    }
+    print_response(
+        api.get(&format!("/v1/fleet-health?{}", parameters.join("&")))
+            .send()
+            .await?,
+    )
+    .await
+}
+
+async fn trace_command(api: &ApiClient, args: TraceArgs) -> MainResult<()> {
+    print_response(
+        api.get(&format!("/v1/invocations/{}/trace", args.invocation))
+            .send()
+            .await?,
+    )
+    .await
+}
+
+async fn deliveries_command(api: &ApiClient, args: DeliveriesArgs) -> MainResult<()> {
+    let mut parameters = vec![format!("limit={}", args.limit)];
+    if let Some(agent) = args.agent {
+        parameters.push(format!("agent={agent}"));
+    }
+    if let Some(state) = args.state {
+        parameters.push(format!("state={}", DeliveryState::from(state).as_str()));
+    }
+    print_response(
+        api.get(&format!("/v1/deliveries?{}", parameters.join("&")))
+            .send()
+            .await?,
+    )
+    .await
 }
 
 async fn worker_command(command: WorkerCommand) -> MainResult<()> {
@@ -634,17 +768,48 @@ impl ApiClient {
     }
 }
 
-async fn serve(args: ServeArgs) -> MainResult<()> {
-    validate_listen_address(args.listen)?;
-    if let Some(parent) = args.db.parent()
+/// Prints what `init` created.
+///
+/// The fleet layout itself is `fleetd_fleet`, so this is one call and a print.
+async fn init_command(config_path: &Path, args: &InitArgs) -> MainResult<()> {
+    let created = fleetd_fleet::create(config_path, args.listen)
+        .await
+        .map_err(flatten)?;
+    print_json(&json!({
+        "status": "initialized",
+        "config": created.config_path.display().to_string(),
+        "database": created.resolved.database.display().to_string(),
+        "operator_token_file": created.operator_token_file.display().to_string(),
+        "server": created.resolved.server,
+        "next": [
+            format!("fleetd --fleet-config {} serve", created.config_path.display()),
+            format!("fleetd --fleet-config {} status", created.config_path.display()),
+        ]
+    }))
+}
+
+async fn serve(args: ServeArgs, fleet: &fleetd_fleet::ResolvedFleet) -> MainResult<()> {
+    // A flag wins; otherwise the fleet configuration decides, so `fleetd serve`
+    // after `fleetd init` needs no repeated arguments.
+    let listen = args.listen.unwrap_or(fleet.listen);
+    // An explicit `--db` keeps its credential beside itself, as it always has.
+    // Only a database chosen by the fleet configuration takes the credential
+    // path from that configuration too.
+    let (db, configured_token) = match args.db.clone() {
+        Some(db) => {
+            let derived = default_operator_token_path(&db);
+            (db, derived)
+        }
+        None => (fleet.database.clone(), fleet.operator_token_file.clone()),
+    };
+    validate_listen_address(listen).map_err(flatten)?;
+    if let Some(parent) = db.parent()
         && !parent.as_os_str().is_empty()
     {
         tokio::fs::create_dir_all(parent).await?;
     }
-    let store = Store::open(&args.db).await?;
-    let token_path = args
-        .operator_token_file
-        .unwrap_or_else(|| default_operator_token_path(&args.db));
+    let store = Store::open(&db).await?;
+    let token_path = args.operator_token_file.clone().unwrap_or(configured_token);
     let bootstrap = AuthService::new(store.clone())
         .ensure_operator_credential(&token_path)
         .await?;
@@ -653,12 +818,12 @@ async fn serve(args: ServeArgs) -> MainResult<()> {
         rotated = bootstrap.credential_rotated,
         "operator credential ready"
     );
-    let listener = tokio::net::TcpListener::bind(args.listen).await?;
+    let listener = tokio::net::TcpListener::bind(listen).await?;
     let listen_address = listener.local_addr()?;
     let recovery_store = store.clone();
     let state = AppState::new(store)
         .with_browser_stream_listener(listen_address)?
-        .with_external_message_commit_hints(&args.db)?;
+        .with_external_message_commit_hints(&db)?;
     // An attempt whose worker died leaves a leased delivery and an armed
     // invocation behind. Nothing else reclaims those: a worker only recovers the
     // agent it is running, so an agent with no worker stays stuck. The daemon
@@ -672,7 +837,7 @@ async fn serve(args: ServeArgs) -> MainResult<()> {
     tracing::info!(
         listen = %listen_address,
         browser_origin = state.browser_origin().expect("configured browser origin"),
-        database = %args.db.display(),
+        database = %db.display(),
         "fleetd ready"
     );
     let shutdown = recovery_cancellation.clone();
@@ -1130,16 +1295,6 @@ fn default_operator_token_path(database: &Path) -> PathBuf {
         .join("operator.token")
 }
 
-fn validate_listen_address(address: SocketAddr) -> MainResult<()> {
-    if !address.ip().is_loopback() {
-        return Err(
-            "fleetd cannot listen beyond loopback until authenticated transport is configured"
-                .into(),
-        );
-    }
-    Ok(())
-}
-
 async fn shutdown_signal() {
     let _unused = tokio::signal::ctrl_c().await;
 }
@@ -1153,32 +1308,15 @@ fn print_json(value: &impl Serialize) -> MainResult<()> {
     Ok(())
 }
 
-fn base_url(server: &str) -> &str {
-    server.trim_end_matches('/')
-}
-
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
     use fleetd::execution::worker::TurnAdapter;
     use serde_json::json;
 
-    use super::{
-        WorkerFileConfig, persist_secret_file, replace_secret_file, validate_listen_address,
-    };
-
-    #[test]
-    fn loopback_listen_addresses_are_allowed() {
-        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7419);
-        assert!(validate_listen_address(address).is_ok());
-    }
-
-    #[test]
-    fn non_loopback_listen_addresses_are_rejected() {
-        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 7419);
-        assert!(validate_listen_address(address).is_err());
-    }
+    // The loopback rule and its assertions moved to `fleetd-fleet`, which owns
+    // the listen address every surface reads.
+    use super::{WorkerFileConfig, persist_secret_file, replace_secret_file};
 
     #[test]
     fn worker_config_defaults_are_bounded_and_inbound_acceptance_is_exact() {

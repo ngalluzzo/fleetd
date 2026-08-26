@@ -12,6 +12,7 @@ members = [
     "crates/acp-host",
     "crates/conversation",
     "crates/execution",
+    "crates/fleet",
     "crates/http",
     "crates/kernel",
     "crates/mcp",
@@ -29,6 +30,7 @@ resolver = "2"
 axum = { version = "0.8", features = ["ws"] }
 fleetd-conversation = { path = "crates/conversation" }
 fleetd-execution = { path = "crates/execution" }
+fleetd-fleet = { path = "crates/fleet" }
 fleetd-http = { path = "crates/http" }
 fleetd-mcp = { path = "crates/mcp" }
 fleetd-kernel = { path = "crates/kernel" }

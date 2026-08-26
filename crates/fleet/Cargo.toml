@@ -1,0 +1,20 @@
+[package]
+name = "fleetd-fleet"
+version = "0.1.0"
+edition = "2024"
+description = "Where a local fleet lives on this machine"
+license = "MIT"
+
+[dependencies]
+fleetd-kernel = { path = "../kernel" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
