@@ -1,4 +1,9 @@
-use std::{collections::HashSet, path::Path, time::Duration, time::SystemTime};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    time::Duration,
+    time::SystemTime,
+};
 
 use serde_json::Value;
 use sqlx::{
@@ -274,44 +279,57 @@ impl Store {
         &self,
         include_archived: bool,
     ) -> Result<Vec<ConversationSummary>, FleetError> {
+        let rows = sqlx::query(&format!(
+            "{} WHERE ? OR c.archived_at_ms IS NULL ORDER BY c.created_at_ms, c.id",
+            conversation_summary_select()
+        ))
+        .bind(include_archived)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut members = self.members_by_conversation(include_archived).await?;
+        rows.iter()
+            .map(|row| {
+                let channel_id: String = row.try_get("id")?;
+                let members = members.remove(&channel_id).unwrap_or_default();
+                conversation_summary_from_row(row, members)
+            })
+            .collect()
+    }
+
+    /// Reads the membership of every listed conversation in one query.
+    ///
+    /// `list_channel_members` answers for one channel and proves it exists
+    /// first, which is the right shape for a caller holding one ID and the
+    /// wrong one for a listing: asking per row made a single listing cost two
+    /// further queries for every conversation it returned. A conversation with
+    /// no members is simply absent here.
+    async fn members_by_conversation(
+        &self,
+        include_archived: bool,
+    ) -> Result<HashMap<String, Vec<ChannelMember>>, FleetError> {
         let rows = sqlx::query(
             r"
-            SELECT c.id, c.name, c.conversation_kind, c.metadata_json,
-                   c.created_at_ms, c.archived_at_ms,
-                   (
-                       SELECT m.seq FROM messages m
-                       WHERE m.channel_id = c.id
-                       ORDER BY m.seq DESC LIMIT 1
-                   ) AS latest_message_seq,
-                   (
-                       SELECT m.created_at_ms FROM messages m
-                       WHERE m.channel_id = c.id
-                       ORDER BY m.seq DESC LIMIT 1
-                   ) AS latest_message_at_ms
-            FROM channels c
+            SELECT cm.channel_id, cm.agent_id, a.name AS agent_name,
+                   cm.joined_at_ms, cm.delivery_mode
+            FROM channel_members cm
+            JOIN agents a ON a.id = cm.agent_id
+            JOIN channels c ON c.id = cm.channel_id
             WHERE ? OR c.archived_at_ms IS NULL
-            ORDER BY c.created_at_ms, c.id
+            ORDER BY cm.channel_id, cm.joined_at_ms, cm.agent_id
             ",
         )
         .bind(include_archived)
         .fetch_all(&self.pool)
         .await?;
-        let mut conversations = Vec::with_capacity(rows.len());
-        for row in rows {
-            let channel = channel_from_row(&row)?;
-            conversations.push(ConversationSummary {
-                members: self.list_channel_members(&channel.id).await?,
-                id: channel.id,
-                name: channel.name,
-                kind: channel.kind,
-                metadata: channel.metadata,
-                created_at_ms: channel.created_at_ms,
-                archived_at_ms: channel.archived_at_ms,
-                latest_message_seq: row.try_get("latest_message_seq")?,
-                latest_message_at_ms: row.try_get("latest_message_at_ms")?,
-            });
+        let mut grouped: HashMap<String, Vec<ChannelMember>> = HashMap::new();
+        for row in &rows {
+            let member = channel_member_from_row(row)?;
+            grouped
+                .entry(member.channel_id.clone())
+                .or_default()
+                .push(member);
         }
-        Ok(conversations)
+        Ok(grouped)
     }
 
     /// Idempotently opens the direct conversation for one exact participant pair.
@@ -456,43 +474,16 @@ impl Store {
         &self,
         channel_id: &str,
     ) -> Result<ConversationSummary, FleetError> {
-        let row = sqlx::query(
-            r"
-            SELECT c.id, c.name, c.conversation_kind, c.metadata_json,
-                   c.created_at_ms, c.archived_at_ms,
-                   (
-                       SELECT m.seq FROM messages m
-                       WHERE m.channel_id = c.id
-                       ORDER BY m.seq DESC LIMIT 1
-                   ) AS latest_message_seq,
-                   (
-                       SELECT m.created_at_ms FROM messages m
-                       WHERE m.channel_id = c.id
-                       ORDER BY m.seq DESC LIMIT 1
-                   ) AS latest_message_at_ms
-            FROM channels c
-            WHERE c.id = ?
-            ",
-        )
-        .bind(channel_id)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or_else(|| FleetError::NotFound {
-            entity: "channel",
-            id: channel_id.to_owned(),
-        })?;
-        let channel = channel_from_row(&row)?;
-        Ok(ConversationSummary {
-            members: self.list_channel_members(channel_id).await?,
-            id: channel.id,
-            name: channel.name,
-            kind: channel.kind,
-            metadata: channel.metadata,
-            created_at_ms: channel.created_at_ms,
-            archived_at_ms: channel.archived_at_ms,
-            latest_message_seq: row.try_get("latest_message_seq")?,
-            latest_message_at_ms: row.try_get("latest_message_at_ms")?,
-        })
+        let row = sqlx::query(&format!("{} WHERE c.id = ?", conversation_summary_select()))
+            .bind(channel_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| FleetError::NotFound {
+                entity: "channel",
+                id: channel_id.to_owned(),
+            })?;
+        let members = self.list_channel_members(channel_id).await?;
+        conversation_summary_from_row(&row, members)
     }
 
     /// Lists the exact immutable memberships for one channel.
@@ -1091,6 +1082,51 @@ fn agent_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Agent, FleetError> {
         name: row.try_get("name")?,
         metadata: parse_json(&row.try_get::<String, _>("metadata_json")?)?,
         created_at_ms: row.try_get("created_at_ms")?,
+    })
+}
+
+/// The presentation projection every conversation read shares.
+///
+/// Both reads select the same columns and the same two correlated lookups for
+/// the latest message, so what a conversation looks like is stated once and
+/// each caller adds only its own filter and ordering.
+fn conversation_summary_select() -> &'static str {
+    r"
+    SELECT c.id, c.name, c.conversation_kind, c.metadata_json,
+           c.created_at_ms, c.archived_at_ms,
+           (
+               SELECT m.seq FROM messages m
+               WHERE m.channel_id = c.id
+               ORDER BY m.seq DESC LIMIT 1
+           ) AS latest_message_seq,
+           (
+               SELECT m.created_at_ms FROM messages m
+               WHERE m.channel_id = c.id
+               ORDER BY m.seq DESC LIMIT 1
+           ) AS latest_message_at_ms
+    FROM channels c
+    "
+}
+
+/// Assembles one summary from its projected row and its membership.
+///
+/// Members are passed in rather than read here, so a listing can read every
+/// conversation's membership at once instead of once per row.
+fn conversation_summary_from_row(
+    row: &sqlx::sqlite::SqliteRow,
+    members: Vec<ChannelMember>,
+) -> Result<ConversationSummary, FleetError> {
+    let channel = channel_from_row(row)?;
+    Ok(ConversationSummary {
+        members,
+        id: channel.id,
+        name: channel.name,
+        kind: channel.kind,
+        metadata: channel.metadata,
+        created_at_ms: channel.created_at_ms,
+        archived_at_ms: channel.archived_at_ms,
+        latest_message_seq: row.try_get("latest_message_seq")?,
+        latest_message_at_ms: row.try_get("latest_message_at_ms")?,
     })
 }
 

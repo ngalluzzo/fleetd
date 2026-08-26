@@ -453,6 +453,104 @@ async fn idempotency_keys_are_bounded() {
     }
 }
 
+#[tokio::test]
+async fn listing_conversations_reports_the_same_membership_as_reading_one() {
+    let (_directory, store) = test_store().await;
+    let first = agent(&store, "listing-first").await;
+    let second = agent(&store, "listing-second").await;
+    let third = agent(&store, "listing-third").await;
+
+    let populated = store
+        .create_channel_with_members(
+            "listing-populated".to_owned(),
+            json!({}),
+            vec![
+                exact_member(&first.id, MembershipDeliveryMode::Inbox),
+                exact_member(&second.id, MembershipDeliveryMode::StreamOnly),
+                exact_member(&third.id, MembershipDeliveryMode::Inbox),
+            ],
+        )
+        .await
+        .expect("create populated channel");
+    let empty = store
+        .create_channel(CreateChannel {
+            name: "listing-empty".to_owned(),
+            metadata: json!({}),
+            member_ids: Vec::new(),
+            members: Vec::new(),
+        })
+        .await
+        .expect("create memberless channel");
+    let direct = store
+        .open_direct_conversation(fleetd::model::OpenDirectConversation {
+            members: vec![
+                exact_member(&first.id, MembershipDeliveryMode::Inbox),
+                exact_member(&second.id, MembershipDeliveryMode::Inbox),
+            ],
+        })
+        .await
+        .expect("open direct conversation")
+        .conversation;
+    let archived = store
+        .create_channel_with_members(
+            "listing-archived".to_owned(),
+            json!({}),
+            vec![exact_member(&third.id, MembershipDeliveryMode::Inbox)],
+        )
+        .await
+        .expect("create archived channel");
+    store
+        .archive_channel(&archived.id)
+        .await
+        .expect("archive channel");
+
+    // One listing must agree with reading each conversation on its own, member
+    // for member and in the same order. The listing groups one membership query
+    // across every row, so nothing but this pins the two together.
+    let listed = store
+        .list_conversations(true)
+        .await
+        .expect("list every conversation");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|summary| summary.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            populated.id.as_str(),
+            empty.id.as_str(),
+            direct.id.as_str(),
+            archived.id.as_str()
+        ]
+    );
+    for summary in &listed {
+        let directly = store
+            .list_channel_members(&summary.id)
+            .await
+            .expect("read one conversation's membership");
+        assert_eq!(summary.members, directly, "membership of {}", summary.id);
+    }
+
+    let memberless = listed
+        .iter()
+        .find(|summary| summary.id == empty.id)
+        .expect("memberless conversation is listed");
+    assert!(memberless.members.is_empty());
+
+    let active = store
+        .list_conversations(false)
+        .await
+        .expect("list active conversations");
+    assert!(active.iter().all(|summary| summary.id != archived.id));
+    for summary in &active {
+        let directly = store
+            .list_channel_members(&summary.id)
+            .await
+            .expect("read one active conversation's membership");
+        assert_eq!(summary.members, directly, "membership of {}", summary.id);
+    }
+}
+
 async fn agent(store: &Store, name: &str) -> fleetd::model::Agent {
     store
         .create_agent(CreateAgent {
