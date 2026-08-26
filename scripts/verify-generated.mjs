@@ -63,6 +63,25 @@ if (contractVersion !== clientVersion) {
   );
 }
 
+// A WebSocket upgrade is not a Fetch call. If the generator ever emits one as
+// an ordinary operation, a consumer would call it and get a 400 rather than a
+// stream. This lived in `bin/ci` and so was never checked by CI.
+const streamOperations = ["streamChannelMessages", "openBrowserChannelStream"];
+process.stdout.write(`\nverifying WebSocket upgrades are not Fetch operations\n`);
+const generatedIndex = readFileSync(
+  new URL("../clients/typescript/src/generated/index.ts", import.meta.url),
+  "utf8",
+);
+const leaked = streamOperations.filter((operation) =>
+  generatedIndex.includes(operation),
+);
+if (leaked.length > 0) {
+  failures.push(
+    `WebSocket upgrades must not be emitted as Fetch operations: ${leaked.join(", ")}.\n` +
+      "  fix: keep the upgrade out of the generated client's operation surface",
+  );
+}
+
 if (failures.length > 0) {
   process.stderr.write(`\n${failures.join("\n\n")}\n`);
   process.exit(1);

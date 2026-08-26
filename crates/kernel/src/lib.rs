@@ -9,7 +9,7 @@
 //! The kernel does not know what a harness, a task, a workflow, or a semantic
 //! capability is. It owns the authoritative `SQLite` store and every transition
 //! its own rows can make, and it commits none of them on another layer's
-//! behalf: [`Store::begin_immediate`] lets a caller enlist its own work in a
+//! behalf: [`store::Store::begin_immediate`] lets a caller enlist its own work in a
 //! kernel transaction so both commit together.
 
 pub mod auth;

@@ -1,41 +1,61 @@
 #!/bin/sh
+# Everything CI checks, in one local command.
+#
+# This mirrors `.github/workflows/ci.yml` job for job, then adds the checks that
+# only run here. When the two disagree, the workflow is authoritative: it is
+# what gates a merge. Keep them in step.
+#
+# The JavaScript packages are one npm workspace, so dependencies install once at
+# the root and each package is addressed with `-w`. There is no per-package
+# lockfile to install from.
 set -eu
 
-cargo run --quiet --bin export-openapi
-git diff --exit-code -- openapi/fleetd-v1.json
-(
-    cd clients/typescript
-    npm ci
-    npm run generate
-    npm run typecheck
-    npm test
-    npm audit --audit-level=moderate
-    if grep -Eq "streamChannelMessages|openBrowserChannelStream" src/generated/index.ts; then
-        echo "WebSocket upgrades must not be emitted as Fetch operations" >&2
-        exit 1
-    fi
-)
-git diff --exit-code -- clients/typescript/src/generated
+demo_dir="${TMPDIR:-/tmp}/fleetd-ci-restart-demo-$$"
+cleanup() {
+    rm -rf "${demo_dir}"
+}
+trap cleanup EXIT INT TERM
 
-(
-    cd apps/conversation-web
-    bun run typecheck
-    bun test
-    bun run build
-)
-git diff --exit-code -- web/conversation/conversation.js
-git diff --exit-code -- web/conversation/conversation.css
-bun build tools/qualify-live-conversation.ts --target bun \
-    --outfile target/qualify-live-conversation-check.js
-
-(
-    cd apps/conversation-desktop
-    npm ci
-    npm run typecheck
-    npm test
-)
-
+# --- ci.yml: rust ---------------------------------------------------------
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
+
+# Separate processes, hard-killed and restarted. No in-process test can show
+# that the replacement pair adopts the native session under a higher owner
+# epoch.
+cargo build --workspace
+examples/restart-demo/run.sh "${demo_dir}"
+
+# --- ci.yml: javascript ---------------------------------------------------
+npm ci
+npm run test -w @fleetd/client -w @fleetd/conversation-web
+npm run typecheck -w @fleetd/client -w @fleetd/conversation-web
+
+# Regenerates every committed derived artifact and asks git whether the result
+# differs: the contract from the handlers, the client from the contract, the
+# served bundle from the app, the client's version against the contract's, and
+# that no WebSocket upgrade was emitted as a Fetch operation. The daemon embeds
+# that bundle, so drift would otherwise ship with a green build.
+npm run verify:generated
+
+# --- ci.yml: desktop ------------------------------------------------------
+# CI runs these on macOS, the desktop target, because `electrobun prepare`
+# fetches a platform-specific devkit only exercised there. They will not pass
+# on a Linux checkout.
+npm run test -w @fleetd/conversation-desktop
+npm run typecheck -w @fleetd/conversation-desktop
+
+# --- not in the workflow --------------------------------------------------
+# Documentation warnings are worth failing a local run over without blocking a
+# merge on them.
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+
+# Only what ships. Every current advisory is against the client-generation
+# toolchain, which is a dev dependency and never reaches a user.
+npm audit --omit=dev --audit-level=moderate
+
+# The qualification harness is not part of any package's build, so nothing else
+# would notice it stopped compiling.
+bun build tools/qualify-live-conversation.ts --target bun \
+    --outfile target/qualify-live-conversation-check.js

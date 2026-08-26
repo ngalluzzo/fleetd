@@ -4,7 +4,14 @@ Keep the messaging kernel independent of harnesses and workflow domains. Add new
 semantics as versioned message contracts or adapters, not fields interpreted by
 the core transport.
 
-Before submitting a change, run the Rust checks:
+Before submitting a change, run everything CI runs:
+
+```sh
+bin/ci
+```
+
+That mirrors `.github/workflows/ci.yml` job for job and adds the checks that
+only run locally. To run just the Rust checks while iterating:
 
 ```sh
 cargo fmt --all -- --check
@@ -32,8 +39,12 @@ rebuilds them in that order. These paths are also marked unmergeable in
 `.gitattributes`: a conflict there is resolved by regenerating, never by editing
 the generated file. See `docs/PARALLEL_WORK.md`.
 
-`.github/workflows/ci.yml` runs exactly these commands on every pull request.
-A change is not complete until that workflow is green.
+`.github/workflows/ci.yml` runs these commands on every pull request, plus
+`examples/restart-demo/run.sh`, which hard-kills a daemon and a worker and
+checks that the restarted pair adopts the native session. A change is not
+complete until that workflow is green. `bin/ci` additionally runs `cargo doc`
+with warnings denied, a production-only `npm audit`, and a compile check of the
+qualification harness; the workflow is authoritative when the two disagree.
 
 Each behavioral change should include a test at the narrowest stable boundary.
 Changes to delivery behavior must cover concurrency and restart or expiry where

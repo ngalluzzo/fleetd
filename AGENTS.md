@@ -3,11 +3,13 @@
 Read `VISION.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, and
 `docs/MILESTONES.md` before non-trivial changes. Read `docs/PARALLEL_WORK.md`
 before changing anything generated or shared, and when several agents are
-working at once.
+working at once. Read `docs/GETTING_STARTED.md` and `docs/OPERATIONS.md` before
+changing the CLI or an operator read model: they are what an operator is
+promised, and every command they name is expected to exist.
 
-- Keep the kernel limited to agents, channels, membership, and immutable
-  messages. Harness and workflow semantics belong in adapters or versioned
-  contracts.
+- Keep the kernel limited to the six concepts its crate doc names: agents,
+  channels, membership, immutable messages, deliveries, and principals. Harness
+  and workflow semantics belong in adapters or versioned contracts.
 - Preserve unknown message kinds and JSON payload fields.
 - Treat SQLite as authoritative; in-memory delivery may be lost and must always
   be recoverable through cursor replay or the durable inbox.
@@ -21,11 +23,18 @@ working at once.
   authenticated principal, not caller-supplied identity fields.
 - Keep network listeners on loopback until encrypted transport and enrollment
   are explicitly implemented.
-- Put every new module in the layer that owns it: `src/execution` for what
-  happens to durable state, and a surface for how it is exposed -- `src/http`
-  and `src/mcp` are peers, both named for a mechanism. A new surface is a new
-  entry in `SOURCE_LAYERS`, not a folder nobody declared. Nothing new belongs at
-  the root of `src/`.
+- Put every new module in the crate that owns it: `crates/kernel` stores, above
+  it `crates/execution` decides what happens to durable state, and a surface
+  exposes it over one mechanism -- `crates/http` and `crates/mcp` are peers,
+  both named for a mechanism. `src/` holds only the binary and its command
+  surface; `SOURCE_LAYERS` is empty and a new directory there needs a reason
+  the boundary test can state.
+- A surface is not a home for logic. HTTP, MCP, and the CLI are three ways to
+  ask the same question, so whatever answers it belongs below all of them --
+  composed over `&Store`, testable with no server running. If a second surface
+  would have to reimplement a rule to offer the same feature, the rule is in
+  the wrong place. `fleetd status` is one request and a print because
+  `execution::health` decides what "current" and "active" mean.
 - A surface may provision a transport; `execution` may not. Whoever starts an
   endpoint hands the worker a `TurnGrant`, so arranging a turn never means
   knowing that endpoints can be started.
@@ -46,9 +55,11 @@ working at once.
 - Name a new module's source in the boundary assertions by concept, not by file:
   `tests/crate_boundaries.rs` resolves a module to a file or to every source
   under a directory, and splitting one must not shrink what it checks.
-- The kernel is `crates/kernel` and holds the only connection pool. Compose
-  above it with free functions over `&Store`; never add methods to `Store` or
-  reach for the pool from outside.
+- The kernel is `crates/kernel` and holds the only connection pool. A method on
+  `Store` may only be written inside that crate; above it, compose with free
+  functions over `&Store` and never reach for the pool. The orphan rule enforces
+  the first half, which is why a getter the kernel owns is a method and a join
+  above it is a function.
 - Keep every delivery row transition in the kernel and compose it with the
   invocation fence above the kernel. Nothing layered above may write a kernel
   table directly.
@@ -73,5 +84,16 @@ working at once.
 - Exercise a proposed plugin interface in at least two real integrations before
   treating its contract as stable.
 - Reuse Git, harnesses, parsers, and model servers instead of rebuilding them.
-- Run formatting, clippy with warnings denied, and all tests before claiming a
-  change is complete.
+- Number a new ADR by reading `docs/adr/` first, not by incrementing the number
+  in the branch it was drafted on. Two branches drafting against the same
+  highest ordinal both pick it, and nothing fails: the collision surfaces as two
+  files claiming one number. `bin/new-migration` exists because migrations have
+  the same failure mode.
+- Run `bin/ci` before claiming a change is complete. It mirrors
+  `.github/workflows/ci.yml` job for job and adds the checks that only run
+  locally; when the two disagree, the workflow is authoritative because it is
+  what gates a merge.
+- The JavaScript packages are one npm workspace: dependencies install once at
+  the root and each package is addressed with `-w`. There is no per-package
+  lockfile, and the client's version in `package.json` tracks the contract's
+  `info.version`.

@@ -267,9 +267,10 @@ const EXECUTION_MODULES: [&str; 8] = [
 
 /// Every layer left in the daemon, as a directory under `src/`.
 ///
-/// Both are surfaces, named for a mechanism, which is what having two of them
-/// makes plain. A new surface is a new entry here rather than a folder nobody
-/// notices. `execution` left for `crates/execution`.
+/// There are none: `execution` left for `crates/execution`, and both surfaces
+/// left for `crates/http` and `crates/mcp`. What remains in `src/` is the
+/// binary and its command surface, which are files rather than layers. A new
+/// directory here is a new layer nobody declared, which is what this catches.
 const SOURCE_LAYERS: [&str; 0] = [];
 
 /// The layer that exposes it. Route domains own handlers; the rest is
