@@ -73,7 +73,7 @@ const BEARER_AUTH: &str = "bearerAuth";
 #[openapi(
     info(
         title = "fleetd API",
-        version = "1.6.0",
+        version = "1.7.0",
         description = "Versioned control-plane contract for cooperating software agents."
     ),
     tags(

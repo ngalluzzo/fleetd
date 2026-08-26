@@ -39,6 +39,57 @@ async fn operational_read_models_require_the_operator() {
 }
 
 #[tokio::test]
+async fn an_evidence_cursor_is_refused_unless_both_halves_arrive() {
+    let server = Daemon::start().await;
+    for path in ["/v1/plugin-generations", "/v1/invocation-observations"] {
+        // A cursor addresses a position, and a position is two halves. Reading
+        // a half cursor as "start from the beginning" would silently rewind a
+        // collector that dropped one parameter, so the surface refuses it
+        // rather than serving evidence the caller has already archived.
+        for query in ["after_ms=5", "after_id=abc"] {
+            let response = server
+                .get(&format!("{path}?{query}"), Some(&server.operator_token))
+                .send()
+                .await
+                .expect("half cursor response");
+            assert_eq!(
+                response.status(),
+                reqwest::StatusCode::BAD_REQUEST,
+                "{path}?{query} must not be read as an absent cursor"
+            );
+        }
+
+        let negative = server
+            .get(
+                &format!("{path}?after_ms=-1&after_id=abc"),
+                Some(&server.operator_token),
+            )
+            .send()
+            .await
+            .expect("negative cursor response");
+        assert_eq!(negative.status(), reqwest::StatusCode::BAD_REQUEST);
+
+        let accepted = server
+            .get(
+                &format!("{path}?after_ms=0&after_id=&limit=1&settled=true&order=oldest"),
+                Some(&server.operator_token),
+            )
+            .send()
+            .await
+            .expect("settled page response");
+        assert_eq!(accepted.status(), reqwest::StatusCode::OK);
+        assert_eq!(
+            accepted
+                .json::<serde_json::Value>()
+                .await
+                .expect("settled page body"),
+            json!([]),
+            "a cursor-addressed listing stays a plain array"
+        );
+    }
+}
+
+#[tokio::test]
 async fn an_agent_with_no_worker_projects_as_an_unmanaged_seat() {
     let server = Daemon::start().await;
     let agent = server.register("seat-without-worker").await;

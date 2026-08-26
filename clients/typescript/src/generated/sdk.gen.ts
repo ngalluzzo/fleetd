@@ -377,7 +377,7 @@ export const readFleetHealth = <ThrowOnError extends boolean = false>(options?: 
 /**
  * List bounded managed-turn observations
  *
- * Operator-only. Reports event counts, chain digests, terminal state, and usage without duplicating raw transcripts.
+ * Operator-only. Reports event counts, chain digests, terminal state, and usage without duplicating raw transcripts. Ordered by `updated_at_ms`, the clock every folded event advances and which freezes once an invocation is terminal. A collector walks `order=oldest` and resumes from the last row's `updated_at_ms` and `invocation_id`; `settled=true` reports only terminal rows, whose evidence never changes again.
  */
 export const listInvocationObservations = <ThrowOnError extends boolean = false>(options?: Options<ListInvocationObservationsData, ThrowOnError>) => (options?.client ?? client).get<ListInvocationObservationsResponses, ListInvocationObservationsErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -410,7 +410,7 @@ export const traceInvocation = <ThrowOnError extends boolean = false>(options: O
 /**
  * List durable plugin generation evidence
  *
- * Operator-only. Reports exact ready-generation identity, liveness, profile, runtime, and shutdown evidence.
+ * Operator-only. Reports exact ready-generation identity, liveness, profile, runtime, and shutdown evidence. Ordered by `last_heartbeat_at_ms`, the clock every durable change to a generation advances and which freezes once one is stopped. A collector walks `order=oldest` and resumes from the last row's `last_heartbeat_at_ms` and `id`.
  */
 export const listPluginGenerations = <ThrowOnError extends boolean = false>(options?: Options<ListPluginGenerationsData, ThrowOnError>) => (options?.client ?? client).get<ListPluginGenerationsResponses, ListPluginGenerationsErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],

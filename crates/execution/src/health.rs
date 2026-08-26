@@ -14,7 +14,8 @@ use fleetd_proto::model::{DeliveryState, InvocationState};
 pub use fleetd_proto::operations::{DeliveryCensus, FleetHealth};
 
 use crate::{
-    invocation::list_invocations, operations::list_plugin_generations,
+    invocation::list_invocations,
+    operations::{EvidencePage, list_plugin_generations},
     session_binding::list_session_bindings,
 };
 
@@ -33,7 +34,7 @@ pub async fn fleet_health(
     agent_id: Option<&str>,
     delivery_limit: u32,
 ) -> Result<FleetHealth, FleetError> {
-    let generations = list_plugin_generations(store, agent_id).await?;
+    let generations = list_plugin_generations(store, &EvidencePage::newest(agent_id)).await?;
     let sessions = list_session_bindings(store, agent_id).await?;
     let invocations = list_invocations(store, agent_id).await?;
     let delivery_records = store
@@ -59,11 +60,12 @@ pub async fn fleet_health(
 
 /// Keeps the first row for each key and drops the rest.
 ///
-/// Both lists this is applied to are ordered newest-first, so the first row per
-/// key is the current one. That ordering is the contract being relied on: a
-/// list that stopped returning newest-first would silently change what
-/// "current" means here, which is why this rule lives beside the report rather
-/// than inside a caller.
+/// Both lists this is applied to are ordered by their change clock, newest
+/// first, so the first row per key is the one whose evidence moved most
+/// recently. That ordering is the contract being relied on: a list that
+/// stopped returning newest-first would silently change what "current" means
+/// here, which is why this rule lives beside the report rather than inside a
+/// caller.
 fn newest_per<T, K: Ord>(rows: Vec<T>, key: impl Fn(&T) -> K) -> Vec<T> {
     let mut seen = BTreeSet::new();
     rows.into_iter()

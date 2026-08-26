@@ -289,10 +289,12 @@ async fn assert_bounded_event_folding(fixture: &Fixture) {
     .await
     .expect_err("changed event replay must conflict");
     assert!(matches!(changed_event, FleetError::Conflict(_)));
-    let observations =
-        operations::list_invocation_observations(&fixture.store, Some(&fixture.receiver.id))
-            .await
-            .expect("list invocation observations");
+    let observations = operations::list_invocation_observations(
+        &fixture.store,
+        &operations::EvidencePage::newest(Some(&fixture.receiver.id)),
+    )
+    .await
+    .expect("list invocation observations");
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].event_count, 1);
     assert_eq!(observations[0].counts.assistant, 1);
@@ -619,10 +621,13 @@ async fn generation_evidence_and_dispatch_arm_are_one_transaction() {
     assert_eq!(binding.state, SessionBindingState::Ready);
     assert_eq!(binding.active_invocation_id, None);
     assert!(
-        operations::list_invocation_observations(&fixture.store, Some(&fixture.receiver.id))
-            .await
-            .expect("list observations after rollback")
-            .is_empty()
+        operations::list_invocation_observations(
+            &fixture.store,
+            &operations::EvidencePage::newest(Some(&fixture.receiver.id))
+        )
+        .await
+        .expect("list observations after rollback")
+        .is_empty()
     );
 }
 

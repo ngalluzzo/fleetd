@@ -333,13 +333,13 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
 
 async fn assert_operational_tables_exist_after_migration(store: &fleetd::store::Store) {
     assert!(
-        operations::list_plugin_generations(store, None)
+        operations::list_plugin_generations(store, &operations::EvidencePage::newest(None))
             .await
             .expect("list plugin generations after migration")
             .is_empty()
     );
     assert!(
-        operations::list_invocation_observations(store, None)
+        operations::list_invocation_observations(store, &operations::EvidencePage::newest(None))
             .await
             .expect("list invocation observations after migration")
             .is_empty()

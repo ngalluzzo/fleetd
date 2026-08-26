@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "1.6.0"
+    "version": "1.7.0"
   },
   "paths": {
     "/health": {
@@ -2717,7 +2717,7 @@
           "operations"
         ],
         "summary": "List bounded managed-turn observations",
-        "description": "Operator-only. Reports event counts, chain digests, terminal state, and usage without duplicating raw transcripts.",
+        "description": "Operator-only. Reports event counts, chain digests, terminal state, and usage without duplicating raw transcripts. Ordered by `updated_at_ms`, the clock every folded event advances and which freezes once an invocation is terminal. A collector walks `order=oldest` and resumes from the last row's `updated_at_ms` and `invocation_id`; `settled=true` reports only terminal rows, whose evidence never changes again.",
         "operationId": "listInvocationObservations",
         "parameters": [
           {
@@ -2728,11 +2728,68 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "after_ms",
+            "in": "query",
+            "description": "Exclusive change-clock cursor. Must be supplied with `after_id`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "after_id",
+            "in": "query",
+            "description": "Exclusive row-ID tiebreak. Must be supplied with `after_ms`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Requested page size. Values above 500 are clamped to 500.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 500,
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "settled",
+            "in": "query",
+            "description": "Report only rows whose evidence can never change again.",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Direction the change clock is walked. Walk `oldest` to archive.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/EvidenceOrder"
+                }
+              ],
+              "default": "newest"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Bounded invocation observations",
+            "description": "One page of bounded invocation observations",
             "content": {
               "application/json": {
                 "schema": {
@@ -2740,6 +2797,16 @@
                   "items": {
                     "$ref": "#/components/schemas/InvocationObservation"
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or page bounds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -2937,7 +3004,7 @@
           "operations"
         ],
         "summary": "List durable plugin generation evidence",
-        "description": "Operator-only. Reports exact ready-generation identity, liveness, profile, runtime, and shutdown evidence.",
+        "description": "Operator-only. Reports exact ready-generation identity, liveness, profile, runtime, and shutdown evidence. Ordered by `last_heartbeat_at_ms`, the clock every durable change to a generation advances and which freezes once one is stopped. A collector walks `order=oldest` and resumes from the last row's `last_heartbeat_at_ms` and `id`.",
         "operationId": "listPluginGenerations",
         "parameters": [
           {
@@ -2948,11 +3015,68 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "after_ms",
+            "in": "query",
+            "description": "Exclusive change-clock cursor. Must be supplied with `after_id`.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "after_id",
+            "in": "query",
+            "description": "Exclusive row-ID tiebreak. Must be supplied with `after_ms`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Requested page size. Values above 500 are clamped to 500.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "default": 500,
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "settled",
+            "in": "query",
+            "description": "Report only rows whose evidence can never change again.",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Direction the change clock is walked. Walk `oldest` to archive.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/EvidenceOrder"
+                }
+              ],
+              "default": "newest"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Plugin generation evidence",
+            "description": "One page of plugin generation evidence",
             "content": {
               "application/json": {
                 "schema": {
@@ -2960,6 +3084,16 @@
                   "items": {
                     "$ref": "#/components/schemas/PluginGeneration"
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor or page bounds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -3929,6 +4063,14 @@
             "type": "string"
           }
         }
+      },
+      "EvidenceOrder": {
+        "type": "string",
+        "description": "Which way a cursor-addressed evidence listing walks the change clock.\n\nAn operator reads `Newest` first. A collector archiving every row walks\n`Oldest` from its last position, so rows appended or changed while it was\naway arrive ahead of it rather than behind it.",
+        "enum": [
+          "newest",
+          "oldest"
+        ]
       },
       "ExecutionCertainty": {
         "type": "string",

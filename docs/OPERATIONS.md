@@ -85,6 +85,37 @@ fleetd inbox resolve --block BLOCK_ID --resolution abandon \
 Settlement is idempotent for an identical retry. A changed or stale lease and
 a conflicting second operator decision fail closed.
 
+## Archiving evidence
+
+The two evidence listings are cursor-addressed, so an external collector can
+copy every row into its own store without polling-and-diffing and without
+losing rows that scroll past a bounded page:
+
+```sh
+curl -sH "Authorization: Bearer $TOKEN" \
+  "$FLEETD/v1/invocation-observations?order=oldest&settled=true&limit=500"
+```
+
+Each listing is ordered by the clock that every durable change to a row
+advances -- `last_heartbeat_at_ms` for a plugin generation, `updated_at_ms`
+for an invocation observation. A collector resumes by passing the last row it
+received back as `after_ms` and `after_id`. Both halves are required: a
+millisecond alone cannot address a boundary between two rows that share it,
+and a half cursor is rejected rather than read as "start from the beginning".
+
+`settled=true` reports only rows that can never change again -- a stopped
+generation, a terminal invocation. Their clocks are frozen, so a settled row
+archived once is archived correctly and forever. Rows still in flight keep
+moving and reappear ahead of the cursor each time their evidence changes,
+which is why a collector that wants immutable records asks for settled ones
+and a collector that wants current state does not.
+
+`order=newest` is the default and is what an operator reads. Cursor, order,
+and `settled` are the whole mechanism: Fleetd does not push evidence anywhere,
+does not know what a collector does with it, and holds no retention policy of
+its own. Deleting archived evidence from the control database is not yet
+supported; rows accumulate until one exists.
+
 ## Backup
 
 The default Fleetd directory contains both durable state and operator

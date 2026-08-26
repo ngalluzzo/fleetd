@@ -41,6 +41,11 @@ backward-compatible operations or optional fields increment the OpenAPI info
 minor version. A required-field change, removal, semantic reinterpretation, or
 incompatible response change requires a new major contract and URL prefix.
 
+Cursor-addressed listings stay plain arrays. A page wrapper would be an
+incompatible response change under the rule above, and every evidence row
+already carries both halves of its own cursor, so the position a caller
+resumes from is read off the last row rather than returned beside it.
+
 The daemon accepts and emits the shapes in the contract; it does not negotiate
 different minor versions per request. Consumers should preserve unknown
 message `kind`, `payload`, and envelope data when proxying durable events.
