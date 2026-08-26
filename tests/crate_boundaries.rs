@@ -159,15 +159,34 @@ fn http_route_domains_do_not_import_each_other() {
 fn http_composition_registers_every_route_domain() {
     let composition = fs::read_to_string(workspace_root().join("src/http/mod.rs"))
         .expect("http composition module");
+    // One list declares the modules and builds the contract, so a domain cannot
+    // be declared without being reachable. What is left to check is that the
+    // list and this inventory still describe the same set.
+    let start = composition
+        .find("route_domains!(")
+        .expect("http composition declares its route domains with `route_domains!`");
+    let list = &composition[start + "route_domains!(".len()..];
+    let list = &list[..list
+        .find(");")
+        .expect("`route_domains!` list is terminated")];
+    let declared: Vec<&str> = list
+        .split(',')
+        .map(str::trim)
+        .filter(|domain| !domain.is_empty())
+        .collect();
+
     for domain in HTTP_ROUTE_DOMAINS {
         assert!(
-            composition.contains(&format!("mod {domain};")),
-            "http composition does not declare `{domain}`"
+            declared.contains(&domain),
+            "http route domain `{domain}` is missing from `route_domains!`, so it is neither \
+             declared nor merged and its routes are unreachable"
         );
+    }
+    for domain in &declared {
         assert!(
-            composition.contains(&format!("{domain}::routes()")),
-            "http route domain `{domain}` is declared but never merged into a contract, so its \
-             routes are unreachable"
+            HTTP_ROUTE_DOMAINS.contains(domain),
+            "`route_domains!` lists `{domain}`, which is not in HTTP_ROUTE_DOMAINS. Adding a \
+             route domain means naming it in both, so the declared layers stay honest."
         );
     }
 }

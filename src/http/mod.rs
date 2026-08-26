@@ -27,19 +27,40 @@ use crate::{
 
 use error::ApiError;
 
-// Route domains: one per resource family, each declaring its own routes.
-mod agents;
-mod channels;
-mod deliveries;
-mod invocations;
-mod messages;
-mod meta;
-mod operations;
-mod streams;
+/// Declares the authenticated route domains, once.
+///
+/// A domain has to be both declared as a module and merged into the contract,
+/// and keeping those in two lists is exactly how a domain ends up declared but
+/// unreachable. This expands one list into both, so adding a domain is a
+/// one-line change and the two can never disagree.
+///
+/// The order is significant: it fixes the order operations are registered in,
+/// and therefore the order they appear in the generated document. Append rather
+/// than insert, or the contract churns for every reader.
+macro_rules! route_domains {
+    ($($domain:ident),+ $(,)?) => {
+        $(mod $domain;)+
+
+        fn protected_contract() -> OpenApiRouter<AppState> {
+            OpenApiRouter::default()$(.merge($domain::routes()))+
+        }
+    };
+}
+
+route_domains!(
+    agents,
+    channels,
+    messages,
+    streams,
+    deliveries,
+    invocations,
+    operations,
+);
 
 // Shared by those domains.
 pub mod error;
 mod guard;
+mod meta;
 
 // Transport beneath the routes.
 pub mod browser_stream_edge;
@@ -64,18 +85,7 @@ const BEARER_AUTH: &str = "bearerAuth";
         (name = "invocations", description = "Crash-safe managed invocation fencing"),
         (name = "operations", description = "Operator-visible worker and harness evidence")
     ),
-    modifiers(&SecurityAddon),
-    components(schemas(
-        crate::http::browser_stream_edge::BrowserStreamCursor,
-        crate::http::browser_stream_edge::BrowserStreamGrant,
-        crate::http::browser_stream_edge::BrowserStreamGrantIssueRequest,
-        crate::http::browser_stream_edge::BrowserStreamGrantIssueResponse,
-        crate::http::browser_stream_edge::BrowserStreamPath,
-        crate::http::browser_stream_edge::BrowserStreamProtocol,
-        crate::http::browser_stream_edge::BrowserStreamRedemptionMessageType,
-        crate::http::browser_stream_edge::BrowserStreamRedemptionRequest,
-        crate::http::browser_stream_edge::BrowserStreamServerFrame
-    ))
+    modifiers(&SecurityAddon)
 )]
 struct ApiDoc;
 
@@ -207,20 +217,8 @@ fn public_contract() -> OpenApiRouter<AppState> {
 }
 
 fn browser_contract() -> OpenApiRouter<AppState> {
-    streams::browser_routes()
-}
-
-// Merge order fixes the order operations are registered in, and therefore the
-// order they appear in the generated document. Keep domains in this sequence.
-fn protected_contract() -> OpenApiRouter<AppState> {
-    OpenApiRouter::default()
-        .merge(agents::routes())
-        .merge(channels::routes())
-        .merge(messages::routes())
-        .merge(streams::routes())
-        .merge(deliveries::routes())
-        .merge(invocations::routes())
-        .merge(operations::routes())
+    OpenApiRouter::with_openapi(browser_stream_edge::Schemas::openapi())
+        .merge(streams::browser_routes())
 }
 
 async fn authenticate(

@@ -73,16 +73,38 @@ The first ten migrations keep their ordinals. Renaming an applied migration
 changes the version its checksum is recorded under, and every existing database
 would reject it.
 
+## A route domain is named once
+
+`src/http/mod.rs` composes the contract and owns nothing else. Adding an
+authenticated domain is one line:
+
+    route_domains!(agents, channels, messages, streams, deliveries, ...)
+
+That list expands to both the module declarations and the merge chain, so a
+domain cannot be declared without being reachable — which used to be two lists
+that could disagree. Its order still fixes the order operations appear in the
+generated document, so append rather than insert.
+
+Schemas that no route body mentions are declared beside the types instead. The
+browser edge speaks WebSocket frames, so its nine types are registered by
+`browser_stream_edge::Schemas` rather than by a list in the composition module.
+
+The `tags(...)` list stays where it is. Tags are how the document groups
+operations, not a property of a domain: `channels`, `messages`, and `streams`
+all publish under the `channels` tag, and neither `messages` nor `streams` added
+a tag when they arrived. A genuinely new resource family adds one line here; a
+new domain usually adds none.
+
 ## Known chokepoints
 
-Ranked by what they cost a fleet. The first three are addressed above.
+Ranked by what they cost a fleet. All but the last two are addressed above.
 
 | Chokepoint | Status |
 | --- | --- |
 | Derived artifacts (~15k lines) | unmergeable + `bin/regenerate` |
 | `store.rs` holding five concepts | split per concept |
 | Migration ordinals | timestamp naming, enforced by test |
-| `src/http/mod.rs` | **open** — a new domain edits four lists: `mod`, the tag, `components`, and the merge order |
+| `src/http/mod.rs` | one `route_domains!` list; schemas moved to their owner |
 | `tests/browser_stream.rs`, `tests/auth_api.rs` | **open** — large, cross-domain; this is where conflicts actually landed |
 | `docs/**` | **open** — 78% co-change, mostly shared documents rather than per-domain ones |
 

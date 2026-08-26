@@ -16,7 +16,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize, de};
 use thiserror::Error;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use utoipa::ToSchema;
+use utoipa::{OpenApi, ToSchema};
 
 use crate::model::Message;
 
@@ -36,6 +36,26 @@ pub const CREDENTIAL_REVALIDATION_INTERVAL: Duration = Duration::from_secs(30);
 pub const APPLICATION_FRAME_SEND_DEADLINE: Duration = Duration::from_secs(10);
 
 const STREAM_GRANT_ENCODED_ENTROPY_BYTES: usize = 43;
+
+/// The schemas the browser edge contributes to the contract.
+///
+/// The edge speaks WebSocket frames rather than request bodies, so no route
+/// signature mentions these types and nothing registers them implicitly. They
+/// are declared here, beside the types themselves, rather than in the module
+/// that composes the contract.
+#[derive(OpenApi)]
+#[openapi(components(schemas(
+    BrowserStreamCursor,
+    BrowserStreamGrant,
+    BrowserStreamGrantIssueRequest,
+    BrowserStreamGrantIssueResponse,
+    BrowserStreamPath,
+    BrowserStreamProtocol,
+    BrowserStreamRedemptionMessageType,
+    BrowserStreamRedemptionRequest,
+    BrowserStreamServerFrame
+)))]
+pub(super) struct Schemas;
 
 /// Exact browser stream protocol negotiated during upgrade and bound into a
 /// grant. Representing the constant as a closed enum makes alternate values

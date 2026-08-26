@@ -24,6 +24,10 @@ working at once.
 - Put every new module in the layer that owns it: `src/execution` for what
   happens to durable state, `src/http` for how it is exposed. Nothing new
   belongs at the root of `src/`.
+- Name a new HTTP route domain in `route_domains!` and nowhere else, appending
+  rather than inserting: the list fixes the order operations appear in the
+  generated contract. Declare a schema no route body mentions beside the type,
+  not in the composition module.
 - Never hand-merge a generated artifact. The contract, the generated client, and
   the served bundle are marked unmergeable; take either side and run
   `bin/regenerate`, which rebuilds them in the order they depend on each other.
