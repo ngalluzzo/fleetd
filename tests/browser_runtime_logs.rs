@@ -341,8 +341,36 @@ async fn wait_for_ready_address(
     .expect("production daemon readiness timeout")
 }
 
+/// Removes ANSI escape sequences from captured runtime output.
+///
+/// The daemon's subscriber colorizes unconditionally, so the ready line arrives
+/// as `\e[3mlisten\e[0m\e[2m=\e[0m127.0.0.1:0`. Parsing the decorated stream
+/// keeps this qualification on the exact production log configuration instead of
+/// forcing the daemon into a test-only rendering mode.
+fn strip_ansi(output: &str) -> String {
+    let mut plain = String::with_capacity(output.len());
+    let mut characters = output.chars();
+    while let Some(character) = characters.next() {
+        if character != '\u{1b}' {
+            plain.push(character);
+            continue;
+        }
+        if characters.next() != Some('[') {
+            continue;
+        }
+        // A CSI sequence ends at its first final byte in 0x40..=0x7e.
+        for parameter in characters.by_ref() {
+            if matches!(parameter, '\u{40}'..='\u{7e}') {
+                break;
+            }
+        }
+    }
+    plain
+}
+
 fn parse_ready_address(output: &[u8]) -> Option<SocketAddr> {
     let output = std::str::from_utf8(output).ok()?;
+    let output = strip_ansi(output);
     output.lines().find_map(|line| {
         line.contains("fleetd ready")
             .then(|| {

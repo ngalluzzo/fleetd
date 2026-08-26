@@ -4,13 +4,28 @@ Keep the messaging kernel independent of harnesses and workflow domains. Add new
 semantics as versioned message contracts or adapters, not fields interpreted by
 the core transport.
 
-Before submitting a change, run:
+Before submitting a change, run the Rust checks:
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
 ```
+
+Those commands do not cover the TypeScript client or the presentation hosts, so
+run their suites too when a change touches `clients/` or `apps/`:
+
+```sh
+(cd clients/typescript && npm ci && npm test && npm run typecheck)
+(cd apps/conversation-web && bun test && npm run typecheck)
+(cd apps/conversation-desktop && npm ci && bun test && npm run typecheck)
+```
+
+`apps/conversation-web` has no dependencies of its own and type-checks with the
+client package's `tsc`, so install `clients/typescript` before it.
+
+`.github/workflows/ci.yml` runs exactly these commands on every pull request.
+A change is not complete until that workflow is green.
 
 Each behavioral change should include a test at the narrowest stable boundary.
 Changes to delivery behavior must cover concurrency and restart or expiry where

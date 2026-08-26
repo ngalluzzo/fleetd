@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One in-flight run per ref. A superseded pull request push stops burning
+# runners; pushes to main always finish so the branch has a complete record.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: nothing here writes to the repository.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Record toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # The three commands CONTRIBUTING.md asks every contributor to run.
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --all-targets --all-features
+
+  javascript:
+    name: javascript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          # clients/typescript declares engines.node >=22.13.0.
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: clients/typescript/package-lock.json
+
+      # Bun is required: apps/* run `bun test`, and the client's own test script
+      # runs one suite under bun and two under node --experimental-strip-types.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install client dependencies
+        working-directory: clients/typescript
+        run: npm ci
+
+      - name: Client tests
+        working-directory: clients/typescript
+        run: npm test
+
+      - name: Client typecheck
+        working-directory: clients/typescript
+        run: npm run typecheck
+
+      - name: Conversation web tests
+        working-directory: apps/conversation-web
+        run: bun test
+
+      # apps/conversation-web has no node_modules of its own; its typecheck
+      # script invokes tsc out of clients/typescript/node_modules. The client
+      # install above is therefore a prerequisite, not a coincidence of order.
+      # Unifying the JavaScript workspace removes this coupling.
+      - name: Conversation web typecheck
+        working-directory: apps/conversation-web
+        run: npm run typecheck
+
+  desktop:
+    name: desktop
+    # macOS is the desktop target, and `electrobun prepare` fetches a
+    # platform-specific devkit that has only been exercised there.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/conversation-desktop/package-lock.json
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+
+      - name: Install desktop dependencies
+        working-directory: apps/conversation-desktop
+        run: npm ci
+
+      - name: Desktop tests
+        working-directory: apps/conversation-desktop
+        run: bun test
+
+      - name: Desktop typecheck
+        working-directory: apps/conversation-desktop
+        run: npm run typecheck
