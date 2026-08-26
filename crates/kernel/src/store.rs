@@ -1131,15 +1131,12 @@ fn conversation_summary_from_row(
 }
 
 fn channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Channel, FleetError> {
-    let kind = match row.try_get::<String, _>("conversation_kind")?.as_str() {
-        "shared" => ConversationKind::Shared,
-        "direct" => ConversationKind::Direct,
-        value => {
-            return Err(FleetError::Invalid(format!(
-                "stored channel has unknown conversation kind: {value}"
-            )));
-        }
-    };
+    let stored_kind: String = row.try_get("conversation_kind")?;
+    let kind = ConversationKind::parse(&stored_kind).ok_or_else(|| {
+        FleetError::Invalid(format!(
+            "stored channel has unknown conversation kind: {stored_kind}"
+        ))
+    })?;
     Ok(Channel {
         id: row.try_get("id")?,
         name: row.try_get("name")?,
@@ -1151,15 +1148,12 @@ fn channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Channel, FleetError
 }
 
 fn channel_member_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<ChannelMember, FleetError> {
-    let delivery_mode = match row.try_get::<String, _>("delivery_mode")?.as_str() {
-        "inbox" => MembershipDeliveryMode::Inbox,
-        "stream_only" => MembershipDeliveryMode::StreamOnly,
-        value => {
-            return Err(FleetError::Invalid(format!(
-                "stored channel membership has unknown delivery mode: {value}"
-            )));
-        }
-    };
+    let stored_mode: String = row.try_get("delivery_mode")?;
+    let delivery_mode = MembershipDeliveryMode::parse(&stored_mode).ok_or_else(|| {
+        FleetError::Invalid(format!(
+            "stored channel membership has unknown delivery mode: {stored_mode}"
+        ))
+    })?;
     Ok(ChannelMember {
         channel_id: row.try_get("channel_id")?,
         agent_id: row.try_get("agent_id")?,

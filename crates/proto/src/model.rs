@@ -60,13 +60,34 @@ pub enum ConversationKind {
 }
 
 impl ConversationKind {
+    /// Every variant, so `parse` can invert `as_str` without a second table.
+    ///
+    /// A new variant has to appear here to survive a storage round trip; the
+    /// tests at the end of this module fail while it is missing.
+    pub const ALL: [Self; 2] = [Self::Shared, Self::Direct];
+
     /// Returns the exact stored representation of this variant.
+    ///
+    /// `Serialize` produces the same spelling, and a test pins the two
+    /// together: a durable row and a wire frame carry one vocabulary, not two.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Shared => "shared",
             Self::Direct => "direct",
         }
+    }
+
+    /// Reads back the representation `as_str` produced.
+    ///
+    /// Returns `None` for anything else, leaving the caller to say what an
+    /// unreadable stored value means to it.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.as_str() == value)
     }
 }
 
@@ -106,13 +127,34 @@ pub enum MembershipDeliveryMode {
 }
 
 impl MembershipDeliveryMode {
+    /// Every variant, so `parse` can invert `as_str` without a second table.
+    ///
+    /// A new variant has to appear here to survive a storage round trip; the
+    /// tests at the end of this module fail while it is missing.
+    pub const ALL: [Self; 2] = [Self::Inbox, Self::StreamOnly];
+
     /// Returns the exact stored representation of this variant.
+    ///
+    /// `Serialize` produces the same spelling, and a test pins the two
+    /// together: a durable row and a wire frame carry one vocabulary, not two.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Inbox => "inbox",
             Self::StreamOnly => "stream_only",
         }
+    }
+
+    /// Reads back the representation `as_str` produced.
+    ///
+    /// Returns `None` for anything else, leaving the caller to say what an
+    /// unreadable stored value means to it.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.as_str() == value)
     }
 }
 
@@ -440,7 +482,7 @@ const fn default_lease_duration_ms() -> u64 {
 mod tests {
     use serde_json::Value;
 
-    use super::ExecutionCertainty;
+    use super::{ConversationKind, ExecutionCertainty, MembershipDeliveryMode};
 
     #[test]
     fn stored_spelling_matches_the_wire_spelling() {
@@ -453,6 +495,25 @@ mod tests {
             );
             assert_eq!(ExecutionCertainty::parse(variant.as_str()), Some(variant));
         }
+        for variant in ConversationKind::ALL {
+            assert_eq!(
+                serde_json::to_value(variant).expect("serialize kind"),
+                Value::String(variant.as_str().to_owned()),
+                "the stored and wire spellings of {variant:?} diverged",
+            );
+            assert_eq!(ConversationKind::parse(variant.as_str()), Some(variant));
+        }
+        for variant in MembershipDeliveryMode::ALL {
+            assert_eq!(
+                serde_json::to_value(variant).expect("serialize delivery mode"),
+                Value::String(variant.as_str().to_owned()),
+                "the stored and wire spellings of {variant:?} diverged",
+            );
+            assert_eq!(
+                MembershipDeliveryMode::parse(variant.as_str()),
+                Some(variant)
+            );
+        }
     }
 
     #[test]
@@ -460,6 +521,10 @@ mod tests {
         assert_eq!(ExecutionCertainty::parse("outcome_maybe"), None);
         assert_eq!(ExecutionCertainty::parse("NotStarted"), None);
         assert_eq!(ExecutionCertainty::parse(""), None);
+        assert_eq!(ConversationKind::parse("Shared"), None);
+        assert_eq!(ConversationKind::parse("group"), None);
+        assert_eq!(MembershipDeliveryMode::parse("streamonly"), None);
+        assert_eq!(MembershipDeliveryMode::parse("Inbox"), None);
     }
 
     #[test]
@@ -474,5 +539,17 @@ mod tests {
             }
         }
         assert_eq!(ExecutionCertainty::ALL.len(), 3);
+        for variant in ConversationKind::ALL {
+            match variant {
+                ConversationKind::Shared | ConversationKind::Direct => {}
+            }
+        }
+        assert_eq!(ConversationKind::ALL.len(), 2);
+        for variant in MembershipDeliveryMode::ALL {
+            match variant {
+                MembershipDeliveryMode::Inbox | MembershipDeliveryMode::StreamOnly => {}
+            }
+        }
+        assert_eq!(MembershipDeliveryMode::ALL.len(), 2);
     }
 }
