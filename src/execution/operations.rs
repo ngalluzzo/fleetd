@@ -165,8 +165,8 @@ pub async fn stop_plugin_generation(
     stop: StopPluginGeneration,
 ) -> Result<PluginGeneration, FleetError> {
     validate_reason(&stop.reason)?;
-    let disposition = disposition_str(stop.disposition);
-    let shutdown = shutdown_str(stop.shutdown_outcome);
+    let disposition = stop.disposition.as_str();
+    let shutdown = stop.shutdown_outcome.as_str();
     let now = now_ms();
     let result = sqlx::query(
         r"
@@ -667,13 +667,19 @@ fn generation_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<PluginGeneration
         stop_disposition: row
             .try_get::<Option<String>, _>("stop_disposition")?
             .as_deref()
-            .map(parse_disposition)
+            .map(|value| {
+                PluginGenerationDisposition::parse(value)
+                    .ok_or_else(|| invalid_stored("plugin generation disposition", value))
+            })
             .transpose()?,
         stop_reason: row.try_get("stop_reason")?,
         shutdown_outcome: row
             .try_get::<Option<String>, _>("shutdown_outcome")?
             .as_deref()
-            .map(parse_shutdown)
+            .map(|value| {
+                PluginShutdownOutcome::parse(value)
+                    .ok_or_else(|| invalid_stored("plugin shutdown outcome", value))
+            })
             .transpose()?,
         shutdown_exit_code: row.try_get("shutdown_exit_code")?,
     })
@@ -846,40 +852,6 @@ fn generation_health(
         PluginGenerationHealth::Stale
     } else {
         PluginGenerationHealth::Active
-    }
-}
-
-fn disposition_str(value: PluginGenerationDisposition) -> &'static str {
-    match value {
-        PluginGenerationDisposition::Stopped => "stopped",
-        PluginGenerationDisposition::Restart => "restart",
-        PluginGenerationDisposition::Fatal => "fatal",
-    }
-}
-
-fn parse_disposition(value: &str) -> Result<PluginGenerationDisposition, FleetError> {
-    match value {
-        "stopped" => Ok(PluginGenerationDisposition::Stopped),
-        "restart" => Ok(PluginGenerationDisposition::Restart),
-        "fatal" => Ok(PluginGenerationDisposition::Fatal),
-        _ => Err(invalid_stored("plugin generation disposition", value)),
-    }
-}
-
-fn shutdown_str(value: PluginShutdownOutcome) -> &'static str {
-    match value {
-        PluginShutdownOutcome::Graceful => "graceful",
-        PluginShutdownOutcome::Forced => "forced",
-        PluginShutdownOutcome::Failed => "failed",
-    }
-}
-
-fn parse_shutdown(value: &str) -> Result<PluginShutdownOutcome, FleetError> {
-    match value {
-        "graceful" => Ok(PluginShutdownOutcome::Graceful),
-        "forced" => Ok(PluginShutdownOutcome::Forced),
-        "failed" => Ok(PluginShutdownOutcome::Failed),
-        _ => Err(invalid_stored("plugin shutdown outcome", value)),
     }
 }
 

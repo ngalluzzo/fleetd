@@ -42,6 +42,39 @@ pub enum PluginGenerationDisposition {
     Fatal,
 }
 
+impl PluginGenerationDisposition {
+    /// Every variant, so `parse` can invert `as_str` without a second table.
+    ///
+    /// A new variant has to appear here to survive a storage round trip; the
+    /// tests at the end of this module fail while it is missing.
+    pub const ALL: [Self; 3] = [Self::Stopped, Self::Restart, Self::Fatal];
+
+    /// Returns the exact stored representation of this variant.
+    ///
+    /// `Serialize` produces the same spelling, and a test pins the two
+    /// together: a durable row and a wire frame carry one vocabulary, not two.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::Restart => "restart",
+            Self::Fatal => "fatal",
+        }
+    }
+
+    /// Reads back the representation `as_str` produced.
+    ///
+    /// Returns `None` for anything else, leaving the caller to say what an
+    /// unreadable stored value means to it.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.as_str() == value)
+    }
+}
+
 /// What Fleetd observed while terminating a plugin process group.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -49,6 +82,39 @@ pub enum PluginShutdownOutcome {
     Graceful,
     Forced,
     Failed,
+}
+
+impl PluginShutdownOutcome {
+    /// Every variant, so `parse` can invert `as_str` without a second table.
+    ///
+    /// A new variant has to appear here to survive a storage round trip; the
+    /// tests at the end of this module fail while it is missing.
+    pub const ALL: [Self; 3] = [Self::Graceful, Self::Forced, Self::Failed];
+
+    /// Returns the exact stored representation of this variant.
+    ///
+    /// `Serialize` produces the same spelling, and a test pins the two
+    /// together: a durable row and a wire frame carry one vocabulary, not two.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Graceful => "graceful",
+            Self::Forced => "forced",
+            Self::Failed => "failed",
+        }
+    }
+
+    /// Reads back the representation `as_str` produced.
+    ///
+    /// Returns `None` for anything else, leaving the caller to say what an
+    /// unreadable stored value means to it.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.as_str() == value)
+    }
 }
 
 /// Durable operator read model for one ready plugin generation.
@@ -129,4 +195,67 @@ pub struct InvocationObservation {
     pub session_quiescent: Option<bool>,
     pub session_persistence: Option<SessionPersistence>,
     pub usage: Option<Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::{PluginGenerationDisposition, PluginShutdownOutcome};
+
+    #[test]
+    fn stored_spelling_matches_the_wire_spelling() {
+        for variant in PluginGenerationDisposition::ALL {
+            assert_eq!(
+                serde_json::to_value(variant).expect("serialize disposition"),
+                Value::String(variant.as_str().to_owned()),
+                "the stored and wire spellings of {variant:?} diverged",
+            );
+            assert_eq!(
+                PluginGenerationDisposition::parse(variant.as_str()),
+                Some(variant)
+            );
+        }
+        for variant in PluginShutdownOutcome::ALL {
+            assert_eq!(
+                serde_json::to_value(variant).expect("serialize outcome"),
+                Value::String(variant.as_str().to_owned()),
+                "the stored and wire spellings of {variant:?} diverged",
+            );
+            assert_eq!(
+                PluginShutdownOutcome::parse(variant.as_str()),
+                Some(variant)
+            );
+        }
+    }
+
+    #[test]
+    fn unreadable_values_do_not_parse() {
+        assert_eq!(PluginGenerationDisposition::parse("Restart"), None);
+        assert_eq!(PluginGenerationDisposition::parse("graceful"), None);
+        assert_eq!(PluginShutdownOutcome::parse("Forced"), None);
+        assert_eq!(PluginShutdownOutcome::parse(""), None);
+    }
+
+    #[test]
+    fn all_lists_every_variant() {
+        // Adding a variant makes these matches non-exhaustive, and the counts
+        // below then fail until `ALL` learns about it too.
+        for variant in PluginGenerationDisposition::ALL {
+            match variant {
+                PluginGenerationDisposition::Stopped
+                | PluginGenerationDisposition::Restart
+                | PluginGenerationDisposition::Fatal => {}
+            }
+        }
+        for variant in PluginShutdownOutcome::ALL {
+            match variant {
+                PluginShutdownOutcome::Graceful
+                | PluginShutdownOutcome::Forced
+                | PluginShutdownOutcome::Failed => {}
+            }
+        }
+        assert_eq!(PluginGenerationDisposition::ALL.len(), 3);
+        assert_eq!(PluginShutdownOutcome::ALL.len(), 3);
+    }
 }
