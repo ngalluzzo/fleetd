@@ -18,25 +18,34 @@ use utoipa_axum::router::OpenApiRouter;
 
 use crate::{
     auth::AuthService,
-    browser_stream_edge::BrowserStreamEdgeState,
     error::FleetError,
+    http::browser_stream_edge::BrowserStreamEdgeState,
+    http::stream_grant_broker::StreamGrantBroker,
     message_commit_hint::{MessageCommitHintBridge, MessageCommitWake},
     store::Store,
-    stream_grant_broker::StreamGrantBroker,
 };
 
 use error::ApiError;
 
+// Route domains: one per resource family, each declaring its own routes.
 mod agents;
 mod channels;
 mod deliveries;
-pub mod error;
-mod guard;
 mod invocations;
 mod messages;
 mod meta;
 mod operations;
 mod streams;
+
+// Shared by those domains.
+pub mod error;
+mod guard;
+
+// Transport beneath the routes.
+pub mod browser_stream_edge;
+mod channel_stream;
+mod stream_grant_broker;
+mod surface;
 
 const BEARER_AUTH: &str = "bearerAuth";
 
@@ -57,15 +66,15 @@ const BEARER_AUTH: &str = "bearerAuth";
     ),
     modifiers(&SecurityAddon),
     components(schemas(
-        crate::browser_stream_edge::BrowserStreamCursor,
-        crate::browser_stream_edge::BrowserStreamGrant,
-        crate::browser_stream_edge::BrowserStreamGrantIssueRequest,
-        crate::browser_stream_edge::BrowserStreamGrantIssueResponse,
-        crate::browser_stream_edge::BrowserStreamPath,
-        crate::browser_stream_edge::BrowserStreamProtocol,
-        crate::browser_stream_edge::BrowserStreamRedemptionMessageType,
-        crate::browser_stream_edge::BrowserStreamRedemptionRequest,
-        crate::browser_stream_edge::BrowserStreamServerFrame
+        crate::http::browser_stream_edge::BrowserStreamCursor,
+        crate::http::browser_stream_edge::BrowserStreamGrant,
+        crate::http::browser_stream_edge::BrowserStreamGrantIssueRequest,
+        crate::http::browser_stream_edge::BrowserStreamGrantIssueResponse,
+        crate::http::browser_stream_edge::BrowserStreamPath,
+        crate::http::browser_stream_edge::BrowserStreamProtocol,
+        crate::http::browser_stream_edge::BrowserStreamRedemptionMessageType,
+        crate::http::browser_stream_edge::BrowserStreamRedemptionRequest,
+        crate::http::browser_stream_edge::BrowserStreamServerFrame
     ))
 )]
 struct ApiDoc;
@@ -177,8 +186,8 @@ pub fn router(state: AppState) -> Router {
     let public: Router<AppState> = public_contract().into();
     let browser: Router<AppState> = browser_contract().into();
     public
-        .merge(crate::operator_surface::routes())
-        .merge(crate::conversation_surface::routes())
+        .merge(surface::operator::routes())
+        .merge(surface::conversation::routes())
         .merge(browser)
         .merge(protected)
         .with_state(state)

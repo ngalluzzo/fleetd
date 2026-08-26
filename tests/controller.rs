@@ -9,23 +9,25 @@ use std::{
     time::Duration,
 };
 
-use fleetd::invocation;
-use fleetd::operations;
-use fleetd::session_binding;
+use fleetd::execution::invocation;
+use fleetd::execution::operations;
+use fleetd::execution::session_binding;
 use fleetd::{
-    controller::{
+    execution::controller::{
         ManagedHarnessController, ManagedTurn, ManagedTurnGrant, ManagedTurnOutcome,
         TurnResultCapture,
+    },
+    execution::operations::NewPluginGeneration,
+    execution::session_binding::{
+        AcquireSessionBinding, SessionAcquisitionMode, SessionBindingState,
     },
     model::{
         ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, Invocation, InvocationState,
     },
-    operations::NewPluginGeneration,
     plugin::{
         OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock, SessionPersistence,
         ToolBudget, TurnPolicy, harness_acp_interface,
     },
-    session_binding::{AcquireSessionBinding, SessionAcquisitionMode, SessionBindingState},
     store::Store,
 };
 use futures_util::future::BoxFuture;

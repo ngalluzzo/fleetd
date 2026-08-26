@@ -127,33 +127,23 @@ fn inspect(path: &Path, checked: &mut usize) {
 /// A handler module may reach composition (`super::AppState`) and the shared
 /// guards. Reaching a sibling means two domains now change together, which is
 /// the coupling splitting the router was meant to remove.
-const API_DOMAINS: [&str; 7] = [
-    "agents",
-    "channels",
-    "deliveries",
-    "invocations",
-    "messages",
-    "operations",
-    "streams",
-];
-
 #[test]
-fn api_domains_do_not_import_each_other() {
-    let directory = workspace_root().join("src/api");
-    for domain in API_DOMAINS {
+fn http_route_domains_do_not_import_each_other() {
+    let directory = workspace_root().join("src/http");
+    for domain in HTTP_ROUTE_DOMAINS {
         let source = fs::read_to_string(directory.join(format!("{domain}.rs")))
-            .unwrap_or_else(|_| panic!("api domain module {domain}"));
-        for sibling in API_DOMAINS {
+            .unwrap_or_else(|_| panic!("http route domain module {domain}"));
+        for sibling in HTTP_ROUTE_DOMAINS {
             if sibling == domain {
                 continue;
             }
             for reference in [
                 format!("super::{sibling}"),
-                format!("crate::api::{sibling}"),
+                format!("crate::http::{sibling}"),
             ] {
                 assert!(
                     !source.contains(&reference),
-                    "api domain `{domain}` reaches sibling `{sibling}`. Domains share \
+                    "http route domain `{domain}` reaches sibling `{sibling}`. Domains share \
                      composition and `guard`, not each other; duplicate the small thing or \
                      lift it into `guard`."
                 );
@@ -163,17 +153,17 @@ fn api_domains_do_not_import_each_other() {
 }
 
 #[test]
-fn api_composition_module_registers_every_domain() {
-    let composition = fs::read_to_string(workspace_root().join("src/api/mod.rs"))
-        .expect("api composition module");
-    for domain in API_DOMAINS {
+fn http_composition_registers_every_route_domain() {
+    let composition = fs::read_to_string(workspace_root().join("src/http/mod.rs"))
+        .expect("http composition module");
+    for domain in HTTP_ROUTE_DOMAINS {
         assert!(
             composition.contains(&format!("mod {domain};")),
-            "api composition does not declare `{domain}`"
+            "http composition does not declare `{domain}`"
         );
         assert!(
             composition.contains(&format!("{domain}::routes()")),
-            "api domain `{domain}` is declared but never merged into a contract, so its \
+            "http route domain `{domain}` is declared but never merged into a contract, so its \
              routes are unreachable"
         );
     }
@@ -227,18 +217,53 @@ fn crate_root_re_exports_modules_only() {
 /// The six concepts ARCHITECTURE.md gives the kernel, as modules.
 const KERNEL_MODULES: [&str; 5] = ["auth", "delivery", "error", "message_commit_hint", "store"];
 
-/// Everything layered above the kernel.
-const ABOVE_KERNEL: [&str; 9] = [
-    "api",
+/// The layer that decides what happens to durable state.
+const EXECUTION_MODULES: [&str; 7] = [
     "controller",
     "invocation",
     "message_grant_broker",
     "operations",
     "session_binding",
     "settlement",
-    "stream_grant_broker",
     "worker",
 ];
+
+/// The layer that exposes it. Route domains own handlers; the rest is
+/// composition, shared guards, and the transport beneath them.
+const HTTP_ROUTE_DOMAINS: [&str; 7] = [
+    "agents",
+    "channels",
+    "deliveries",
+    "invocations",
+    "messages",
+    "operations",
+    "streams",
+];
+
+const HTTP_SUPPORT: [&str; 7] = [
+    "browser_stream_edge",
+    "channel_stream",
+    "error",
+    "guard",
+    "meta",
+    "stream_grant_broker",
+    "surface",
+];
+
+/// Every module above the kernel, by path within `src/`.
+fn above_kernel() -> Vec<String> {
+    EXECUTION_MODULES
+        .iter()
+        .map(|module| format!("execution/{module}"))
+        .chain(
+            HTTP_ROUTE_DOMAINS
+                .iter()
+                .chain(HTTP_SUPPORT.iter())
+                .map(|module| format!("http/{module}")),
+        )
+        .chain(["http/mod".to_owned()])
+        .collect()
+}
 
 /// Whether a source file names another crate module, written either inline as
 /// `crate::other::Item` or as an entry inside a grouped `use crate::{ .. };`.
@@ -264,7 +289,7 @@ fn the_kernel_does_not_depend_on_what_is_layered_above_it() {
         let path = workspace_root().join(format!("crates/kernel/src/{module}.rs"));
         let source = fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("kernel module {module} at {}", path.display()));
-        for above in ABOVE_KERNEL {
+        for above in EXECUTION_MODULES.iter().chain(["http"].iter()) {
             assert!(
                 !references(&source, above),
                 "kernel module `{module}` reaches `{above}`, which is layered above it. \
@@ -287,11 +312,10 @@ fn only_the_kernel_writes_kernel_tables() {
         "delivery_blocks",
         "messages",
     ];
-    for module in ABOVE_KERNEL {
+    for module in above_kernel() {
         let path = workspace_root().join(format!("src/{module}.rs"));
-        let Ok(source) = fs::read_to_string(&path) else {
-            continue;
-        };
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("module {module} at {}", path.display()));
         for table in KERNEL_TABLES {
             for verb in ["INSERT INTO", "UPDATE", "DELETE FROM"] {
                 assert!(
@@ -307,11 +331,10 @@ fn only_the_kernel_writes_kernel_tables() {
 
 #[test]
 fn only_the_kernel_adds_methods_to_the_store() {
-    for module in ABOVE_KERNEL {
+    for module in above_kernel() {
         let path = workspace_root().join(format!("src/{module}.rs"));
-        let Ok(source) = fs::read_to_string(&path) else {
-            continue;
-        };
+        let source = fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("module {module} at {}", path.display()));
         assert!(
             !source.contains("impl Store"),
             "`{module}` adds methods to `Store`, which the kernel owns. Once these layers \
@@ -418,6 +441,87 @@ fn inspect_imports(path: &Path, package: &str) {
              other package by name so its `exports` map stays the contract.",
             path.display(),
             trimmed
+        );
+    }
+}
+
+/// Files at the root of `src/` that are not part of a layer.
+///
+/// The library root, the binary, and its command line. Everything else belongs
+/// to a layer directory, so the tree reads as the architecture.
+const UNLAYERED_ROOT_FILES: [&str; 3] = ["lib.rs", "main.rs", "cli.rs"];
+
+fn rust_module_names(directory: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(directory)
+        .unwrap_or_else(|_| panic!("layer directory {}", directory.display()))
+        .filter_map(|entry| {
+            let path = entry.expect("layer entry is readable").path();
+            let is_rust = path.extension().is_some_and(|extension| extension == "rs");
+            let stem = path.file_stem()?.to_str()?.to_owned();
+            (is_rust && stem != "mod").then_some(stem)
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn the_source_tree_matches_the_declared_layers() {
+    let source = workspace_root().join("src");
+
+    // Nothing sits outside a layer.
+    let mut stray: Vec<String> = fs::read_dir(&source)
+        .expect("src is readable")
+        .filter_map(|entry| {
+            let path = entry.expect("src entry is readable").path();
+            if path.is_dir() {
+                return None;
+            }
+            let name = path.file_name()?.to_str()?.to_owned();
+            (!UNLAYERED_ROOT_FILES.contains(&name.as_str())).then_some(name)
+        })
+        .collect();
+    stray.sort();
+    assert!(
+        stray.is_empty(),
+        "these modules sit at the root of src/ rather than in a layer: {stray:?}. Put each \
+         one in `execution` or `http` so the tree keeps showing what depends on what."
+    );
+
+    let mut expected_execution: Vec<String> =
+        EXECUTION_MODULES.iter().map(|m| (*m).to_owned()).collect();
+    expected_execution.sort();
+    assert_eq!(
+        rust_module_names(&source.join("execution")),
+        expected_execution,
+        "src/execution does not match EXECUTION_MODULES. A module was added or removed \
+         without saying which layer owns it."
+    );
+
+    let mut expected_http: Vec<String> = HTTP_ROUTE_DOMAINS
+        .iter()
+        .chain(HTTP_SUPPORT.iter())
+        .map(|m| (*m).to_owned())
+        .collect();
+    expected_http.sort();
+    assert_eq!(
+        rust_module_names(&source.join("http")),
+        expected_http,
+        "src/http does not match its declared modules. A route domain belongs in \
+         HTTP_ROUTE_DOMAINS and must be merged into a contract; anything else is support."
+    );
+}
+
+#[test]
+fn execution_does_not_depend_on_the_layer_that_exposes_it() {
+    for module in EXECUTION_MODULES {
+        let path = workspace_root().join(format!("src/execution/{module}.rs"));
+        let source =
+            fs::read_to_string(&path).unwrap_or_else(|_| panic!("execution module {module}"));
+        assert!(
+            !references(&source, "http"),
+            "execution module `{module}` reaches the HTTP layer. Deciding what happens to \
+             durable state must not depend on how it is exposed."
         );
     }
 }

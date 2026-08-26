@@ -9,12 +9,12 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::browser_stream_edge::{
+use crate::http::browser_stream_edge::{
     MAX_ACTIVE_BROWSER_STREAMS_PER_CREDENTIAL, MAX_ACTIVE_BROWSER_STREAMS_PER_DAEMON,
     MAX_UNUSED_GRANTS_PER_CREDENTIAL, MAX_UNUSED_GRANTS_PER_DAEMON, STREAM_GRANT_ENTROPY_BYTES,
     STREAM_GRANT_PREFIX, STREAM_GRANT_REDEMPTION_LIFETIME,
 };
-use crate::{auth::AuthService, channel_stream::AuthorizedChannelStream, error::FleetError};
+use crate::{auth::AuthService, error::FleetError, http::channel_stream::AuthorizedChannelStream};
 
 const STREAM_GRANT_ENCODED_LENGTH: usize = 43;
 const MAX_PROTOCOL_LENGTH: usize = 128;

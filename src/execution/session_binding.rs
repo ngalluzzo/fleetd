@@ -12,9 +12,9 @@ pub use fleetd_proto::session::{
 
 use crate::{
     error::FleetError,
-    invocation::{arm_invocation_transaction, complete_invocation_transaction},
+    execution::invocation::{arm_invocation_transaction, complete_invocation_transaction},
+    execution::operations::begin_invocation_observation,
     model::{ArmInvocation, CompleteInvocation, Invocation, InvocationCompletion},
-    operations::begin_invocation_observation,
     plugin::{Binding, SessionPersistence},
     store::{Store, now_ms},
 };

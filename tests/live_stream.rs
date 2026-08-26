@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use fleetd::{
-    api::{AppState, router},
     auth::AuthService,
+    http::{AppState, router},
     model::{
         AckDelivery, ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
         Message, SendMessage,

@@ -8,14 +8,14 @@ use tokio::{
 
 use crate::{
     auth::{AuthService, Principal},
-    browser_stream_edge::{
+    http::browser_stream_edge::{
         APPLICATION_FRAME_SEND_DEADLINE, BrowserStreamCursor, BrowserStreamServerFrame,
         CREDENTIAL_REVALIDATION_INTERVAL,
     },
+    http::stream_grant_broker::ActiveStreamSlot,
     message_commit_hint::MessageCommitWake,
     model::Message,
     store::Store,
-    stream_grant_broker::ActiveStreamSlot,
 };
 
 const REPLAY_PAGE_SIZE: u32 = 500;

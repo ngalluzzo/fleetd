@@ -1,12 +1,12 @@
-use fleetd::invocation;
-use fleetd::operations;
-use fleetd::session_binding;
-use fleetd::settlement;
+use fleetd::execution::invocation;
+use fleetd::execution::operations;
+use fleetd::execution::session_binding;
+use fleetd::execution::settlement;
 use fleetd::{
+    execution::session_binding::{AcquireSessionBinding, SessionBindingState},
     model::{
         ArmInvocation, BlockDelivery, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
     },
-    session_binding::{AcquireSessionBinding, SessionBindingState},
 };
 use serde_json::json;
 use sqlx::{Connection, sqlite::SqliteConnectOptions};

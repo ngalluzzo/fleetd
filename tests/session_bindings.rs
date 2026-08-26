@@ -1,20 +1,20 @@
-use fleetd::invocation;
-use fleetd::operations;
-use fleetd::session_binding;
-use fleetd::settlement;
+use fleetd::execution::invocation;
+use fleetd::execution::operations;
+use fleetd::execution::session_binding;
+use fleetd::execution::settlement;
 use fleetd::{
     error::FleetError,
+    execution::operations::NewPluginGeneration,
+    execution::session_binding::{
+        AcquireSessionBinding, SessionAcquisitionMode, SessionBinding, SessionBindingState,
+    },
     model::{
         ArmInvocation, BlockDelivery, ClaimDeliveries, CompleteInvocation, CreateAgent,
         CreateChannel, CreateMessage, Invocation, InvocationState,
     },
-    operations::NewPluginGeneration,
     plugin::{
         DescribeResult, DriverIdentity, HarnessLimits, PluginIdentity, RuntimeIdentity,
         SessionPersistence, harness_acp_interface,
-    },
-    session_binding::{
-        AcquireSessionBinding, SessionAcquisitionMode, SessionBinding, SessionBindingState,
     },
     store::Store,
 };

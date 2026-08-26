@@ -33,8 +33,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    controller::ManagedTurnGrant,
     error::FleetError,
+    execution::controller::ManagedTurnGrant,
     model::{CreateMessage, Invocation},
     plugin::{ResolvedMcpEndpoint, ResolvedMcpGrant, ResolvedMcpHttpHeader},
     store::Store,
@@ -399,7 +399,7 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::invocation;
+    use crate::execution::invocation;
     use std::collections::HashMap;
 
     use axum::http::{HeaderName, HeaderValue};

@@ -2,26 +2,26 @@
 
 use std::{path::PathBuf, time::Duration};
 
-use fleetd::invocation;
-use fleetd::operations;
-use fleetd::session_binding;
-use fleetd::settlement;
+use fleetd::execution::invocation;
+use fleetd::execution::operations;
+use fleetd::execution::session_binding;
+use fleetd::execution::settlement;
 use fleetd::{
+    execution::operations::{
+        PluginGenerationDisposition, PluginGenerationHealth, PluginGenerationState,
+        PluginShutdownOutcome,
+    },
+    execution::session_binding::SessionBindingState,
+    execution::worker::{
+        ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError,
+        EnvelopeTurnAdapter, InboundAcceptance, PreparedTurn, TurnAdapter,
+    },
     model::{
         ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, ExecutionCertainty,
         InvocationState,
     },
-    operations::{
-        PluginGenerationDisposition, PluginGenerationHealth, PluginGenerationState,
-        PluginShutdownOutcome,
-    },
     plugin::{PluginSpec, ToolBudget, TurnPolicy, harness_acp_interface},
-    session_binding::SessionBindingState,
     store::Store,
-    worker::{
-        ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError,
-        EnvelopeTurnAdapter, InboundAcceptance, PreparedTurn, TurnAdapter,
-    },
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -607,8 +607,8 @@ async fn worker_rejects_unknown_or_duplicate_mcp_grants_before_startup() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")),
     );
     config.mcp_grants = vec![
-        fleetd::message_grant_broker::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
-        fleetd::message_grant_broker::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
+        fleetd::execution::message_grant_broker::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
+        fleetd::execution::message_grant_broker::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
     ];
     let error = ContinuousHarnessWorker::new(&fixture.store, config, envelope_adapter())
         .err()

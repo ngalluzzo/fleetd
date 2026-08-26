@@ -36,7 +36,7 @@ pub(super) fn routes() -> OpenApiRouter<AppState> {
     security(("bearerAuth" = [])),
     params(AgentQuery),
     responses(
-        (status = 200, description = "Plugin generation evidence", body = [crate::operations::PluginGeneration]),
+        (status = 200, description = "Plugin generation evidence", body = [crate::execution::operations::PluginGeneration]),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
         (status = 500, description = "Internal failure", body = ErrorResponse)
@@ -46,10 +46,11 @@ async fn list_plugin_generations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<AgentQuery>,
-) -> Result<Json<Vec<crate::operations::PluginGeneration>>, ApiError> {
+) -> Result<Json<Vec<crate::execution::operations::PluginGeneration>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
-        crate::operations::list_plugin_generations(&state.store, query.agent.as_deref()).await?,
+        crate::execution::operations::list_plugin_generations(&state.store, query.agent.as_deref())
+            .await?,
     ))
 }
 
@@ -63,7 +64,7 @@ async fn list_plugin_generations(
     security(("bearerAuth" = [])),
     params(AgentQuery),
     responses(
-        (status = 200, description = "Bounded invocation observations", body = [crate::operations::InvocationObservation]),
+        (status = 200, description = "Bounded invocation observations", body = [crate::execution::operations::InvocationObservation]),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
         (status = 500, description = "Internal failure", body = ErrorResponse)
@@ -73,11 +74,14 @@ async fn list_invocation_observations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<AgentQuery>,
-) -> Result<Json<Vec<crate::operations::InvocationObservation>>, ApiError> {
+) -> Result<Json<Vec<crate::execution::operations::InvocationObservation>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
-        crate::operations::list_invocation_observations(&state.store, query.agent.as_deref())
-            .await?,
+        crate::execution::operations::list_invocation_observations(
+            &state.store,
+            query.agent.as_deref(),
+        )
+        .await?,
     ))
 }
 
@@ -91,7 +95,7 @@ async fn list_invocation_observations(
     security(("bearerAuth" = [])),
     params(AgentQuery),
     responses(
-        (status = 200, description = "Durable session binding records", body = [crate::session_binding::SessionBinding]),
+        (status = 200, description = "Durable session binding records", body = [crate::execution::session_binding::SessionBinding]),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
         (status = 500, description = "Internal failure", body = ErrorResponse)
@@ -101,9 +105,13 @@ async fn list_session_bindings(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
     Query(query): Query<AgentQuery>,
-) -> Result<Json<Vec<crate::session_binding::SessionBinding>>, ApiError> {
+) -> Result<Json<Vec<crate::execution::session_binding::SessionBinding>>, ApiError> {
     require_operator(&principal)?;
     Ok(Json(
-        crate::session_binding::list_session_bindings(&state.store, query.agent.as_deref()).await?,
+        crate::execution::session_binding::list_session_bindings(
+            &state.store,
+            query.agent.as_deref(),
+        )
+        .await?,
     ))
 }

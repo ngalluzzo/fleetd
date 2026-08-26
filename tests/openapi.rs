@@ -6,7 +6,7 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use fleetd::{
-    api::{AppState, openapi_document, router},
+    http::{AppState, openapi_document, router},
     store::Store,
 };
 use serde_json::Value;

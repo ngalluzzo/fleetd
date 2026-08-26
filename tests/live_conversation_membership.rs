@@ -1,8 +1,8 @@
 use std::{path::PathBuf, time::Duration};
 
 use fleetd::{
-    api::{AppState, router},
     auth::AuthService,
+    http::{AppState, router},
     model::{
         ArmInvocation, ClaimDeliveries, CompleteInvocation, CreateAgent, InvocationBatch,
         InvocationCompletion, Message, MessagePage, RegisteredAgent, SendMessage,

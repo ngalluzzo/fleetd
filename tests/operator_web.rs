@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode, header},
 };
 use fleetd::{
-    api::{AppState, router},
+    http::{AppState, router},
     store::Store,
 };
 use serde_json::Value;

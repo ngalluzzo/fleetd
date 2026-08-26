@@ -20,7 +20,7 @@ use super::{
     error::ApiError,
     guard::{require_bound_agent, require_operator},
 };
-use crate::settlement;
+use crate::execution::settlement;
 
 pub(super) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::default()

@@ -1,6 +1,6 @@
 use fleetd::{
-    api::{AppState, router},
     auth::AuthService,
+    http::{AppState, router},
     model::{
         ConversationKind, CreateAgent, CreateChannel, CreateChannelMember, CreateMessage,
         MembershipDeliveryMode, OpenDirectConversation, RenameChannel, SendMessage,

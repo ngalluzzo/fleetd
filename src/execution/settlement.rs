@@ -18,7 +18,9 @@ use crate::{
         validate_block, validate_claim, validate_retry, validate_token,
     },
     error::FleetError,
-    invocation::{ensure_retry_is_safe, recover_expired_invocations, terminalize_invocation},
+    execution::invocation::{
+        ensure_retry_is_safe, recover_expired_invocations, terminalize_invocation,
+    },
     model::{
         BlockDelivery, BlockedDelivery, ClaimBatch, ClaimDeliveries, ExecutionCertainty,
         RetryDelivery,

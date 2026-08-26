@@ -1,5 +1,25 @@
 # Architecture
 
+## Topology
+
+The tree is the architecture, and every layer below is a crate:
+
+    crates/proto          wire types crossing any boundary
+    crates/kernel         the six concepts, migrations, the only pool
+    crates/plugin-host    child-process lifecycle and the typed ACP client
+    src/execution         what happens to durable state
+    src/http              how it is exposed
+    src/{main,cli}.rs     the binary
+
+Dependencies run downward only. `execution` composes over the kernel and never
+extends it; `http` composes over `execution`; neither reaches back. Nothing
+sits at the root of `src/` except the library root, the binary, and its command
+line.
+
+`tests/crate_boundaries.rs` checks that listing against what is on disk, so a
+module cannot be added without saying which layer owns it, and a layer cannot
+quietly start depending on the one above it.
+
 ## Kernel boundary
 
 The kernel owns six concepts:

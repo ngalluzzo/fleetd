@@ -20,18 +20,18 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     auth::Principal,
-    browser_stream_edge::{
+    error::{ErrorResponse, FleetError},
+    http::browser_stream_edge::{
         APPLICATION_FRAME_SEND_DEADLINE, BROWSER_STREAM_PROTOCOL, BrowserStreamGrant,
         BrowserStreamGrantIssueRequest, BrowserStreamGrantIssueResponse, BrowserStreamPath,
         BrowserStreamProtocol, BrowserStreamRedemptionRequest, FIRST_FRAME_DEADLINE,
         MAX_REDEMPTION_FRAME_BYTES,
     },
-    channel_stream::{
+    http::channel_stream::{
         AuthorizedChannelStream, run_browser_channel_stream, run_native_channel_stream,
     },
-    error::{ErrorResponse, FleetError},
+    http::stream_grant_broker::StreamGrantBrokerError,
     store::now_ms,
-    stream_grant_broker::StreamGrantBrokerError,
 };
 
 use super::{AppState, error::ApiError, guard::require_channel_access};

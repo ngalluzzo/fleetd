@@ -6,9 +6,9 @@ use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use thiserror::Error;
 
-use crate::operations;
-use crate::session_binding;
-use crate::settlement;
+use crate::execution::operations;
+use crate::execution::session_binding;
+use crate::execution::settlement;
 use crate::{
     error::FleetError,
     model::{

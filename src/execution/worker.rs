@@ -14,27 +14,27 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::invocation;
-use crate::operations;
-use crate::session_binding;
-use crate::settlement;
+use crate::execution::invocation;
+use crate::execution::operations;
+use crate::execution::session_binding;
+use crate::execution::settlement;
 use crate::{
-    controller::{
+    error::FleetError,
+    execution::controller::{
         ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnGrant,
         ManagedTurnOutcome, TurnResultCapture,
     },
-    error::FleetError,
-    message_grant_broker::{MessageGrantBroker, PUBLISH_DURABLE_MESSAGE_GRANT},
-    model::{Invocation, RetryDelivery},
-    operations::{
+    execution::message_grant_broker::{MessageGrantBroker, PUBLISH_DURABLE_MESSAGE_GRANT},
+    execution::operations::{
         NewPluginGeneration, PluginGenerationDisposition, PluginShutdownOutcome,
         StopPluginGeneration,
     },
+    execution::session_binding::{AcquireSessionBinding, SessionAcquisitionMode},
+    model::{Invocation, RetryDelivery},
     plugin::{
         Binding, HarnessAcpClient, OpenSession, OpenSessionMode, PluginError, PluginProcess,
         PluginSpec, PromptBlock, ShutdownOutcome, TurnPolicy,
     },
-    session_binding::{AcquireSessionBinding, SessionAcquisitionMode},
     store::Store,
 };
 
@@ -256,7 +256,7 @@ pub enum ContinuousWorkerError {
     #[error("turn adapter rejected a reserved message: {0}")]
     Adapter(String),
     #[error("message grant broker failed: {0}")]
-    MessageGrantBroker(#[from] crate::message_grant_broker::MessageGrantBrokerError),
+    MessageGrantBroker(#[from] crate::execution::message_grant_broker::MessageGrantBrokerError),
     #[error("failed to safely release an unarmed reservation after {context}: {source}")]
     PreArmSettlement {
         context: String,

@@ -16,6 +16,9 @@ Read `VISION.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, and
   authenticated principal, not caller-supplied identity fields.
 - Keep network listeners on loopback until encrypted transport and enrollment
   are explicitly implemented.
+- Put every new module in the layer that owns it: `src/execution` for what
+  happens to durable state, `src/http` for how it is exposed. Nothing new
+  belongs at the root of `src/`.
 - The kernel is `crates/kernel` and holds the only connection pool. Compose
   above it with free functions over `&Store`; never add methods to `Store` or
   reach for the pool from outside.

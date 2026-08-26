@@ -1,4 +1,4 @@
-use fleetd::settlement;
+use fleetd::execution::settlement;
 use fleetd::{
     error::FleetError,
     model::{

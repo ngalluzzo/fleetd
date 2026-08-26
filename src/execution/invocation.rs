@@ -254,8 +254,11 @@ pub(crate) async fn complete_invocation_transaction(
 ) -> Result<(InvocationCompletion, bool), FleetError> {
     validate_completion(invocation_id, input)?;
     if !allow_active_session_binding {
-        crate::session_binding::ensure_invocation_not_active_on_session(transaction, invocation_id)
-            .await?;
+        crate::execution::session_binding::ensure_invocation_not_active_on_session(
+            transaction,
+            invocation_id,
+        )
+        .await?;
     }
     let row = invocation_with_delivery(transaction, agent_id, invocation_id).await?;
     validate_static_fence(&row, &input.lease_token, &input.fence_token)?;
@@ -469,7 +472,7 @@ async fn park_expired_armed_invocation(
             "expired invocation changed during recovery".to_owned(),
         ));
     }
-    crate::session_binding::mark_expired_session_turn_uncertain(
+    crate::execution::session_binding::mark_expired_session_turn_uncertain(
         transaction,
         &invocation_id,
         &reason,
@@ -516,7 +519,7 @@ pub(crate) async fn terminalize_invocation(
     reason: &str,
     now: i64,
 ) -> Result<(), FleetError> {
-    crate::session_binding::ensure_bound_turn_allows_delivery_settlement(
+    crate::execution::session_binding::ensure_bound_turn_allows_delivery_settlement(
         transaction,
         agent_id,
         message_id,

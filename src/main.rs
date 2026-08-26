@@ -33,7 +33,7 @@ mod tests {
 
     #[test]
     fn websocket_protocol_log_targets_are_unconditionally_rejected() {
-        assert!(runtime_log_target_is_safe("fleetd::api"));
+        assert!(runtime_log_target_is_safe("fleetd::http"));
         assert!(!runtime_log_target_is_safe("tungstenite::protocol"));
         assert!(!runtime_log_target_is_safe("tungstenite::protocol::frame"));
     }

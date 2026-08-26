@@ -5,13 +5,13 @@ use std::{
 };
 
 use fleetd::{
-    api::{AppState, router},
     auth::AuthService,
-    browser_stream_edge::{
+    http::browser_stream_edge::{
         BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse,
         BrowserStreamRedemptionMessageType, BrowserStreamRedemptionRequest,
         BrowserStreamServerFrame,
     },
+    http::{AppState, router},
     model::{CreateAgent, CreateChannel, Message, RegisteredAgent, SendMessage},
     store::Store,
 };

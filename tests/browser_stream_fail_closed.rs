@@ -1,11 +1,11 @@
 use std::{net::SocketAddr, time::Duration};
 
 use fleetd::{
-    api::{AppState, router},
     auth::AuthService,
-    browser_stream_edge::{
+    http::browser_stream_edge::{
         BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse, BrowserStreamServerFrame,
     },
+    http::{AppState, router},
     model::{CreateAgent, CreateChannel, RegisteredAgent},
     store::Store,
 };

@@ -8,7 +8,7 @@ use std::{
 };
 
 use fleetd::{
-    browser_stream_edge::{
+    http::browser_stream_edge::{
         BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse,
         BrowserStreamRedemptionMessageType, BrowserStreamRedemptionRequest,
         BrowserStreamServerFrame,

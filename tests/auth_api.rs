@@ -1,6 +1,6 @@
 use fleetd::{
-    api::{AppState, router},
     auth::AuthService,
+    http::{AppState, router},
     model::{
         ArmInvocation, BlockDelivery, BlockResolution, BlockedDelivery, ClaimBatch,
         ClaimDeliveries, CompleteInvocation, CreateAgent, CreateChannel, Invocation,
