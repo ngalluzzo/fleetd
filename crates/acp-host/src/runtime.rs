@@ -13,7 +13,7 @@ use agent_client_protocol::{
         v1::{CancelNotification, Implementation, InitializeRequest, InitializeResponse},
     },
 };
-use fleetd::{
+use fleetd_proto::harness_acp::{
     AcceptedResult, AssistantMessage, Binding, CancelTurn, CloseSession, CloseSessionResult,
     DescribeResult, DriverIdentity, EffectiveEnforcement, ExecutionFence,
     HarnessExecutionCertainty, HarnessLimits, OpenSession, OpenSessionMode, OpenSessionResult,
@@ -294,7 +294,7 @@ struct SessionState {
 struct ActiveTurn {
     fence: ExecutionFence,
     next_event_seq: u64,
-    policy: fleetd::TurnPolicy,
+    policy: fleetd_proto::harness_acp::TurnPolicy,
     captured_bytes: usize,
     assistant_messages: Vec<AssistantMessage>,
     tool_calls: u64,
@@ -1195,7 +1195,7 @@ async fn handle_permission_request(
             .idle_timeout_ms
             .min(active.policy.wall_timeout_ms);
         let fence = active.fence.clone();
-        let event = fleetd::PermissionRequested {
+        let event = fleetd_proto::harness_acp::PermissionRequested {
             fence: fence.clone(),
             permission_id: permission_id.clone(),
             event_seq,
@@ -1382,7 +1382,7 @@ fn acp_error(error: impl std::fmt::Display) -> agent_client_protocol::Error {
 
 #[cfg(test)]
 mod tests {
-    use fleetd::{ResolvedMcpGrant, ResolvedMcpHttpHeader};
+    use fleetd_proto::harness_acp::{ResolvedMcpGrant, ResolvedMcpHttpHeader};
 
     use super::*;
 

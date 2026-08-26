@@ -16,6 +16,9 @@ Read `VISION.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, and
   authenticated principal, not caller-supplied identity fields.
 - Keep network listeners on loopback until encrypted transport and enrollment
   are explicitly implemented.
+- Keep boundary-crossing types in `fleetd-proto` and everything that reads,
+  stores, or transports them in the crate that owns that behavior. Plugins,
+  hosts, and tools depend on the wire crate, never on the daemon.
 - Put harness and external-system integrations in out-of-process plugins behind
   narrow, independently versioned operational interfaces. Do not add a generic
   execution escape hatch.

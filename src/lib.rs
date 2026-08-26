@@ -1,5 +1,7 @@
 //! Durable, local-first coordination primitives for cooperating software agents.
 
+pub use fleetd_proto::model;
+
 pub mod api;
 pub mod auth;
 mod browser_stream_edge;
@@ -11,7 +13,6 @@ pub mod error;
 mod invocation;
 mod message_commit_hint;
 pub mod message_grant_broker;
-pub mod model;
 pub mod operations;
 mod operator_surface;
 pub mod plugin;

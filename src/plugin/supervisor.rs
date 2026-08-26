@@ -371,7 +371,7 @@ async fn initialize(rpc: &RpcPeer, spec: &PluginSpec) -> Result<PluginManifest, 
     let manifest: PluginManifest = rpc
         .call("fleetd.initialize", &params, spec.initialize_timeout)
         .await?;
-    manifest.validate(&spec.id, &spec.required_interfaces)?;
+    super::protocol::negotiate(&manifest, &spec.id, &spec.required_interfaces)?;
     check_health(rpc, spec.request_timeout).await?;
     Ok(manifest)
 }

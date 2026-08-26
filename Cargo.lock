@@ -856,6 +856,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "clap",
+ "fleetd-proto",
  "futures-util",
  "getrandom 0.3.4",
  "nix",
@@ -885,7 +886,7 @@ name = "fleetd-acp-host"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
- "fleetd",
+ "fleetd-proto",
  "futures-util",
  "http",
  "nix",
@@ -937,12 +938,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleetd-proto"
+version = "0.1.0"
+dependencies = [
+ "semver",
+ "serde",
+ "serde_json",
+ "utoipa",
+]
+
+[[package]]
 name = "fleetd-soak"
 version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
- "fleetd",
+ "fleetd-proto",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

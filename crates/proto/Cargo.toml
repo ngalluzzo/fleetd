@@ -1,0 +1,23 @@
+[package]
+name = "fleetd-proto"
+version = "0.1.0"
+edition = "2024"
+description = "Wire types for every fleetd boundary: HTTP contract, plugin lifecycle, and harness adapter"
+license = "MIT"
+
+# Every dependency here is a serialization or schema concern. This crate is what
+# a harness vendor or external tool compiles instead of the daemon, so nothing
+# that opens a socket, a database, or a runtime belongs in this list.
+# `tests/crate_boundaries.rs` enforces it.
+[dependencies]
+semver = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+utoipa = "5.5.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

@@ -6,11 +6,13 @@ description = "Development reference plugin for ACP-backed fleetd harnesses"
 license = "MIT"
 
 [dependencies]
-fleetd = { path = "../.." }
 fleetd-acp-host = { path = "../../crates/acp-host" }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+fleetd = { path = "../.." }
 
 [lints.rust]
 unsafe_code = "forbid"

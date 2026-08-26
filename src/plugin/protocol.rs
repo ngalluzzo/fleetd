@@ -1,114 +1,54 @@
-use semver::Version;
+//! Host-side lifecycle transport payloads and manifest negotiation.
+//!
+//! The manifest types themselves are wire types owned by [`fleetd_proto`]. What
+//! stays here is what only the launching host can decide: which lifecycle
+//! version it speaks, which plugin identity it expected, and which interfaces
+//! it requires.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+
+pub use fleetd_proto::plugin::{
+    LIFECYCLE_PROTOCOL_VERSION, PluginIdentity, PluginInterface, PluginManifest,
+    PluginNotification, validate_identifier,
+};
 
 use super::supervisor::PluginError;
 
-pub const LIFECYCLE_PROTOCOL_VERSION: u32 = 1;
-
-/// Human and machine identity reported by a plugin.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PluginIdentity {
-    pub id: String,
-    pub name: String,
-    pub version: Version,
-}
-
-/// One exact operational interface spoken by a plugin process.
+/// Negotiates one manifest against the exact expectations of its launcher.
 ///
-/// An interface identifies a wire protocol implemented by the process. It says
-/// nothing about the semantic work an agent using that process can perform.
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct PluginInterface {
-    pub id: String,
-    pub version: Version,
-}
-
-impl PluginInterface {
-    /// Creates an exact interface identity.
-    #[must_use]
-    pub fn new(id: impl Into<String>, version: Version) -> Self {
-        Self {
-            id: id.into(),
-            version,
-        }
+/// # Errors
+///
+/// Returns an error for a lifecycle version mismatch, an unexpected plugin
+/// identity, a malformed manifest, or a missing required interface.
+pub(crate) fn negotiate(
+    manifest: &PluginManifest,
+    expected_id: &str,
+    required: &[PluginInterface],
+) -> Result<(), PluginError> {
+    if manifest.protocol_version != LIFECYCLE_PROTOCOL_VERSION {
+        return Err(PluginError::ProtocolVersion {
+            expected: LIFECYCLE_PROTOCOL_VERSION,
+            actual: manifest.protocol_version,
+        });
     }
-
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        validate_identifier("plugin interface", &self.id)
+    if manifest.plugin.id != expected_id {
+        return Err(PluginError::IdentityMismatch {
+            expected: expected_id.to_owned(),
+            actual: manifest.plugin.id.clone(),
+        });
     }
-}
-
-impl std::fmt::Display for PluginInterface {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}@{}", self.id, self.version)
-    }
-}
-
-/// Negotiated lifecycle version, identity, and operational interfaces.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct PluginManifest {
-    pub protocol_version: u32,
-    pub plugin: PluginIdentity,
-    pub interfaces: Vec<PluginInterface>,
-}
-
-impl PluginManifest {
-    pub(crate) fn validate(
-        &self,
-        expected_id: &str,
-        required: &[PluginInterface],
-    ) -> Result<(), PluginError> {
-        if self.protocol_version != LIFECYCLE_PROTOCOL_VERSION {
-            return Err(PluginError::ProtocolVersion {
-                expected: LIFECYCLE_PROTOCOL_VERSION,
-                actual: self.protocol_version,
+    manifest
+        .validate_shape()
+        .map_err(PluginError::InvalidManifest)?;
+    for required_interface in required {
+        if !manifest.declares(required_interface) {
+            return Err(PluginError::MissingInterface {
+                interface: required_interface.to_string(),
             });
         }
-        if self.plugin.id != expected_id {
-            return Err(PluginError::IdentityMismatch {
-                expected: expected_id.to_owned(),
-                actual: self.plugin.id.clone(),
-            });
-        }
-        validate_identifier("plugin", &self.plugin.id).map_err(PluginError::InvalidManifest)?;
-        if self.plugin.name.trim().is_empty() || self.plugin.name.len() > 128 {
-            return Err(PluginError::InvalidManifest(
-                "plugin name must contain between 1 and 128 bytes".to_owned(),
-            ));
-        }
-        if self.interfaces.is_empty() {
-            return Err(PluginError::InvalidManifest(
-                "plugin must expose at least one operational interface".to_owned(),
-            ));
-        }
-        let mut seen = BTreeSet::new();
-        for interface in &self.interfaces {
-            interface.validate().map_err(PluginError::InvalidManifest)?;
-            if !seen.insert(interface.clone()) {
-                return Err(PluginError::InvalidManifest(format!(
-                    "duplicate plugin interface {interface}"
-                )));
-            }
-        }
-        for required_interface in required {
-            if !seen.contains(required_interface) {
-                return Err(PluginError::MissingInterface {
-                    interface: required_interface.to_string(),
-                });
-            }
-        }
-        Ok(())
     }
-}
-
-/// An asynchronous plugin event not interpreted by the lifecycle transport.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-pub struct PluginNotification {
-    pub method: String,
-    #[serde(default)]
-    pub params: Value,
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -127,30 +67,4 @@ pub(crate) struct HealthResult {
 #[derive(Deserialize)]
 pub(crate) struct ShutdownResult {
     pub accepted: bool,
-}
-
-pub(crate) fn validate_identifier(kind: &str, identifier: &str) -> Result<(), String> {
-    if identifier.is_empty() || identifier.len() > 128 {
-        return Err(format!(
-            "{kind} identifier must contain between 1 and 128 bytes"
-        ));
-    }
-    let mut previous_was_separator = true;
-    let valid = identifier.bytes().all(|byte| match byte {
-        b'a'..=b'z' | b'0'..=b'9' => {
-            previous_was_separator = false;
-            true
-        }
-        b'.' | b'-' if !previous_was_separator => {
-            previous_was_separator = true;
-            true
-        }
-        _ => false,
-    }) && !previous_was_separator;
-    if !valid {
-        return Err(format!(
-            "{kind} identifier contains unsupported characters: {identifier}"
-        ));
-    }
-    Ok(())
 }

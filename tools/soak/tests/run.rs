@@ -7,7 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use fleetd::SendMessage;
+use fleetd_proto::model::SendMessage;
 use fleetd_soak::{
     CompletionSpec, FleetdEndpoint, ObserverSpec, RunStatus, SeedSpec, SoakPlan, WorkloadSpec,
     WorkloadStatus, execute_plan,

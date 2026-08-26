@@ -60,8 +60,9 @@ pub enum ConversationKind {
 }
 
 impl ConversationKind {
+    /// Returns the exact stored representation of this variant.
     #[must_use]
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Shared => "shared",
             Self::Direct => "direct",
@@ -105,8 +106,9 @@ pub enum MembershipDeliveryMode {
 }
 
 impl MembershipDeliveryMode {
+    /// Returns the exact stored representation of this variant.
     #[must_use]
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Inbox => "inbox",
             Self::StreamOnly => "stream_only",

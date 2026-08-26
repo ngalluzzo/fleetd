@@ -1,11 +1,14 @@
-//! Durable controller-owned harness session lanes and ownership fencing.
+//! Persistence for controller-owned harness session lanes and owner fencing.
 
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
 use sqlx::Row;
-use utoipa::ToSchema;
 use uuid::Uuid;
+
+pub use fleetd_proto::session::{
+    AcquireSessionBinding, SessionAcquisition, SessionAcquisitionMode, SessionBinding,
+    SessionBindingState,
+};
 
 use crate::{
     ArmInvocation, CompleteInvocation, FleetError, Invocation, InvocationCompletion,
@@ -22,71 +25,6 @@ const MAX_PATH_BYTES: usize = 4_096;
 const MAX_SESSION_REF_BYTES: usize = 4_096;
 const MAX_REASON_BYTES: usize = 4_096;
 const MAX_ADDITIONAL_DIRECTORIES: usize = 64;
-
-/// Durable lifecycle state for one native harness session generation.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionBindingState {
-    Opening,
-    Ready,
-    Active,
-    Uncertain,
-    Retired,
-}
-
-/// Exact desired lane and runtime compatibility used to acquire ownership.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AcquireSessionBinding {
-    pub lane_policy: String,
-    pub lane_key: String,
-    pub owner_instance_id: String,
-    pub profile_digest: String,
-    pub compatibility_digest: String,
-    pub working_directory: String,
-    #[serde(default)]
-    pub additional_directories: Vec<String>,
-}
-
-/// Harness operation required after durable lane acquisition.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SessionAcquisitionMode {
-    Create,
-    Resume { session_ref: String },
-}
-
-/// One durable native-session generation and its current owner fence.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
-pub struct SessionBinding {
-    pub binding: Binding,
-    pub agent_id: String,
-    pub lane_policy: String,
-    pub lane_key: String,
-    pub owner_instance_id: String,
-    pub profile_digest: String,
-    pub compatibility_digest: String,
-    pub working_directory: String,
-    pub additional_directories: Vec<String>,
-    pub session_ref: Option<String>,
-    pub state: SessionBindingState,
-    pub active_invocation_id: Option<String>,
-    pub last_quiescent_invocation_id: Option<String>,
-    pub session_persistence: Option<SessionPersistence>,
-    pub uncertain_reason: Option<String>,
-    pub retired_reason: Option<String>,
-    pub created_at_ms: i64,
-    pub updated_at_ms: i64,
-    pub opened_at_ms: Option<i64>,
-    pub retired_at_ms: Option<i64>,
-}
-
-/// Result of acquiring one logical session lane.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SessionAcquisition {
-    pub session: SessionBinding,
-    pub mode: SessionAcquisitionMode,
-}
 
 /// Invocation armed atomically with exact session ownership.
 #[derive(Clone, Debug, PartialEq)]

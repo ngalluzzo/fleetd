@@ -54,6 +54,24 @@ lost response without claiming that harness effects happen exactly once. See
 [ADR 0006](adr/0006-idempotent-message-append.md) and
 [ADR 0008](adr/0008-write-ahead-invocation-fence.md).
 
+## Wire type boundary
+
+`fleetd-proto` owns every type that crosses a boundary: the HTTP contract's
+request and response bodies, the plugin lifecycle manifest, the ACP harness
+frames, and the operator read models for generations, observations, and session
+bindings. It carries serialization and schema dependencies only.
+
+A harness vendor, an external tool, or a generated client compiles that crate
+instead of the daemon. Nothing in it opens a socket, a database, or a runtime,
+so implementing an adapter contract no longer means building SQLite and an HTTP
+server. Persistence, negotiation, and transport stay with whichever crate owns
+the behavior; only the frame descriptions move.
+
+The boundary is enforced by `tests/crate_boundaries.rs`, which pins the crate's
+allowed dependencies, rejects a normal dependency on the daemon from any
+workspace member, and rejects persistence or transport references in proto's
+own sources.
+
 ## Plugin boundary
 
 Harness and external-system integrations run in separately versioned child

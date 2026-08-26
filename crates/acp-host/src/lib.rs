@@ -8,7 +8,10 @@ mod runtime;
 
 use std::time::Duration;
 
-use fleetd::{PluginIdentity, PluginManifest, harness_acp_interface};
+use fleetd_proto::{
+    harness_acp::interface as harness_acp_interface,
+    plugin::{PluginIdentity, PluginManifest},
+};
 use futures_util::StreamExt;
 use runtime::DriverRuntime;
 pub use runtime::{DriverConfig, DriverError, RuntimeConfig};

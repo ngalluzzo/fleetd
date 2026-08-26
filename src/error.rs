@@ -3,15 +3,9 @@ use axum::{
     http::{HeaderValue, StatusCode, header::WWW_AUTHENTICATE},
     response::{IntoResponse, Response},
 };
-use serde::Serialize;
 use thiserror::Error;
-use utoipa::ToSchema;
 
-/// Stable JSON envelope returned for fleetd domain errors.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct ErrorResponse {
-    pub error: String,
-}
+pub use fleetd_proto::error::ErrorResponse;
 
 /// Errors produced by fleetd's domain and persistence boundary.
 #[derive(Debug, Error)]

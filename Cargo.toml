@@ -7,11 +7,20 @@ description = "A local-first control plane for cooperating software agents"
 license = "MIT"
 
 [workspace]
-members = [".", "crates/acp-host", "plugins/acp-reference", "plugins/codex", "plugins/opencode", "tools/soak"]
+members = [
+    ".",
+    "crates/acp-host",
+    "crates/proto",
+    "plugins/acp-reference",
+    "plugins/codex",
+    "plugins/opencode",
+    "tools/soak",
+]
 resolver = "2"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
+fleetd-proto = { path = "crates/proto" }
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive", "env"] }
 futures-util = "0.3"

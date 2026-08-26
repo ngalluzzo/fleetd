@@ -7,9 +7,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use fleetd::{
-    BlockedDelivery, InvocationObservation, Message, MessagePage, PluginGeneration, SendMessage,
-    SessionBinding,
+use fleetd_proto::{
+    model::{BlockedDelivery, Message, MessagePage, SendMessage},
+    operations::{InvocationObservation, PluginGeneration},
+    session::SessionBinding,
 };
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
