@@ -1,3 +1,5 @@
+use std::{collections::BTreeMap, fs, path::Path};
+
 use fleetd::execution::invocation;
 use fleetd::execution::operations;
 use fleetd::execution::session_binding;
@@ -10,6 +12,66 @@ use fleetd::{
 };
 use serde_json::json;
 use sqlx::{Connection, sqlite::SqliteConnectOptions};
+
+/// The first ten migrations predate timestamp naming and keep their ordinals:
+/// renaming an applied migration changes the version its checksum is recorded
+/// under, which every existing database would then reject.
+const LEGACY_ORDINAL_MIGRATIONS: i64 = 10;
+
+/// Any plausible UTC timestamp is far above the ordinals, so the two schemes
+/// order correctly against each other and cannot be confused.
+const FIRST_TIMESTAMP_VERSION: i64 = 20_000_101_000_000;
+
+#[test]
+fn migration_versions_cannot_be_picked_twice() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/kernel/migrations");
+    let mut by_version: BTreeMap<i64, Vec<String>> = BTreeMap::new();
+    for entry in fs::read_dir(&directory).expect("migrations directory is readable") {
+        let name = entry
+            .expect("migration entry is readable")
+            .file_name()
+            .to_string_lossy()
+            .into_owned();
+        let stem = name
+            .strip_suffix(".sql")
+            .unwrap_or_else(|| panic!("`{name}` is in migrations/ but is not a .sql file"));
+        let (version, description) = stem
+            .split_once('_')
+            .unwrap_or_else(|| panic!("migration `{name}` must be `<version>_<description>.sql`"));
+        let version: i64 = version
+            .parse()
+            .unwrap_or_else(|_| panic!("migration `{name}` has a non-numeric version"));
+        assert!(
+            !description.is_empty(),
+            "migration `{name}` has no description"
+        );
+        by_version.entry(version).or_default().push(name);
+    }
+    assert!(
+        !by_version.is_empty(),
+        "there are migrations to check in {}",
+        directory.display()
+    );
+
+    for (version, names) in &by_version {
+        assert!(
+            names.len() == 1,
+            "migrations {names:?} share version {version}. sqlx keeps one row per version, so \
+             this builds cleanly and then fails at runtime with `UNIQUE constraint failed: \
+             _sqlx_migrations.version`, which names neither file. Use \
+             `bin/new-migration <description>`."
+        );
+    }
+    for version in by_version.keys().copied() {
+        assert!(
+            version <= LEGACY_ORDINAL_MIGRATIONS || version >= FIRST_TIMESTAMP_VERSION,
+            "migration version {version} is a sequential ordinal. Two authors working at once \
+             both reach for the next number and neither finds out until one of their databases \
+             refuses to migrate. Use `bin/new-migration <description>`, which names the \
+             migration by UTC timestamp."
+        );
+    }
+}
 
 #[tokio::test]
 async fn conversation_lifecycle_migration_preserves_channels_as_active_shared_conversations() {

@@ -56,15 +56,32 @@ Prefer this shape when a module starts holding more than one concept.
 under a directory, so splitting one never shrinks what the boundary assertions
 cover.
 
+## Migrations are named by timestamp
+
+`bin/new-migration <description>` creates the file. The name carries a UTC
+timestamp, because a sequential ordinal is the one collision that hides: two
+authors both reach for `0011`, both builds pass — `sqlx::migrate!()` does not
+check for duplicate versions — and then a database refuses to migrate with
+
+    UNIQUE constraint failed: _sqlx_migrations.version
+
+which names neither file. `tests/migrations.rs` now rejects a duplicate version
+and rejects a new ordinal outright, so the collision surfaces as a test failure
+that names both files instead.
+
+The first ten migrations keep their ordinals. Renaming an applied migration
+changes the version its checksum is recorded under, and every existing database
+would reject it.
+
 ## Known chokepoints
 
-Ranked by what they cost a fleet. The first two are addressed above.
+Ranked by what they cost a fleet. The first three are addressed above.
 
 | Chokepoint | Status |
 | --- | --- |
 | Derived artifacts (~15k lines) | unmergeable + `bin/regenerate` |
 | `store.rs` holding five concepts | split per concept |
-| Migration ordinals `0001`…`0010` | **open** — two agents both write `0011_`, no text conflict, duplicate version |
+| Migration ordinals | timestamp naming, enforced by test |
 | `src/http/mod.rs` | **open** — a new domain edits four lists: `mod`, the tag, `components`, and the merge order |
 | `tests/browser_stream.rs`, `tests/auth_api.rs` | **open** — large, cross-domain; this is where conflicts actually landed |
 | `docs/**` | **open** — 78% co-change, mostly shared documents rather than per-domain ones |

@@ -13,7 +13,10 @@ working at once.
   be recoverable through cursor replay or the durable inbox.
 - Preserve at-least-once delivery semantics. New settlement paths must reject
   stale leases and remain safe to retry after a lost response.
-- Never edit an applied migration; add a forward migration.
+- Never edit an applied migration; add a forward migration, named by UTC
+  timestamp with `bin/new-migration <description>`. A sequential ordinal
+  collides silently between authors: the build passes and one database later
+  refuses to migrate.
 - Never log or persist raw credentials. Agent authority must come from the
   authenticated principal, not caller-supplied identity fields.
 - Keep network listeners on loopback until encrypted transport and enrollment

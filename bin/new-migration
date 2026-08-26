@@ -1,0 +1,30 @@
+#!/bin/sh
+# Creates an empty forward migration named by UTC timestamp.
+#
+# Migrations are never renumbered and never edited once applied, so the only
+# thing a new one has to avoid is colliding with another author's. A sequential
+# ordinal collides silently: sqlx builds fine and then fails at runtime with a
+# UNIQUE constraint on a version neither author mentioned. A timestamp does not.
+set -eu
+
+if [ $# -ne 1 ]; then
+    echo "usage: bin/new-migration <snake_case_description>" >&2
+    exit 2
+fi
+
+description=$1
+case $description in
+    '' | *[!a-z0-9_]*)
+        echo "description must be lowercase letters, digits, and underscores" >&2
+        exit 2
+        ;;
+esac
+
+path="crates/kernel/migrations/$(date -u +%Y%m%d%H%M%S)_${description}.sql"
+if [ -e "$path" ]; then
+    echo "$path already exists" >&2
+    exit 1
+fi
+
+printf -- '-- %s\n' "$description" > "$path"
+echo "$path"
