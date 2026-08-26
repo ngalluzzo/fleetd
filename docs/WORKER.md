@@ -132,3 +132,10 @@ ambiguity with `fleetd inbox blocked`; only an operator can requeue or abandon
 it. Operator credentials can inspect generation, session, and invocation
 evidence at `/v1/plugin-generations`, `/v1/session-bindings`, and
 `/v1/invocation-observations`.
+
+For ordinary operation, `fleetd status --agent AGENT_ID` composes those read
+models with current delivery state. `fleetd trace --invocation INVOCATION_ID`
+then reads the exact source/result, generation, session owner epoch, and bounded
+turn evidence for one attempt. The self-contained
+[`examples/restart-demo`](../examples/restart-demo/run.sh) performs a hard
+daemon and worker replacement and verifies that composition end to end.

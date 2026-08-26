@@ -13,12 +13,14 @@ federated identity protocol.
 ## Run it
 
 ```sh
-cargo run -- serve --db .fleetd/fleetd.db
+cargo run -- init
+cargo run -- serve
 ```
 
-The daemon creates `.fleetd/operator.token` with owner-only permissions. In
-another terminal, register two agents and save their credentials directly to
-private files:
+`init` writes `.fleetd/config.json`, migrates `.fleetd/fleetd.db`, and creates
+`.fleetd/operator.token` with owner-only permissions. Every later command reads
+that configuration by default. In another terminal, register two agents and
+save their credentials directly to private files:
 
 ```sh
 cargo run -- agent add --name piler --metadata '{"harness":"opencode"}' \
@@ -135,6 +137,12 @@ liveness, session ownership, and per-invocation event counters and chain
 digests at `/v1/plugin-generations`, `/v1/session-bindings`, and
 `/v1/invocation-observations`. Fleetd does not duplicate raw harness
 transcripts in SQLite.
+
+The productized operator journey is documented in
+[getting started](docs/GETTING_STARTED.md). `fleetd status`, read-only delivery
+views, exact invocation traces, the existing retry and requeue/abandon
+settlement commands, offline backup and restore, and the repeatable hard crash
+demonstration are covered in [operations](docs/OPERATIONS.md).
 
 ## Agent-to-agent loop
 

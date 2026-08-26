@@ -314,6 +314,13 @@ invocation observations. They are the common operational source for browser,
 TUI, or external projections; Fleetd does not give one presentation target a
 privileged internal data path.
 
+The operator delivery projection exposes pending, leased, blocked, and
+terminal state without exposing lease credentials. The exact invocation trace
+composes existing durable authorities: source and result envelopes, invocation
+certainty, one bounded observation, its plugin generation, and its native
+session binding. This is a read-model join, not a second workflow model or
+transcript store.
+
 Presentation targets share a headless conversation session above replaceable
 authority-specific transports. The browser transport composes operator
 discovery with participant-owned stream and send operations without merging

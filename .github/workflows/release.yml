@@ -1,0 +1,83 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify tag matches Cargo package version
+        shell: bash
+        run: |
+          package_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)"
+          test "${GITHUB_REF_NAME}" = "v${package_version}"
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+      - name: Build release binaries
+        run: >-
+          cargo build --release --locked
+          -p fleetd
+          -p fleetd-harness-opencode
+          -p fleetd-harness-codex
+          -p fleetd-acp-reference
+      - name: Assemble release archive
+        shell: bash
+        run: |
+          archive_root="fleetd-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/${archive_root}/bin" "dist/${archive_root}/examples/restart-demo" "dist/${archive_root}/docs"
+          cp target/release/fleetd "dist/${archive_root}/bin/"
+          cp target/release/fleetd-harness-opencode "dist/${archive_root}/bin/"
+          cp target/release/fleetd-harness-codex "dist/${archive_root}/bin/"
+          cp target/release/fleetd-acp-reference "dist/${archive_root}/bin/"
+          cp README.md LICENSE "dist/${archive_root}/"
+          cp docs/GETTING_STARTED.md docs/OPERATIONS.md "dist/${archive_root}/docs/"
+          cp examples/worker.opencode.example.json examples/worker.acp.example.json "dist/${archive_root}/examples/"
+          cp examples/restart-demo/run.sh examples/restart-demo/mock-acp-agent.py "dist/${archive_root}/examples/restart-demo/"
+          chmod +x "dist/${archive_root}/bin/"* "dist/${archive_root}/examples/restart-demo/run.sh"
+          tar -C dist -czf "dist/${archive_root}.tar.gz" "${archive_root}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fleetd-${{ matrix.target }}
+          path: dist/*.tar.gz
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: fleetd-*
+          merge-multiple: true
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz > SHA256SUMS
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/*.tar.gz dist/SHA256SUMS --generate-notes --verify-tag

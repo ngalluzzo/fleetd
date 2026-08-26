@@ -65,4 +65,7 @@
   invocation activity; do not encode activity as synthetic channel messages.
 - [ ] Fleet health, blocked work, message traces, session ownership, and model
   throughput.
+- [x] Productized local initialization, worker/plugin status, delivery views,
+  exact invocation/session traces, explicit recovery controls, tagged native
+  binaries, offline backup/restore, and a repeatable hard-restart proof.
 - Remote workers only after authenticated encrypted transport and enrollment.

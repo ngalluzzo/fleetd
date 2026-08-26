@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release workflow reuses this one, so a tag cannot publish artifacts
+  # that the ordinary checks have not passed.
+  workflow_call:
 
 # One in-flight run per ref. A superseded pull request push stops burning
 # runners; pushes to main always finish so the branch has a complete record.
@@ -50,6 +53,15 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --all-targets --all-features
+
+      # The unit and integration suites run in-process. This one hard-kills a
+      # daemon and a worker as separate processes and checks that the restarted
+      # pair adopts the native session under a higher owner epoch, which no
+      # in-process test can prove.
+      - name: Prove crash and restart recovery
+        run: |
+          cargo build --workspace
+          examples/restart-demo/run.sh "${RUNNER_TEMP}/fleetd-restart-demo"
 
   javascript:
     name: javascript

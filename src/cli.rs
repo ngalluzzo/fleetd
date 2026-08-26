@@ -121,6 +121,7 @@ struct StatusArgs {
 #[derive(Args)]
 struct TraceArgs {
     /// Stable invocation ID.
+    #[arg(long)]
     invocation: String,
 }
 
@@ -354,8 +355,9 @@ enum WorkerCommand {
 
 #[derive(Args)]
 struct WorkerRunArgs {
-    #[arg(long, env = "FLEETD_DB", default_value = "fleetd.db")]
-    db: PathBuf,
+    /// Override the database named by the fleet configuration.
+    #[arg(long, env = "FLEETD_DB")]
+    db: Option<PathBuf>,
     /// JSON desired-state file for the worker and harness plugin.
     #[arg(long)]
     config: PathBuf,
@@ -492,7 +494,7 @@ pub async fn run() -> MainResult<()> {
         Command::Invocation { command } => {
             invocation_command(&ApiClient::load(&server, token_file.as_deref())?, command).await
         }
-        Command::Worker { command } => worker_command(command).await,
+        Command::Worker { command } => worker_command(command, &fleet).await,
         Command::Status(args) => {
             status_command(&ApiClient::load(&server, token_file.as_deref())?, args).await
         }
@@ -548,13 +550,20 @@ async fn deliveries_command(api: &ApiClient, args: DeliveriesArgs) -> MainResult
     .await
 }
 
-async fn worker_command(command: WorkerCommand) -> MainResult<()> {
+async fn worker_command(
+    command: WorkerCommand,
+    fleet: &fleetd_fleet::ResolvedFleet,
+) -> MainResult<()> {
     match command {
-        WorkerCommand::Run(args) => run_worker(args).await,
+        WorkerCommand::Run(args) => run_worker(args, fleet).await,
     }
 }
 
-async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
+async fn run_worker(args: WorkerRunArgs, fleet: &fleetd_fleet::ResolvedFleet) -> MainResult<()> {
+    // The worker writes to the same authoritative database the daemon serves,
+    // so it reads the same fleet configuration rather than defaulting to a
+    // relative path in whatever directory it was launched from.
+    let db = args.db.clone().unwrap_or_else(|| fleet.database.clone());
     let raw = fs::read(&args.config)?;
     let value: Value = serde_json::from_slice(&raw).map_err(|error| {
         format!(
@@ -578,12 +587,12 @@ async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
         )
     })?;
     debug_assert_eq!(desired.schema_version, 2);
-    if let Some(parent) = args.db.parent()
+    if let Some(parent) = db.parent()
         && !parent.as_os_str().is_empty()
     {
         tokio::fs::create_dir_all(parent).await?;
     }
-    let store = Store::open_with_message_commit_hints(&args.db).await?;
+    let store = Store::open_with_message_commit_hints(&db).await?;
     let adapter = desired.turn_adapter()?;
     let mut config = desired.into_runtime_config();
     // Whether a turn is offered an MCP endpoint is a deployment decision, so the
@@ -607,7 +616,7 @@ async fn run_worker(args: WorkerRunArgs) -> MainResult<()> {
         shutdown_signal().await;
         signal.cancel();
     });
-    tracing::info!(database = %args.db.display(), "continuous worker ready");
+    tracing::info!(database = %db.display(), "continuous worker ready");
     let run = if args.once {
         worker.run_until(cancellation, Some(1)).await
     } else {

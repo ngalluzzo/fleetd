@@ -151,6 +151,16 @@ unclaimable state and requires a zero retry delay. The resolution record is
 durable. Repeating an identical decision is idempotent, while a different
 second decision returns `409 Conflict`.
 
+### Operator delivery projection
+
+`GET /v1/deliveries` returns a bounded read-only projection of `pending`,
+`leased`, `blocked`, `acknowledged`, and `dead` delivery rows. Optional exact
+agent and state filters do not mutate recovery state. The projection includes
+availability, attempt, expiry, failure, acknowledgement, and unresolved block
+identity but deliberately omits active and settled lease tokens. An expired
+leased row remains honest persisted evidence until a later claim or managed
+reservation performs recovery.
+
 ### Managed invocation fence
 
 Effectful harness controllers use
@@ -187,6 +197,21 @@ Acknowledgement records `outcome_known`; retry before arming records
 dispatch is armed. Operators may inspect the latest records with
 `GET /v1/invocations`, optionally filtered by `?agent=...`. See
 [ADR 0008](adr/0008-write-ahead-invocation-fence.md).
+
+`GET /v1/invocations/{invocation_id}/trace` reads one exact invocation and
+joins any corresponding bounded observation, plugin generation, native-session
+binding, and immutable result message. Missing execution-side evidence is
+represented as `null` for a reservation that has not been armed; the endpoint
+does not synthesize events or duplicate a harness transcript.
+
+`GET /v1/fleet-health` composes those projections into one operator read: the
+current plugin generation for each agent, the current generation of each
+session binding, the invocations still owed an outcome, and a census of
+delivery rows by state including leases whose window has closed. "Current"
+means the newest row for each key. The census reports how many rows it
+inspected, so `delivery_limit` is visible as a bound rather than as a quiet
+fleet. The daemon composes the report, so every surface reads the same
+answer.
 
 A known successful turn uses
 `POST /v1/agents/{agent_id}/invocations/{invocation_id}/complete`:

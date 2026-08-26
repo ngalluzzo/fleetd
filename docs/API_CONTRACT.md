@@ -139,6 +139,20 @@ can join control evidence to immutable message causation without receiving
 lease or fence credentials. Plugin lifecycle calls and session mutation remain
 internal controller APIs.
 
+`GET /v1/deliveries` is the operator's bounded read-only inbox projection. It
+may be filtered by exact agent and state, reports whether a persisted lease has
+expired, and never returns lease tokens. `GET /v1/invocations/{id}/trace`
+performs one exact durable join across the invocation, source/result messages,
+bounded observation, plugin generation, and native-session binding. A reserved
+invocation legitimately has no observation or execution-side evidence yet.
+
+`GET /v1/fleet-health` composes those read models into one operator answer: the
+current plugin generation per agent, the current generation of each session
+binding, the invocations still owed an outcome, and a bounded delivery census.
+The daemon composes it, so the CLI and any later surface report the same thing
+rather than each deciding what "current" means. Its census reports how many
+rows it inspected, so a bounded read is visible as a bound.
+
 ## Changing the API
 
 For any wire change:
