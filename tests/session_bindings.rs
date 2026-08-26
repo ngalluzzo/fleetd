@@ -1,3 +1,6 @@
+use fleetd::invocation;
+use fleetd::operations;
+use fleetd::session_binding;
 use fleetd::settlement;
 use fleetd::{
     error::FleetError,
@@ -62,19 +65,19 @@ async fn fixture_with_lease(lease_duration_ms: u64) -> Fixture {
         )
         .await
         .expect("append work");
-    let invocation = store
-        .reserve_invocations(
-            &receiver.id,
-            ClaimDeliveries {
-                limit: 1,
-                lease_duration_ms,
-            },
-        )
-        .await
-        .expect("reserve invocation")
-        .invocations
-        .pop()
-        .expect("one invocation");
+    let invocation = invocation::reserve_invocations(
+        &store,
+        &receiver.id,
+        ClaimDeliveries {
+            limit: 1,
+            lease_duration_ms,
+        },
+    )
+    .await
+    .expect("reserve invocation")
+    .invocations
+    .pop()
+    .expect("one invocation");
     Fixture {
         directory,
         store,
@@ -86,8 +89,9 @@ async fn fixture_with_lease(lease_duration_ms: u64) -> Fixture {
 
 async fn generation(store: &Store, agent_id: &str) -> String {
     let id = "test-plugin-generation".to_owned();
-    store
-        .record_plugin_generation(NewPluginGeneration {
+    operations::record_plugin_generation(
+        store,
+        NewPluginGeneration {
             id: id.clone(),
             agent_id: agent_id.to_owned(),
             plugin: PluginIdentity {
@@ -118,9 +122,10 @@ async fn generation(store: &Store, agent_id: &str) -> String {
             },
             compatibility_digest: "sha256:test-compatibility".to_owned(),
             heartbeat_interval_ms: 5_000,
-        })
-        .await
-        .expect("record plugin generation");
+        },
+    )
+    .await
+    .expect("record plugin generation");
     id
 }
 
@@ -152,15 +157,19 @@ async fn opened_binding(
     owner: &str,
     profile: &str,
 ) -> SessionBinding {
-    let acquired = store
-        .acquire_session_binding(agent_id, acquisition(owner, profile))
-        .await
-        .expect("acquire binding");
+    let acquired =
+        session_binding::acquire_session_binding(store, agent_id, acquisition(owner, profile))
+            .await
+            .expect("acquire binding");
     assert_eq!(acquired.mode, SessionAcquisitionMode::Create);
-    store
-        .record_session_opened(agent_id, &acquired.session.binding, "native-session-1")
-        .await
-        .expect("record opened session")
+    session_binding::record_session_opened(
+        store,
+        agent_id,
+        &acquired.session.binding,
+        "native-session-1",
+    )
+    .await
+    .expect("record opened session")
 }
 
 fn arm(invocation: &Invocation) -> ArmInvocation {
@@ -181,48 +190,44 @@ fn completion(invocation: &Invocation) -> CompleteInvocation {
 
 async fn assert_bounded_event_folding(fixture: &Fixture) {
     let observed = json!({"sessionUpdate": "agent_message_chunk", "text": "bounded"});
-    fixture
-        .store
-        .record_invocation_event(
-            &fixture.generation_id,
-            &fixture.invocation.id,
-            1,
-            123,
-            "agent_message_content",
-            &observed,
-        )
-        .await
-        .expect("record first event");
-    fixture
-        .store
-        .record_invocation_event(
-            &fixture.generation_id,
-            &fixture.invocation.id,
-            1,
-            123,
-            "agent_message_content",
-            &observed,
-        )
-        .await
-        .expect("exact event replay is idempotent");
-    let changed_event = fixture
-        .store
-        .record_invocation_event(
-            &fixture.generation_id,
-            &fixture.invocation.id,
-            1,
-            123,
-            "agent_message_content",
-            &json!({"sessionUpdate": "agent_message_chunk", "text": "changed"}),
-        )
-        .await
-        .expect_err("changed event replay must conflict");
+    operations::record_invocation_event(
+        &fixture.store,
+        &fixture.generation_id,
+        &fixture.invocation.id,
+        1,
+        123,
+        "agent_message_content",
+        &observed,
+    )
+    .await
+    .expect("record first event");
+    operations::record_invocation_event(
+        &fixture.store,
+        &fixture.generation_id,
+        &fixture.invocation.id,
+        1,
+        123,
+        "agent_message_content",
+        &observed,
+    )
+    .await
+    .expect("exact event replay is idempotent");
+    let changed_event = operations::record_invocation_event(
+        &fixture.store,
+        &fixture.generation_id,
+        &fixture.invocation.id,
+        1,
+        123,
+        "agent_message_content",
+        &json!({"sessionUpdate": "agent_message_chunk", "text": "changed"}),
+    )
+    .await
+    .expect_err("changed event replay must conflict");
     assert!(matches!(changed_event, FleetError::Conflict(_)));
-    let observations = fixture
-        .store
-        .list_invocation_observations(Some(&fixture.receiver.id))
-        .await
-        .expect("list invocation observations");
+    let observations =
+        operations::list_invocation_observations(&fixture.store, Some(&fixture.receiver.id))
+            .await
+            .expect("list invocation observations");
     assert_eq!(observations.len(), 1);
     assert_eq!(observations[0].event_count, 1);
     assert_eq!(observations[0].counts.assistant, 1);
@@ -236,8 +241,7 @@ async fn opening_and_native_reference_survive_restart_with_idempotent_replay() {
     let store = Store::open(&path).await.expect("open store");
     let receiver = agent(&store, "restart-binding-agent").await;
     let input = acquisition("controller-1", "sha256:profile-a");
-    let first = store
-        .acquire_session_binding(&receiver.id, input.clone())
+    let first = session_binding::acquire_session_binding(&store, &receiver.id, input.clone())
         .await
         .expect("first acquisition");
     assert_eq!(first.mode, SessionAcquisitionMode::Create);
@@ -245,28 +249,39 @@ async fn opening_and_native_reference_survive_restart_with_idempotent_replay() {
     drop(store);
 
     let reopened = Store::open(&path).await.expect("reopen store");
-    let replay = reopened
-        .acquire_session_binding(&receiver.id, input)
+    let replay = session_binding::acquire_session_binding(&reopened, &receiver.id, input)
         .await
         .expect("acquisition replay");
     assert_eq!(replay, first);
-    let ready = reopened
-        .record_session_opened(&receiver.id, &first.session.binding, "native-session-1")
-        .await
-        .expect("record native reference");
+    let ready = session_binding::record_session_opened(
+        &reopened,
+        &receiver.id,
+        &first.session.binding,
+        "native-session-1",
+    )
+    .await
+    .expect("record native reference");
     assert_eq!(ready.state, SessionBindingState::Ready);
     assert_eq!(ready.session_ref.as_deref(), Some("native-session-1"));
     assert_eq!(
-        reopened
-            .record_session_opened(&receiver.id, &first.session.binding, "native-session-1")
-            .await
-            .expect("native reference replay"),
+        session_binding::record_session_opened(
+            &reopened,
+            &receiver.id,
+            &first.session.binding,
+            "native-session-1"
+        )
+        .await
+        .expect("native reference replay"),
         ready
     );
-    let changed = reopened
-        .record_session_opened(&receiver.id, &first.session.binding, "different-session")
-        .await
-        .expect_err("changed native reference must conflict");
+    let changed = session_binding::record_session_opened(
+        &reopened,
+        &receiver.id,
+        &first.session.binding,
+        "different-session",
+    )
+    .await
+    .expect_err("changed native reference must conflict");
     assert!(matches!(changed, FleetError::Conflict(_)));
 }
 
@@ -280,14 +295,13 @@ async fn compatible_adoption_increments_epoch_and_fences_the_stale_owner() {
         "sha256:profile-a",
     )
     .await;
-    let adopted = fixture
-        .store
-        .acquire_session_binding(
-            &fixture.receiver.id,
-            acquisition("controller-2", "sha256:profile-a"),
-        )
-        .await
-        .expect("adopt compatible session");
+    let adopted = session_binding::acquire_session_binding(
+        &fixture.store,
+        &fixture.receiver.id,
+        acquisition("controller-2", "sha256:profile-a"),
+    )
+    .await
+    .expect("adopt compatible session");
     assert_eq!(adopted.session.binding.binding_id, first.binding.binding_id);
     assert_eq!(adopted.session.binding.binding_generation, 1);
     assert_eq!(adopted.session.binding.owner_epoch, 2);
@@ -298,31 +312,29 @@ async fn compatible_adoption_increments_epoch_and_fences_the_stale_owner() {
         }
     );
 
-    let stale = fixture
-        .store
-        .arm_session_invocation(
-            &fixture.receiver.id,
-            &fixture.invocation.id,
-            &first.binding,
-            "native-session-1",
-            &fixture.generation_id,
-            arm(&fixture.invocation),
-        )
-        .await
-        .expect_err("stale owner must not arm");
+    let stale = session_binding::arm_session_invocation(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        &first.binding,
+        "native-session-1",
+        &fixture.generation_id,
+        arm(&fixture.invocation),
+    )
+    .await
+    .expect_err("stale owner must not arm");
     assert!(matches!(stale, FleetError::LeaseConflict(_)));
-    let armed = fixture
-        .store
-        .arm_session_invocation(
-            &fixture.receiver.id,
-            &fixture.invocation.id,
-            &adopted.session.binding,
-            "native-session-1",
-            &fixture.generation_id,
-            arm(&fixture.invocation),
-        )
-        .await
-        .expect("current owner arms");
+    let armed = session_binding::arm_session_invocation(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        &adopted.session.binding,
+        "native-session-1",
+        &fixture.generation_id,
+        arm(&fixture.invocation),
+    )
+    .await
+    .expect("current owner arms");
     assert_eq!(armed.session.state, SessionBindingState::Active);
     assert_eq!(
         armed.session.active_invocation_id.as_deref(),
@@ -357,14 +369,13 @@ async fn compatible_adoption_increments_epoch_and_fences_the_stale_owner() {
             .expect("list blocks")
             .is_empty()
     );
-    let active_adoption = fixture
-        .store
-        .acquire_session_binding(
-            &fixture.receiver.id,
-            acquisition("controller-3", "sha256:profile-a"),
-        )
-        .await
-        .expect_err("active session cannot be adopted");
+    let active_adoption = session_binding::acquire_session_binding(
+        &fixture.store,
+        &fixture.receiver.id,
+        acquisition("controller-3", "sha256:profile-a"),
+    )
+    .await
+    .expect_err("active session cannot be adopted");
     assert!(matches!(active_adoption, FleetError::Conflict(_)));
 }
 
@@ -378,36 +389,33 @@ async fn incompatible_or_abandoned_session_rotates_the_generation() {
         "sha256:profile-a",
     )
     .await;
-    let second = fixture
-        .store
-        .acquire_session_binding(
-            &fixture.receiver.id,
-            acquisition("controller-2", "sha256:profile-b"),
-        )
-        .await
-        .expect("rotate incompatible ready session");
+    let second = session_binding::acquire_session_binding(
+        &fixture.store,
+        &fixture.receiver.id,
+        acquisition("controller-2", "sha256:profile-b"),
+    )
+    .await
+    .expect("rotate incompatible ready session");
     assert_eq!(second.mode, SessionAcquisitionMode::Create);
     assert_eq!(second.session.binding.binding_id, first.binding.binding_id);
     assert_eq!(second.session.binding.binding_generation, 2);
     assert_eq!(second.session.binding.owner_epoch, 1);
     assert_eq!(second.session.state, SessionBindingState::Opening);
 
-    let third = fixture
-        .store
-        .acquire_session_binding(
-            &fixture.receiver.id,
-            acquisition("controller-3", "sha256:profile-b"),
-        )
-        .await
-        .expect("rotate abandoned opening");
+    let third = session_binding::acquire_session_binding(
+        &fixture.store,
+        &fixture.receiver.id,
+        acquisition("controller-3", "sha256:profile-b"),
+    )
+    .await
+    .expect("rotate abandoned opening");
     assert_eq!(third.session.binding.binding_id, first.binding.binding_id);
     assert_eq!(third.session.binding.binding_generation, 3);
     assert_eq!(third.session.binding.owner_epoch, 1);
-    let generations = fixture
-        .store
-        .list_session_bindings(Some(&fixture.receiver.id))
-        .await
-        .expect("list generations");
+    let generations =
+        session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver.id))
+            .await
+            .expect("list generations");
     assert_eq!(generations.len(), 3);
     assert_eq!(
         generations
@@ -429,48 +437,44 @@ async fn completion_atomically_quiesces_the_session_and_can_resume_after_restart
         "sha256:profile-a",
     )
     .await;
-    fixture
-        .store
-        .arm_session_invocation(
-            &fixture.receiver.id,
-            &fixture.invocation.id,
-            &ready.binding,
-            "native-session-1",
-            &fixture.generation_id,
-            arm(&fixture.invocation),
-        )
-        .await
-        .expect("arm bound invocation");
+    session_binding::arm_session_invocation(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        &ready.binding,
+        "native-session-1",
+        &fixture.generation_id,
+        arm(&fixture.invocation),
+    )
+    .await
+    .expect("arm bound invocation");
     assert_bounded_event_folding(&fixture).await;
-    let direct_completion = fixture
-        .store
-        .complete_invocation(
-            &fixture.receiver.id,
-            &fixture.invocation.id,
-            completion(&fixture.invocation),
-        )
-        .await
-        .expect_err("generic completion must not bypass a bound turn");
+    let direct_completion = invocation::complete_invocation(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        completion(&fixture.invocation),
+    )
+    .await
+    .expect_err("generic completion must not bypass a bound turn");
     assert!(matches!(direct_completion, FleetError::Conflict(_)));
-    let completed = fixture
-        .store
-        .complete_session_invocation(
-            &fixture.receiver.id,
-            &fixture.invocation.id,
-            &ready.binding,
-            SessionPersistence::Confirmed,
-            completion(&fixture.invocation),
-        )
-        .await
-        .expect("complete bound invocation");
+    let completed = session_binding::complete_session_invocation(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        &ready.binding,
+        SessionPersistence::Confirmed,
+        completion(&fixture.invocation),
+    )
+    .await
+    .expect("complete bound invocation");
     assert!(completed.1);
-    let settled = fixture
-        .store
-        .list_session_bindings(Some(&fixture.receiver.id))
-        .await
-        .expect("list settled binding")
-        .pop()
-        .expect("one binding");
+    let settled =
+        session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver.id))
+            .await
+            .expect("list settled binding")
+            .pop()
+            .expect("one binding");
     assert_eq!(settled.state, SessionBindingState::Ready);
     assert_eq!(settled.active_invocation_id, None);
     assert_eq!(
@@ -481,29 +485,28 @@ async fn completion_atomically_quiesces_the_session_and_can_resume_after_restart
         settled.session_persistence,
         Some(SessionPersistence::Confirmed)
     );
-    let replay = fixture
-        .store
-        .complete_session_invocation(
-            &fixture.receiver.id,
-            &fixture.invocation.id,
-            &ready.binding,
-            SessionPersistence::Confirmed,
-            completion(&fixture.invocation),
-        )
-        .await
-        .expect("completion replay");
+    let replay = session_binding::complete_session_invocation(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        &ready.binding,
+        SessionPersistence::Confirmed,
+        completion(&fixture.invocation),
+    )
+    .await
+    .expect("completion replay");
     assert!(!replay.1);
     assert_eq!(replay.0, completed.0);
 
     drop(fixture.store);
     let reopened = Store::open(path).await.expect("reopen completed store");
-    let adopted = reopened
-        .acquire_session_binding(
-            &fixture.receiver.id,
-            acquisition("controller-2", "sha256:profile-a"),
-        )
-        .await
-        .expect("resume after restart");
+    let adopted = session_binding::acquire_session_binding(
+        &reopened,
+        &fixture.receiver.id,
+        acquisition("controller-2", "sha256:profile-a"),
+    )
+    .await
+    .expect("resume after restart");
     assert_eq!(adopted.session.binding.owner_epoch, 2);
     assert_eq!(
         adopted.mode,
@@ -523,41 +526,35 @@ async fn generation_evidence_and_dispatch_arm_are_one_transaction() {
         "sha256:profile-a",
     )
     .await;
-    let error = fixture
-        .store
-        .arm_session_invocation(
-            &fixture.receiver.id,
-            &fixture.invocation.id,
-            &ready.binding,
-            "native-session-1",
-            "missing-generation",
-            arm(&fixture.invocation),
-        )
-        .await
-        .expect_err("missing generation must roll back dispatch arm");
+    let error = session_binding::arm_session_invocation(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        &ready.binding,
+        "native-session-1",
+        "missing-generation",
+        arm(&fixture.invocation),
+    )
+    .await
+    .expect_err("missing generation must roll back dispatch arm");
     assert!(matches!(error, FleetError::Conflict(_)));
 
-    let invocation = fixture
-        .store
-        .list_invocations(Some(&fixture.receiver.id))
+    let invocation = invocation::list_invocations(&fixture.store, Some(&fixture.receiver.id))
         .await
         .expect("list invocation after rollback")
         .pop()
         .expect("one invocation");
     assert_eq!(invocation.state, InvocationState::Reserved);
-    let binding = fixture
-        .store
-        .list_session_bindings(Some(&fixture.receiver.id))
-        .await
-        .expect("list binding after rollback")
-        .pop()
-        .expect("one binding");
+    let binding =
+        session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver.id))
+            .await
+            .expect("list binding after rollback")
+            .pop()
+            .expect("one binding");
     assert_eq!(binding.state, SessionBindingState::Ready);
     assert_eq!(binding.active_invocation_id, None);
     assert!(
-        fixture
-            .store
-            .list_invocation_observations(Some(&fixture.receiver.id))
+        operations::list_invocation_observations(&fixture.store, Some(&fixture.receiver.id))
             .await
             .expect("list observations after rollback")
             .is_empty()
@@ -577,35 +574,33 @@ async fn lease_recovery_atomically_parks_delivery_and_marks_bound_session_uncert
         "sha256:profile-a",
     )
     .await;
-    fixture
-        .store
-        .arm_session_invocation(
-            &agent_id,
-            &invocation_id,
-            &ready.binding,
-            "native-session-1",
-            &fixture.generation_id,
-            arm(&fixture.invocation),
-        )
-        .await
-        .expect("arm bound invocation");
+    session_binding::arm_session_invocation(
+        &fixture.store,
+        &agent_id,
+        &invocation_id,
+        &ready.binding,
+        "native-session-1",
+        &fixture.generation_id,
+        arm(&fixture.invocation),
+    )
+    .await
+    .expect("arm bound invocation");
     drop(fixture.store);
     tokio::time::sleep(std::time::Duration::from_millis(75)).await;
 
     let reopened = Store::open(path).await.expect("reopen expired store");
-    let recovered = reopened
-        .reserve_invocations(
-            &agent_id,
-            ClaimDeliveries {
-                limit: 1,
-                lease_duration_ms: 30_000,
-            },
-        )
-        .await
-        .expect("run managed recovery");
+    let recovered = invocation::reserve_invocations(
+        &reopened,
+        &agent_id,
+        ClaimDeliveries {
+            limit: 1,
+            lease_duration_ms: 30_000,
+        },
+    )
+    .await
+    .expect("run managed recovery");
     assert!(recovered.invocations.is_empty());
-    let session = reopened
-        .list_session_bindings(Some(&agent_id))
+    let session = session_binding::list_session_bindings(&reopened, Some(&agent_id))
         .await
         .expect("list recovered session")
         .pop()
@@ -629,10 +624,13 @@ async fn lease_recovery_atomically_parks_delivery_and_marks_bound_session_uncert
             .len(),
         1
     );
-    let adoption = reopened
-        .acquire_session_binding(&agent_id, acquisition("controller-2", "sha256:profile-a"))
-        .await
-        .expect_err("recovered uncertain session cannot be adopted");
+    let adoption = session_binding::acquire_session_binding(
+        &reopened,
+        &agent_id,
+        acquisition("controller-2", "sha256:profile-a"),
+    )
+    .await
+    .expect_err("recovered uncertain session cannot be adopted");
     assert!(matches!(adoption, FleetError::Conflict(_)));
 }
 
@@ -646,80 +644,73 @@ async fn uncertain_turn_blocks_adoption_until_explicit_retirement() {
         "sha256:profile-a",
     )
     .await;
-    fixture
-        .store
-        .arm_session_invocation(
-            &fixture.receiver.id,
-            &fixture.invocation.id,
-            &ready.binding,
-            "native-session-1",
-            &fixture.generation_id,
-            arm(&fixture.invocation),
-        )
-        .await
-        .expect("arm bound invocation");
-    let uncertain = fixture
-        .store
-        .mark_session_invocation_uncertain(
+    session_binding::arm_session_invocation(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        &ready.binding,
+        "native-session-1",
+        &fixture.generation_id,
+        arm(&fixture.invocation),
+    )
+    .await
+    .expect("arm bound invocation");
+    let uncertain = session_binding::mark_session_invocation_uncertain(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        &ready.binding,
+        "transport disappeared after dispatch",
+    )
+    .await
+    .expect("mark uncertainty");
+    assert_eq!(uncertain.state, SessionBindingState::Uncertain);
+    assert_eq!(
+        session_binding::mark_session_invocation_uncertain(
+            &fixture.store,
             &fixture.receiver.id,
             &fixture.invocation.id,
             &ready.binding,
             "transport disappeared after dispatch",
         )
         .await
-        .expect("mark uncertainty");
-    assert_eq!(uncertain.state, SessionBindingState::Uncertain);
-    assert_eq!(
-        fixture
-            .store
-            .mark_session_invocation_uncertain(
-                &fixture.receiver.id,
-                &fixture.invocation.id,
-                &ready.binding,
-                "transport disappeared after dispatch",
-            )
-            .await
-            .expect("uncertainty replay"),
+        .expect("uncertainty replay"),
         uncertain
     );
-    let changed = fixture
-        .store
-        .mark_session_invocation_uncertain(
-            &fixture.receiver.id,
-            &fixture.invocation.id,
-            &ready.binding,
-            "different evidence",
-        )
-        .await
-        .expect_err("changed uncertainty must conflict");
+    let changed = session_binding::mark_session_invocation_uncertain(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        &ready.binding,
+        "different evidence",
+    )
+    .await
+    .expect_err("changed uncertainty must conflict");
     assert!(matches!(changed, FleetError::Conflict(_)));
-    let adoption = fixture
-        .store
-        .acquire_session_binding(
-            &fixture.receiver.id,
-            acquisition("controller-2", "sha256:profile-a"),
-        )
-        .await
-        .expect_err("uncertain session cannot be adopted");
+    let adoption = session_binding::acquire_session_binding(
+        &fixture.store,
+        &fixture.receiver.id,
+        acquisition("controller-2", "sha256:profile-a"),
+    )
+    .await
+    .expect_err("uncertain session cannot be adopted");
     assert!(matches!(adoption, FleetError::Conflict(_)));
 
-    fixture
-        .store
-        .retire_session_binding(
-            &fixture.receiver.id,
-            &ready.binding,
-            "operator reconciled uncertain native state",
-        )
-        .await
-        .expect("retire uncertain generation");
-    let replacement = fixture
-        .store
-        .acquire_session_binding(
-            &fixture.receiver.id,
-            acquisition("controller-2", "sha256:profile-a"),
-        )
-        .await
-        .expect("acquire replacement generation");
+    session_binding::retire_session_binding(
+        &fixture.store,
+        &fixture.receiver.id,
+        &ready.binding,
+        "operator reconciled uncertain native state",
+    )
+    .await
+    .expect("retire uncertain generation");
+    let replacement = session_binding::acquire_session_binding(
+        &fixture.store,
+        &fixture.receiver.id,
+        acquisition("controller-2", "sha256:profile-a"),
+    )
+    .await
+    .expect("acquire replacement generation");
     assert_eq!(replacement.session.binding.binding_generation, 2);
     assert_eq!(replacement.session.binding.owner_epoch, 1);
     assert_eq!(replacement.mode, SessionAcquisitionMode::Create);
@@ -740,11 +731,13 @@ async fn racing_adoptions_leave_only_the_latest_epoch_able_to_arm() {
     let first_agent = fixture.receiver.id.clone();
     let second_agent = fixture.receiver.id.clone();
     let (first, second) = tokio::join!(
-        first_store.acquire_session_binding(
+        session_binding::acquire_session_binding(
+            &first_store,
             &first_agent,
             acquisition("racing-controller-a", "sha256:profile-a")
         ),
-        second_store.acquire_session_binding(
+        session_binding::acquire_session_binding(
+            &second_store,
             &second_agent,
             acquisition("racing-controller-b", "sha256:profile-a")
         ),
@@ -755,40 +748,37 @@ async fn racing_adoptions_leave_only_the_latest_epoch_able_to_arm() {
         first.session.binding.owner_epoch,
         second.session.binding.owner_epoch
     );
-    let current = fixture
-        .store
-        .list_session_bindings(Some(&fixture.receiver.id))
-        .await
-        .expect("read current owner")
-        .pop()
-        .expect("one binding");
+    let current =
+        session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver.id))
+            .await
+            .expect("read current owner")
+            .pop()
+            .expect("one binding");
     let (latest, stale) = if current.binding.owner_epoch == first.session.binding.owner_epoch {
         (&first.session.binding, &second.session.binding)
     } else {
         (&second.session.binding, &first.session.binding)
     };
-    let stale_result = fixture
-        .store
-        .arm_session_invocation(
-            &fixture.receiver.id,
-            &fixture.invocation.id,
-            stale,
-            "native-session-1",
-            &fixture.generation_id,
-            arm(&fixture.invocation),
-        )
-        .await;
+    let stale_result = session_binding::arm_session_invocation(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        stale,
+        "native-session-1",
+        &fixture.generation_id,
+        arm(&fixture.invocation),
+    )
+    .await;
     assert!(matches!(stale_result, Err(FleetError::LeaseConflict(_))));
-    fixture
-        .store
-        .arm_session_invocation(
-            &fixture.receiver.id,
-            &fixture.invocation.id,
-            latest,
-            "native-session-1",
-            &fixture.generation_id,
-            arm(&fixture.invocation),
-        )
-        .await
-        .expect("latest owner arms");
+    session_binding::arm_session_invocation(
+        &fixture.store,
+        &fixture.receiver.id,
+        &fixture.invocation.id,
+        latest,
+        "native-session-1",
+        &fixture.generation_id,
+        arm(&fixture.invocation),
+    )
+    .await
+    .expect("latest owner arms");
 }

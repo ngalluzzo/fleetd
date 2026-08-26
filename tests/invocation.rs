@@ -1,3 +1,4 @@
+use fleetd::invocation;
 use fleetd::settlement;
 use fleetd::{
     error::FleetError,
@@ -68,8 +69,7 @@ fn reservation(limit: u32, lease_duration_ms: u64) -> ClaimDeliveries {
 }
 
 async fn reserve_one(store: &Store, agent_id: &str, lease_duration_ms: u64) -> Invocation {
-    let batch = store
-        .reserve_invocations(agent_id, reservation(1, lease_duration_ms))
+    let batch = invocation::reserve_invocations(store, agent_id, reservation(1, lease_duration_ms))
         .await
         .expect("reserve invocation");
     assert_eq!(batch.invocations.len(), 1);
@@ -95,8 +95,8 @@ async fn concurrent_reservers_create_one_lease_and_one_invocation() {
     let first_agent = receiver.id.clone();
     let second_agent = receiver.id.clone();
     let (first, second) = tokio::join!(
-        first_store.reserve_invocations(&first_agent, reservation(1, 10_000)),
-        second_store.reserve_invocations(&second_agent, reservation(1, 10_000)),
+        invocation::reserve_invocations(&first_store, &first_agent, reservation(1, 10_000)),
+        invocation::reserve_invocations(&second_store, &second_agent, reservation(1, 10_000)),
     );
     let invocations: Vec<_> = first
         .expect("first reserve")
@@ -113,8 +113,7 @@ async fn concurrent_reservers_create_one_lease_and_one_invocation() {
         .expect("raw claim while reservation is live");
     assert!(raw_claim.deliveries.is_empty());
     assert_eq!(
-        store
-            .list_invocations(Some(&receiver.id))
+        invocation::list_invocations(&store, Some(&receiver.id))
             .await
             .expect("list invocations"),
         invocations
@@ -136,8 +135,7 @@ async fn a_crash_before_dispatch_is_proven_not_started_and_safely_reclaimed() {
     assert_eq!(second.delivery_attempt, 2);
     assert_ne!(second.id, first.id);
 
-    let invocations = reopened
-        .list_invocations(Some(&receiver.id))
+    let invocations = invocation::list_invocations(&reopened, Some(&receiver.id))
         .await
         .expect("list after recovery");
     let recovered = find_invocation(&invocations, &first.id);
@@ -163,15 +161,15 @@ async fn a_crash_before_dispatch_is_proven_not_started_and_safely_reclaimed() {
 async fn a_crash_after_dispatch_is_parked_instead_of_reexecuted() {
     let (directory, store, _sender, receiver, message) = fixture().await;
     let reserved = reserve_one(&store, &receiver.id, 50).await;
-    let armed = store
-        .arm_invocation(&receiver.id, &reserved.id, arm_input(&reserved))
-        .await
-        .expect("arm invocation");
+    let armed =
+        invocation::arm_invocation(&store, &receiver.id, &reserved.id, arm_input(&reserved))
+            .await
+            .expect("arm invocation");
     assert_eq!(armed.state, InvocationState::DispatchArmed);
-    let replay = store
-        .arm_invocation(&receiver.id, &reserved.id, arm_input(&reserved))
-        .await
-        .expect("arm replay");
+    let replay =
+        invocation::arm_invocation(&store, &receiver.id, &reserved.id, arm_input(&reserved))
+            .await
+            .expect("arm replay");
     assert_eq!(replay, armed);
     assert_armed_invocation_cannot_retry(&store, &receiver.id, &message.id, &reserved).await;
     drop(store);
@@ -184,8 +182,7 @@ async fn a_crash_after_dispatch_is_parked_instead_of_reexecuted() {
         .await
         .expect("claim runs managed recovery");
     assert!(raw_claim.deliveries.is_empty());
-    let invocations = reopened
-        .list_invocations(Some(&receiver.id))
+    let invocations = invocation::list_invocations(&reopened, Some(&receiver.id))
         .await
         .expect("list recovered invocation");
     let recovered = find_invocation(&invocations, &reserved.id);
@@ -227,17 +224,17 @@ async fn assert_armed_invocation_cannot_retry(
     message_id: &str,
     invocation: &Invocation,
 ) {
-    let bad_fence = store
-        .arm_invocation(
-            agent_id,
-            &invocation.id,
-            ArmInvocation {
-                lease_token: invocation.lease_token.clone(),
-                fence_token: "wrong-fence".to_owned(),
-            },
-        )
-        .await
-        .expect_err("wrong fence must fail");
+    let bad_fence = invocation::arm_invocation(
+        store,
+        agent_id,
+        &invocation.id,
+        ArmInvocation {
+            lease_token: invocation.lease_token.clone(),
+            fence_token: "wrong-fence".to_owned(),
+        },
+    )
+    .await
+    .expect_err("wrong fence must fail");
     assert!(matches!(bad_fence, FleetError::LeaseConflict(_)));
     let unsafe_retry = settlement::retry_delivery(
         store,
@@ -271,16 +268,14 @@ async fn delivery_settlement_terminalizes_the_matching_invocation() {
     .await
     .expect("retry unarmed invocation");
     let armed = reserve_one(&store, &receiver.id, 10_000).await;
-    store
-        .arm_invocation(&receiver.id, &armed.id, arm_input(&armed))
+    invocation::arm_invocation(&store, &receiver.id, &armed.id, arm_input(&armed))
         .await
         .expect("arm second invocation");
     settlement::acknowledge_delivery(&store, &receiver.id, &message.id, &armed.lease_token)
         .await
         .expect("acknowledge known result");
 
-    let invocations = store
-        .list_invocations(Some(&receiver.id))
+    let invocations = invocation::list_invocations(&store, Some(&receiver.id))
         .await
         .expect("list settled invocations");
     let first = find_invocation(&invocations, &unarmed.id);
@@ -301,8 +296,7 @@ async fn delivery_settlement_terminalizes_the_matching_invocation() {
 async fn completion_atomically_publishes_one_result_and_acknowledges_the_input() {
     let (directory, store, sender, receiver, input_message) = fixture().await;
     let reserved = reserve_one(&store, &receiver.id, 100).await;
-    store
-        .arm_invocation(&receiver.id, &reserved.id, arm_input(&reserved))
+    invocation::arm_invocation(&store, &receiver.id, &reserved.id, arm_input(&reserved))
         .await
         .expect("arm invocation");
     let completion = CompleteInvocation {
@@ -319,8 +313,18 @@ async fn completion_atomically_publishes_one_result_and_acknowledges_the_input()
     let second_invocation = reserved.id.clone();
     let second_completion = completion.clone();
     let (first, second) = tokio::join!(
-        first_store.complete_invocation(&first_agent, &first_invocation, completion.clone()),
-        second_store.complete_invocation(&second_agent, &second_invocation, second_completion),
+        invocation::complete_invocation(
+            &first_store,
+            &first_agent,
+            &first_invocation,
+            completion.clone()
+        ),
+        invocation::complete_invocation(
+            &second_store,
+            &second_agent,
+            &second_invocation,
+            second_completion
+        ),
     );
     let first = first.expect("first completion");
     let second = second.expect("second completion");
@@ -371,16 +375,15 @@ async fn completion_atomically_publishes_one_result_and_acknowledges_the_input()
     let reopened = Store::open(directory.path().join("fleetd.db"))
         .await
         .expect("reopen completed store");
-    let replay = reopened
-        .complete_invocation(&receiver.id, &reserved.id, completion.clone())
-        .await
-        .expect("completion replay after lease expiry");
+    let replay =
+        invocation::complete_invocation(&reopened, &receiver.id, &reserved.id, completion.clone())
+            .await
+            .expect("completion replay after lease expiry");
     assert!(!replay.1);
     assert_eq!(replay.0, completed);
     let mut changed = completion;
     changed.payload = json!({ "status": "different" });
-    let conflict = reopened
-        .complete_invocation(&receiver.id, &reserved.id, changed)
+    let conflict = invocation::complete_invocation(&reopened, &receiver.id, &reserved.id, changed)
         .await
         .expect_err("changed completion must conflict");
     assert!(matches!(conflict, FleetError::Conflict(_)));

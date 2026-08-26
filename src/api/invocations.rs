@@ -20,6 +20,7 @@ use super::{
     AppState,
     guard::{require_bound_agent, require_operator},
 };
+use crate::invocation;
 
 pub(super) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::default()
@@ -56,7 +57,7 @@ async fn reserve_invocations(
 ) -> Result<Json<crate::model::InvocationBatch>, FleetError> {
     require_bound_agent(&principal, &agent_id)?;
     Ok(Json(
-        state.store.reserve_invocations(&agent_id, input).await?,
+        invocation::reserve_invocations(&state.store, &agent_id, input).await?,
     ))
 }
 
@@ -91,10 +92,7 @@ async fn arm_invocation(
 ) -> Result<Json<crate::model::Invocation>, FleetError> {
     require_bound_agent(&principal, &agent_id)?;
     Ok(Json(
-        state
-            .store
-            .arm_invocation(&agent_id, &invocation_id, input)
-            .await?,
+        invocation::arm_invocation(&state.store, &agent_id, &invocation_id, input).await?,
     ))
 }
 
@@ -129,10 +127,8 @@ async fn complete_invocation(
     Json(input): Json<CompleteInvocation>,
 ) -> Result<(StatusCode, Json<crate::model::InvocationCompletion>), FleetError> {
     require_bound_agent(&principal, &agent_id)?;
-    let (completion, created) = state
-        .store
-        .complete_invocation(&agent_id, &invocation_id, input)
-        .await?;
+    let (completion, created) =
+        invocation::complete_invocation(&state.store, &agent_id, &invocation_id, input).await?;
     if created {
         let _unused = state.messages.send(MessageCommitWake::Committed(Box::new(
             completion.result.clone(),
@@ -176,6 +172,6 @@ async fn list_invocations(
 ) -> Result<Json<Vec<crate::model::Invocation>>, FleetError> {
     require_operator(&principal)?;
     Ok(Json(
-        state.store.list_invocations(query.agent.as_deref()).await?,
+        invocation::list_invocations(&state.store, query.agent.as_deref()).await?,
     ))
 }

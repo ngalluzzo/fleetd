@@ -17,7 +17,7 @@ pub mod controller;
 mod conversation_surface;
 mod delivery;
 pub mod error;
-mod invocation;
+pub mod invocation;
 mod message_commit_hint;
 pub mod message_grant_broker;
 pub mod operations;

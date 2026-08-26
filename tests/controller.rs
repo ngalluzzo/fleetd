@@ -9,6 +9,9 @@ use std::{
     time::Duration,
 };
 
+use fleetd::invocation;
+use fleetd::operations;
+use fleetd::session_binding;
 use fleetd::{
     controller::{
         ManagedHarnessController, ManagedTurn, ManagedTurnGrant, ManagedTurnOutcome,
@@ -37,9 +40,7 @@ struct RecordingGrant {
 impl ManagedTurnGrant for RecordingGrant {
     fn activate<'a>(&'a self, invocation: &'a Invocation) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
-            let armed = self
-                .store
-                .list_invocations(Some(&invocation.agent_id))
+            let armed = invocation::list_invocations(&self.store, Some(&invocation.agent_id))
                 .await
                 .map_err(|error| error.to_string())?
                 .into_iter()
@@ -121,19 +122,19 @@ async fn fixture() -> (
         )
         .await
         .expect("append request");
-    let invocation = store
-        .reserve_invocations(
-            &receiver.id,
-            ClaimDeliveries {
-                limit: 1,
-                lease_duration_ms: 30_000,
-            },
-        )
-        .await
-        .expect("reserve invocation")
-        .invocations
-        .pop()
-        .expect("one invocation");
+    let invocation = invocation::reserve_invocations(
+        &store,
+        &receiver.id,
+        ClaimDeliveries {
+            limit: 1,
+            lease_duration_ms: 30_000,
+        },
+    )
+    .await
+    .expect("reserve invocation")
+    .invocations
+    .pop()
+    .expect("one invocation");
     (directory, store, sender, invocation)
 }
 
@@ -168,8 +169,9 @@ async fn open_harness(
     let harness = process.into_harness_acp().expect("typed harness");
     let description = harness.describe().await.expect("describe harness");
     let generation_id = "controller-test-generation".to_owned();
-    store
-        .record_plugin_generation(NewPluginGeneration {
+    operations::record_plugin_generation(
+        store,
+        NewPluginGeneration {
             id: generation_id.clone(),
             agent_id: agent_id.to_owned(),
             plugin: harness.manifest().plugin.clone(),
@@ -178,24 +180,25 @@ async fn open_harness(
             description: description.clone(),
             compatibility_digest: "sha256:mock-harness-v1".to_owned(),
             heartbeat_interval_ms: 5_000,
-        })
-        .await
-        .expect("record plugin generation");
-    let acquired = store
-        .acquire_session_binding(
-            agent_id,
-            AcquireSessionBinding {
-                lane_policy: "per-agent".to_owned(),
-                lane_key: "primary".to_owned(),
-                owner_instance_id: "controller-test-process".to_owned(),
-                profile_digest: description.profile_digest.clone(),
-                compatibility_digest: "sha256:mock-harness-v1".to_owned(),
-                working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
-                additional_directories: Vec::new(),
-            },
-        )
-        .await
-        .expect("acquire durable session binding");
+        },
+    )
+    .await
+    .expect("record plugin generation");
+    let acquired = session_binding::acquire_session_binding(
+        store,
+        agent_id,
+        AcquireSessionBinding {
+            lane_policy: "per-agent".to_owned(),
+            lane_key: "primary".to_owned(),
+            owner_instance_id: "controller-test-process".to_owned(),
+            profile_digest: description.profile_digest.clone(),
+            compatibility_digest: "sha256:mock-harness-v1".to_owned(),
+            working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
+            additional_directories: Vec::new(),
+        },
+    )
+    .await
+    .expect("acquire durable session binding");
     let open_mode = match acquired.mode {
         SessionAcquisitionMode::Create => OpenSessionMode::Create,
         SessionAcquisitionMode::Resume { session_ref } => OpenSessionMode::Resume { session_ref },
@@ -213,8 +216,7 @@ async fn open_harness(
         })
         .await
         .expect("open session");
-    store
-        .record_session_opened(agent_id, &binding, &session.session_ref)
+    session_binding::record_session_opened(store, agent_id, &binding, &session.session_ref)
         .await
         .expect("persist native session reference");
     (harness, session.session_ref, binding, generation_id)
@@ -273,8 +275,7 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
         completion.result.payload["assistant_messages"][0]["content"][0]["text"],
         "done"
     );
-    let observation = store
-        .list_invocation_observations(Some(&agent_id))
+    let observation = operations::list_invocation_observations(&store, Some(&agent_id))
         .await
         .expect("list durable invocation evidence")
         .pop()
@@ -294,8 +295,7 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
     );
     assert_eq!(observation.session_quiescent, Some(true));
     assert_eq!(observation.usage, Some(json!({})));
-    let session = store
-        .list_session_bindings(Some(&agent_id))
+    let session = session_binding::list_session_bindings(&store, Some(&agent_id))
         .await
         .expect("list durable session")
         .pop()
@@ -423,8 +423,7 @@ async fn managed_controller_parks_post_arm_protocol_ambiguity() {
     };
     assert_eq!(blocked.message.id, input_message);
     assert!(blocked.reason.contains("turn evidence failed"));
-    let session = store
-        .list_session_bindings(Some(&agent_id))
+    let session = session_binding::list_session_bindings(&store, Some(&agent_id))
         .await
         .expect("list uncertain session")
         .pop()

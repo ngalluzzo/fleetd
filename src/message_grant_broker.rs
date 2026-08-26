@@ -399,6 +399,7 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use crate::invocation;
     use std::collections::HashMap;
 
     use axum::http::{HeaderName, HeaderValue};
@@ -546,19 +547,19 @@ mod tests {
             )
             .await
             .expect("append source message");
-        let invocation = store
-            .reserve_invocations(
-                &worker.id,
-                ClaimDeliveries {
-                    limit: 1,
-                    lease_duration_ms: 300_000,
-                },
-            )
-            .await
-            .expect("reserve invocation")
-            .invocations
-            .pop()
-            .expect("one invocation");
+        let invocation = invocation::reserve_invocations(
+            &store,
+            &worker.id,
+            ClaimDeliveries {
+                limit: 1,
+                lease_duration_ms: 300_000,
+            },
+        )
+        .await
+        .expect("reserve invocation")
+        .invocations
+        .pop()
+        .expect("one invocation");
         Fixture {
             _directory: directory,
             store,

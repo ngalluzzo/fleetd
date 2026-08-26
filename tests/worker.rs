@@ -2,6 +2,9 @@
 
 use std::{path::PathBuf, time::Duration};
 
+use fleetd::invocation;
+use fleetd::operations;
+use fleetd::session_binding;
 use fleetd::settlement;
 use fleetd::{
     model::{
@@ -194,11 +197,10 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
     assert_eq!(report.blocked, 0);
     assert_eq!(report.plugin_generations, 1);
     assert_eq!(report.reservations, 2);
-    let generations = fixture
-        .store
-        .list_plugin_generations(Some(&fixture.receiver_id))
-        .await
-        .expect("list durable plugin generations");
+    let generations =
+        operations::list_plugin_generations(&fixture.store, Some(&fixture.receiver_id))
+            .await
+            .expect("list durable plugin generations");
     assert_eq!(generations.len(), 1);
     assert_eq!(generations[0].state, PluginGenerationState::Stopped);
     assert_eq!(generations[0].health, PluginGenerationHealth::Stopped);
@@ -210,11 +212,10 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
         generations[0].shutdown_outcome,
         Some(PluginShutdownOutcome::Graceful)
     );
-    let observations = fixture
-        .store
-        .list_invocation_observations(Some(&fixture.receiver_id))
-        .await
-        .expect("list bounded invocation observations");
+    let observations =
+        operations::list_invocation_observations(&fixture.store, Some(&fixture.receiver_id))
+            .await
+            .expect("list bounded invocation observations");
     assert_eq!(observations.len(), 2);
     assert!(observations.iter().all(|observation| {
         observation.generation_id == generations[0].id
@@ -225,11 +226,10 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
             && observation.session_quiescent == Some(true)
             && observation.usage == Some(json!({}))
     }));
-    let sessions = fixture
-        .store
-        .list_session_bindings(Some(&fixture.receiver_id))
-        .await
-        .expect("list sessions");
+    let sessions =
+        session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver_id))
+            .await
+            .expect("list sessions");
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].state, SessionBindingState::Ready);
     assert_eq!(sessions[0].binding.binding_generation, 1);
@@ -272,9 +272,7 @@ async fn worker_skips_earlier_unaccepted_delivery_without_leasing_it() {
 
     assert_eq!(report.reservations, 1);
     assert_eq!(report.completed, 1);
-    let invocation = fixture
-        .store
-        .list_invocations(Some(&fixture.receiver_id))
+    let invocation = invocation::list_invocations(&fixture.store, Some(&fixture.receiver_id))
         .await
         .expect("list invocations")
         .pop()
@@ -324,11 +322,10 @@ async fn changed_inbound_contract_rotates_the_session_compatibility_generation()
         .await
         .expect("complete beta turn");
 
-    let sessions = fixture
-        .store
-        .list_session_bindings(Some(&fixture.receiver_id))
-        .await
-        .expect("list rotated bindings");
+    let sessions =
+        session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver_id))
+            .await
+            .expect("list rotated bindings");
     assert_eq!(sessions.len(), 2);
     assert!(sessions.iter().any(|session| {
         session.binding.binding_generation == 1 && session.state == SessionBindingState::Retired
@@ -364,11 +361,10 @@ async fn fresh_worker_generation_adopts_and_resumes_ready_session() {
         .await
         .expect("second generation resumes");
 
-    let sessions = fixture
-        .store
-        .list_session_bindings(Some(&fixture.receiver_id))
-        .await
-        .expect("list sessions");
+    let sessions =
+        session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver_id))
+            .await
+            .expect("list sessions");
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].state, SessionBindingState::Ready);
     assert_eq!(sessions[0].binding.binding_generation, 1);
@@ -403,11 +399,10 @@ async fn session_open_crash_releases_unarmed_work_and_restarts_generation() {
     assert_eq!(report.reservations, 2);
     assert_eq!(report.pre_arm_retries, 1);
     assert_eq!(report.completed, 1);
-    let sessions = fixture
-        .store
-        .list_session_bindings(Some(&fixture.receiver_id))
-        .await
-        .expect("list generations");
+    let sessions =
+        session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver_id))
+            .await
+            .expect("list generations");
     assert_eq!(sessions.len(), 2);
     assert!(sessions.iter().any(|session| {
         session.binding.binding_generation == 2 && session.state == SessionBindingState::Ready
@@ -482,16 +477,12 @@ async fn cancellation_after_reservation_releases_work_before_dispatch() {
     assert_eq!(report.pre_arm_retries, 1);
     assert_eq!(report.settled_turns(), 0);
     assert!(
-        fixture
-            .store
-            .list_session_bindings(Some(&fixture.receiver_id))
+        session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver_id))
             .await
             .expect("list sessions")
             .is_empty()
     );
-    let invocation = fixture
-        .store
-        .list_invocations(Some(&fixture.receiver_id))
+    let invocation = invocation::list_invocations(&fixture.store, Some(&fixture.receiver_id))
         .await
         .expect("list invocations")
         .pop()
@@ -531,13 +522,12 @@ async fn post_arm_protocol_ambiguity_is_blocked_without_reexecution() {
         .await
         .expect("list blocks");
     assert_eq!(blocked.len(), 1);
-    let session = fixture
-        .store
-        .list_session_bindings(Some(&fixture.receiver_id))
-        .await
-        .expect("list sessions")
-        .pop()
-        .expect("one session");
+    let session =
+        session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver_id))
+            .await
+            .expect("list sessions")
+            .pop()
+            .expect("one session");
     assert_eq!(session.state, SessionBindingState::Uncertain);
 }
 
@@ -577,9 +567,7 @@ async fn adapter_failure_releases_only_the_unarmed_reservation() {
         .await
         .expect_err("adapter failure stops the worker");
     assert!(matches!(error, ContinuousWorkerError::Adapter(_)));
-    let invocation = fixture
-        .store
-        .list_invocations(Some(&fixture.receiver_id))
+    let invocation = invocation::list_invocations(&fixture.store, Some(&fixture.receiver_id))
         .await
         .expect("list invocations")
         .pop()

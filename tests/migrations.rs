@@ -1,3 +1,6 @@
+use fleetd::invocation;
+use fleetd::operations;
+use fleetd::session_binding;
 use fleetd::settlement;
 use fleetd::{
     model::{
@@ -268,15 +271,13 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
 
 async fn assert_operational_tables_exist_after_migration(store: &fleetd::store::Store) {
     assert!(
-        store
-            .list_plugin_generations(None)
+        operations::list_plugin_generations(store, None)
             .await
             .expect("list plugin generations after migration")
             .is_empty()
     );
     assert!(
-        store
-            .list_invocation_observations(None)
+        operations::list_invocation_observations(store, None)
             .await
             .expect("list invocation observations after migration")
             .is_empty()
@@ -287,26 +288,30 @@ async fn assert_session_bindings_work_after_migration(
     store: &fleetd::store::Store,
     agent_id: &str,
 ) {
-    let acquired = store
-        .acquire_session_binding(
-            agent_id,
-            AcquireSessionBinding {
-                lane_policy: "per-agent".to_owned(),
-                lane_key: "primary".to_owned(),
-                owner_instance_id: "migration-controller".to_owned(),
-                profile_digest: "sha256:migration-profile".to_owned(),
-                compatibility_digest: "sha256:migration-driver".to_owned(),
-                working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
-                additional_directories: Vec::new(),
-            },
-        )
-        .await
-        .expect("acquire session after migration");
+    let acquired = session_binding::acquire_session_binding(
+        store,
+        agent_id,
+        AcquireSessionBinding {
+            lane_policy: "per-agent".to_owned(),
+            lane_key: "primary".to_owned(),
+            owner_instance_id: "migration-controller".to_owned(),
+            profile_digest: "sha256:migration-profile".to_owned(),
+            compatibility_digest: "sha256:migration-driver".to_owned(),
+            working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
+            additional_directories: Vec::new(),
+        },
+    )
+    .await
+    .expect("acquire session after migration");
     assert_eq!(acquired.session.state, SessionBindingState::Opening);
-    let ready = store
-        .record_session_opened(agent_id, &acquired.session.binding, "migrated-session")
-        .await
-        .expect("persist session after migration");
+    let ready = session_binding::record_session_opened(
+        store,
+        agent_id,
+        &acquired.session.binding,
+        "migrated-session",
+    )
+    .await
+    .expect("persist session after migration");
     assert_eq!(ready.state, SessionBindingState::Ready);
 }
 
@@ -315,28 +320,28 @@ async fn assert_managed_blocking_works_after_migration(
     recipient_id: &str,
     message_id: &str,
 ) {
-    let batch = store
-        .reserve_invocations(
-            recipient_id,
-            ClaimDeliveries {
-                limit: 1,
-                lease_duration_ms: 10_000,
-            },
-        )
-        .await
-        .expect("reserve invocation after migration");
+    let batch = invocation::reserve_invocations(
+        store,
+        recipient_id,
+        ClaimDeliveries {
+            limit: 1,
+            lease_duration_ms: 10_000,
+        },
+    )
+    .await
+    .expect("reserve invocation after migration");
     let invocation = batch.invocations.first().expect("one invocation");
-    store
-        .arm_invocation(
-            recipient_id,
-            &invocation.id,
-            ArmInvocation {
-                lease_token: invocation.lease_token.clone(),
-                fence_token: invocation.fence_token.clone(),
-            },
-        )
-        .await
-        .expect("arm invocation after migration");
+    invocation::arm_invocation(
+        store,
+        recipient_id,
+        &invocation.id,
+        ArmInvocation {
+            lease_token: invocation.lease_token.clone(),
+            fence_token: invocation.fence_token.clone(),
+        },
+    )
+    .await
+    .expect("arm invocation after migration");
     let (blocked, was_created) = settlement::block_delivery(
         store,
         recipient_id,

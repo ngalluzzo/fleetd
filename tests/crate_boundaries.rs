@@ -303,3 +303,19 @@ fn only_the_kernel_writes_kernel_tables() {
         }
     }
 }
+
+#[test]
+fn only_the_kernel_adds_methods_to_the_store() {
+    for module in ABOVE_KERNEL {
+        let path = workspace_root().join(format!("src/{module}.rs"));
+        let Ok(source) = fs::read_to_string(&path) else {
+            continue;
+        };
+        assert!(
+            !source.contains("impl Store"),
+            "`{module}` adds methods to `Store`, which the kernel owns. Once these layers \
+             are crates that is an orphan-rule error, so compose over `&Store` with a free \
+             function instead."
+        );
+    }
+}

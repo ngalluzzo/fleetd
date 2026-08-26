@@ -33,315 +33,88 @@ pub struct BoundInvocation {
     pub session: SessionBinding,
 }
 
-impl Store {
-    /// Acquires one session lane for a fresh controller process instance.
-    ///
-    /// A compatible ready session is adopted by incrementing `owner_epoch`.
-    /// An incompatible ready session or an abandoned opening rotates to the
-    /// next binding generation. Active or uncertain sessions fail closed.
-    /// Repeating the call with the same owner instance is idempotent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid input, an unknown agent, active or
-    /// uncertain prior ownership, epoch overflow, or persistence failure.
-    pub async fn acquire_session_binding(
-        &self,
-        agent_id: &str,
-        input: AcquireSessionBinding,
-    ) -> Result<SessionAcquisition, FleetError> {
-        validate_acquisition(agent_id, &input)?;
-        crate::delivery::ensure_agent(&self.pool, agent_id).await?;
-        let directories_json = serde_json::to_string(&input.additional_directories)?;
-        let now = now_ms();
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let current = current_binding_row(
-            &mut transaction,
-            agent_id,
-            &input.lane_policy,
-            &input.lane_key,
-        )
-        .await?;
-        let acquisition = match current {
-            None => {
-                insert_after_latest_retired(
-                    &mut transaction,
-                    agent_id,
-                    &input,
-                    &directories_json,
-                    now,
-                )
+/// Acquires one session lane for a fresh controller process instance.
+///
+/// A compatible ready session is adopted by incrementing `owner_epoch`.
+/// An incompatible ready session or an abandoned opening rotates to the
+/// next binding generation. Active or uncertain sessions fail closed.
+/// Repeating the call with the same owner instance is idempotent.
+///
+/// # Errors
+///
+/// Returns an error for invalid input, an unknown agent, active or
+/// uncertain prior ownership, epoch overflow, or persistence failure.
+pub async fn acquire_session_binding(
+    store: &Store,
+    agent_id: &str,
+    input: AcquireSessionBinding,
+) -> Result<SessionAcquisition, FleetError> {
+    validate_acquisition(agent_id, &input)?;
+    crate::delivery::ensure_agent(store.pool(), agent_id).await?;
+    let directories_json = serde_json::to_string(&input.additional_directories)?;
+    let now = now_ms();
+    let mut transaction = store.begin_immediate().await?;
+    let current = current_binding_row(
+        &mut transaction,
+        agent_id,
+        &input.lane_policy,
+        &input.lane_key,
+    )
+    .await?;
+    let acquisition = match current {
+        None => {
+            insert_after_latest_retired(&mut transaction, agent_id, &input, &directories_json, now)
                 .await?
-            }
-            Some(row) => {
-                acquire_existing(
-                    &mut transaction,
-                    row,
-                    agent_id,
-                    &input,
-                    &directories_json,
-                    now,
-                )
-                .await?
-            }
-        };
-        transaction.commit().await?;
-        Ok(acquisition)
-    }
-
-    /// Persists the opaque native session reference before any prompt is armed.
-    /// An identical retry by the same owner epoch is idempotent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an invalid reference, stale owner fence,
-    /// conflicting replay, unknown binding, or persistence failure.
-    pub async fn record_session_opened(
-        &self,
-        agent_id: &str,
-        binding: &Binding,
-        session_ref: &str,
-    ) -> Result<SessionBinding, FleetError> {
-        validate_binding(binding)?;
-        validate_bounded("session reference", session_ref, MAX_SESSION_REF_BYTES)?;
-        let generation = as_i64("binding generation", binding.binding_generation)?;
-        let owner_epoch = as_i64("owner epoch", binding.owner_epoch)?;
-        let now = now_ms();
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let row = exact_binding_row(&mut transaction, agent_id, binding).await?;
-        validate_owner(&row, binding)?;
-        let state: String = row.try_get("state")?;
-        match state.as_str() {
-            "opening" => {
-                let updated = sqlx::query(
-                    r"
-                    UPDATE session_bindings
-                    SET state = 'ready', session_ref = ?, opened_at_ms = ?, updated_at_ms = ?
-                    WHERE binding_id = ? AND binding_generation = ? AND agent_id = ?
-                      AND owner_epoch = ? AND state = 'opening'
-                    ",
-                )
-                .bind(session_ref)
-                .bind(now)
-                .bind(now)
-                .bind(&binding.binding_id)
-                .bind(generation)
-                .bind(agent_id)
-                .bind(owner_epoch)
-                .execute(&mut *transaction)
-                .await?;
-                require_one(
-                    updated.rows_affected(),
-                    "session binding changed while opening",
-                )?;
-            }
-            "ready"
-                if row.try_get::<Option<String>, _>("session_ref")?.as_deref()
-                    == Some(session_ref) => {}
-            "ready" => {
-                return Err(FleetError::Conflict(
-                    "session opening was replayed with a different native reference".to_owned(),
-                ));
-            }
-            _ => {
-                return Err(FleetError::Conflict(format!(
-                    "session reference cannot be recorded while binding is {state}"
-                )));
-            }
         }
-        let session = binding_by_identity(&mut transaction, agent_id, binding).await?;
-        transaction.commit().await?;
-        Ok(session)
-    }
-
-    /// Atomically arms a reserved invocation and activates its exact durable
-    /// session owner fence.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for a stale or non-ready session owner, mismatched
-    /// native reference, conflicting active turn, invalid invocation fence, or
-    /// persistence failure.
-    pub async fn arm_session_invocation(
-        &self,
-        agent_id: &str,
-        invocation_id: &str,
-        binding: &Binding,
-        session_ref: &str,
-        generation_id: &str,
-        input: ArmInvocation,
-    ) -> Result<BoundInvocation, FleetError> {
-        validate_binding(binding)?;
-        validate_bounded("session reference", session_ref, MAX_SESSION_REF_BYTES)?;
-        let now = now_ms();
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let row = exact_binding_row(&mut transaction, agent_id, binding).await?;
-        validate_owner(&row, binding)?;
-        validate_session_reference(&row, session_ref)?;
-        validate_binding_activation(&row, invocation_id)?;
-        let invocation =
-            arm_invocation_transaction(&mut transaction, agent_id, invocation_id, &input, now)
-                .await?;
-        activate_binding_turn(&mut transaction, agent_id, invocation_id, binding, now).await?;
-        begin_invocation_observation(
-            &mut transaction,
-            agent_id,
-            invocation_id,
-            generation_id,
-            binding,
-            now,
-        )
-        .await?;
-        let session = binding_by_identity(&mut transaction, agent_id, binding).await?;
-        transaction.commit().await?;
-        Ok(BoundInvocation {
-            invocation,
-            session,
-        })
-    }
-
-    /// Atomically publishes a known invocation result, acknowledges its input,
-    /// and returns its session binding to ready.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for a stale binding fence, non-active binding turn,
-    /// invalid completion replay, expired invocation lease, or persistence
-    /// failure.
-    pub async fn complete_session_invocation(
-        &self,
-        agent_id: &str,
-        invocation_id: &str,
-        binding: &Binding,
-        persistence: SessionPersistence,
-        input: CompleteInvocation,
-    ) -> Result<(InvocationCompletion, bool), FleetError> {
-        validate_binding(binding)?;
-        let now = now_ms();
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        validate_bound_turn(&mut transaction, agent_id, invocation_id, binding, true).await?;
-        let completion = complete_invocation_transaction(
-            &mut transaction,
-            agent_id,
-            invocation_id,
-            &input,
-            now,
-            true,
-        )
-        .await?;
-        settle_quiescent_turn(
-            &mut transaction,
-            agent_id,
-            invocation_id,
-            binding,
-            persistence,
-            now,
-        )
-        .await?;
-        transaction.commit().await?;
-        self.notify_message_commit(completion.1);
-        Ok(completion)
-    }
-
-    /// Fences an active session as uncertain before its delivery is parked.
-    /// The same reason is idempotent; changed evidence conflicts.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid evidence, stale ownership, a non-active
-    /// turn, conflicting replay, or persistence failure.
-    pub async fn mark_session_invocation_uncertain(
-        &self,
-        agent_id: &str,
-        invocation_id: &str,
-        binding: &Binding,
-        reason: &str,
-    ) -> Result<SessionBinding, FleetError> {
-        validate_binding(binding)?;
-        validate_bounded("uncertain reason", reason, MAX_REASON_BYTES)?;
-        let now = now_ms();
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        validate_bound_turn(&mut transaction, agent_id, invocation_id, binding, false).await?;
-        let row = exact_binding_row(&mut transaction, agent_id, binding).await?;
-        let state: String = row.try_get("state")?;
-        if state == "uncertain" {
-            if row
-                .try_get::<Option<String>, _>("uncertain_reason")?
-                .as_deref()
-                != Some(reason)
-            {
-                return Err(FleetError::Conflict(
-                    "session uncertainty was already recorded with different evidence".to_owned(),
-                ));
-            }
-        } else if state == "active" {
-            mark_turn_uncertain(
+        Some(row) => {
+            acquire_existing(
                 &mut transaction,
+                row,
                 agent_id,
-                invocation_id,
-                binding,
-                reason,
+                &input,
+                &directories_json,
                 now,
             )
-            .await?;
-        } else {
-            return Err(FleetError::Conflict(format!(
-                "session turn cannot become uncertain while binding is {state}"
-            )));
+            .await?
         }
-        let session = binding_by_identity(&mut transaction, agent_id, binding).await?;
-        transaction.commit().await?;
-        Ok(session)
-    }
+    };
+    transaction.commit().await?;
+    Ok(acquisition)
+}
 
-    /// Retires a non-active binding generation under its exact owner fence.
-    /// A later acquisition creates the next generation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid evidence, stale ownership, an active turn,
-    /// conflicting replay, unknown binding, or persistence failure.
-    pub async fn retire_session_binding(
-        &self,
-        agent_id: &str,
-        binding: &Binding,
-        reason: &str,
-    ) -> Result<SessionBinding, FleetError> {
-        validate_binding(binding)?;
-        validate_bounded("retirement reason", reason, MAX_REASON_BYTES)?;
-        let generation = as_i64("binding generation", binding.binding_generation)?;
-        let owner_epoch = as_i64("owner epoch", binding.owner_epoch)?;
-        let now = now_ms();
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let row = exact_binding_row(&mut transaction, agent_id, binding).await?;
-        validate_owner(&row, binding)?;
-        let state: String = row.try_get("state")?;
-        if state == "active" {
-            return Err(FleetError::Conflict(
-                "active session binding must become uncertain before retirement".to_owned(),
-            ));
-        }
-        if state == "retired" {
-            if row
-                .try_get::<Option<String>, _>("retired_reason")?
-                .as_deref()
-                != Some(reason)
-            {
-                return Err(FleetError::Conflict(
-                    "session binding was already retired for a different reason".to_owned(),
-                ));
-            }
-        } else {
+/// Persists the opaque native session reference before any prompt is armed.
+/// An identical retry by the same owner epoch is idempotent.
+///
+/// # Errors
+///
+/// Returns an error for an invalid reference, stale owner fence,
+/// conflicting replay, unknown binding, or persistence failure.
+pub async fn record_session_opened(
+    store: &Store,
+    agent_id: &str,
+    binding: &Binding,
+    session_ref: &str,
+) -> Result<SessionBinding, FleetError> {
+    validate_binding(binding)?;
+    validate_bounded("session reference", session_ref, MAX_SESSION_REF_BYTES)?;
+    let generation = as_i64("binding generation", binding.binding_generation)?;
+    let owner_epoch = as_i64("owner epoch", binding.owner_epoch)?;
+    let now = now_ms();
+    let mut transaction = store.begin_immediate().await?;
+    let row = exact_binding_row(&mut transaction, agent_id, binding).await?;
+    validate_owner(&row, binding)?;
+    let state: String = row.try_get("state")?;
+    match state.as_str() {
+        "opening" => {
             let updated = sqlx::query(
                 r"
                 UPDATE session_bindings
-                SET state = 'retired', active_invocation_id = NULL,
-                    retired_reason = ?, retired_at_ms = ?, updated_at_ms = ?
+                SET state = 'ready', session_ref = ?, opened_at_ms = ?, updated_at_ms = ?
                 WHERE binding_id = ? AND binding_generation = ? AND agent_id = ?
-                  AND owner_epoch = ? AND state != 'active' AND state != 'retired'
+                  AND owner_epoch = ? AND state = 'opening'
                 ",
             )
-            .bind(reason)
+            .bind(session_ref)
             .bind(now)
             .bind(now)
             .bind(&binding.binding_id)
@@ -352,40 +125,258 @@ impl Store {
             .await?;
             require_one(
                 updated.rows_affected(),
-                "session binding changed during retirement",
+                "session binding changed while opening",
             )?;
         }
-        let session = binding_by_identity(&mut transaction, agent_id, binding).await?;
-        transaction.commit().await?;
-        Ok(session)
+        "ready"
+            if row.try_get::<Option<String>, _>("session_ref")?.as_deref() == Some(session_ref) => {
+        }
+        "ready" => {
+            return Err(FleetError::Conflict(
+                "session opening was replayed with a different native reference".to_owned(),
+            ));
+        }
+        _ => {
+            return Err(FleetError::Conflict(format!(
+                "session reference cannot be recorded while binding is {state}"
+            )));
+        }
     }
+    let session = binding_by_identity(&mut transaction, agent_id, binding).await?;
+    transaction.commit().await?;
+    Ok(session)
+}
 
-    /// Lists durable session generations for controller or operator inspection.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when stored records cannot be read or decoded.
-    pub async fn list_session_bindings(
-        &self,
-        agent_id: Option<&str>,
-    ) -> Result<Vec<SessionBinding>, FleetError> {
-        let rows = match agent_id {
-            Some(agent_id) => sqlx::query(&format!(
-                "{} WHERE agent_id = ? ORDER BY updated_at_ms DESC, binding_id, binding_generation DESC LIMIT 500",
-                binding_select()
-            ))
-            .bind(agent_id)
-            .fetch_all(&self.pool)
-            .await?,
-            None => sqlx::query(&format!(
-                "{} ORDER BY updated_at_ms DESC, binding_id, binding_generation DESC LIMIT 500",
-                binding_select()
-            ))
-            .fetch_all(&self.pool)
-            .await?,
-        };
-        rows.iter().map(binding_from_row).collect()
+/// Atomically arms a reserved invocation and activates its exact durable
+/// session owner fence.
+///
+/// # Errors
+///
+/// Returns an error for a stale or non-ready session owner, mismatched
+/// native reference, conflicting active turn, invalid invocation fence, or
+/// persistence failure.
+pub async fn arm_session_invocation(
+    store: &Store,
+    agent_id: &str,
+    invocation_id: &str,
+    binding: &Binding,
+    session_ref: &str,
+    generation_id: &str,
+    input: ArmInvocation,
+) -> Result<BoundInvocation, FleetError> {
+    validate_binding(binding)?;
+    validate_bounded("session reference", session_ref, MAX_SESSION_REF_BYTES)?;
+    let now = now_ms();
+    let mut transaction = store.begin_immediate().await?;
+    let row = exact_binding_row(&mut transaction, agent_id, binding).await?;
+    validate_owner(&row, binding)?;
+    validate_session_reference(&row, session_ref)?;
+    validate_binding_activation(&row, invocation_id)?;
+    let invocation =
+        arm_invocation_transaction(&mut transaction, agent_id, invocation_id, &input, now).await?;
+    activate_binding_turn(&mut transaction, agent_id, invocation_id, binding, now).await?;
+    begin_invocation_observation(
+        &mut transaction,
+        agent_id,
+        invocation_id,
+        generation_id,
+        binding,
+        now,
+    )
+    .await?;
+    let session = binding_by_identity(&mut transaction, agent_id, binding).await?;
+    transaction.commit().await?;
+    Ok(BoundInvocation {
+        invocation,
+        session,
+    })
+}
+
+/// Atomically publishes a known invocation result, acknowledges its input,
+/// and returns its session binding to ready.
+///
+/// # Errors
+///
+/// Returns an error for a stale binding fence, non-active binding turn,
+/// invalid completion replay, expired invocation lease, or persistence
+/// failure.
+pub async fn complete_session_invocation(
+    store: &Store,
+    agent_id: &str,
+    invocation_id: &str,
+    binding: &Binding,
+    persistence: SessionPersistence,
+    input: CompleteInvocation,
+) -> Result<(InvocationCompletion, bool), FleetError> {
+    validate_binding(binding)?;
+    let now = now_ms();
+    let mut transaction = store.begin_immediate().await?;
+    validate_bound_turn(&mut transaction, agent_id, invocation_id, binding, true).await?;
+    let completion = complete_invocation_transaction(
+        &mut transaction,
+        agent_id,
+        invocation_id,
+        &input,
+        now,
+        true,
+    )
+    .await?;
+    settle_quiescent_turn(
+        &mut transaction,
+        agent_id,
+        invocation_id,
+        binding,
+        persistence,
+        now,
+    )
+    .await?;
+    transaction.commit().await?;
+    store.notify_message_commit(completion.1);
+    Ok(completion)
+}
+
+/// Fences an active session as uncertain before its delivery is parked.
+/// The same reason is idempotent; changed evidence conflicts.
+///
+/// # Errors
+///
+/// Returns an error for invalid evidence, stale ownership, a non-active
+/// turn, conflicting replay, or persistence failure.
+pub async fn mark_session_invocation_uncertain(
+    store: &Store,
+    agent_id: &str,
+    invocation_id: &str,
+    binding: &Binding,
+    reason: &str,
+) -> Result<SessionBinding, FleetError> {
+    validate_binding(binding)?;
+    validate_bounded("uncertain reason", reason, MAX_REASON_BYTES)?;
+    let now = now_ms();
+    let mut transaction = store.begin_immediate().await?;
+    validate_bound_turn(&mut transaction, agent_id, invocation_id, binding, false).await?;
+    let row = exact_binding_row(&mut transaction, agent_id, binding).await?;
+    let state: String = row.try_get("state")?;
+    if state == "uncertain" {
+        if row
+            .try_get::<Option<String>, _>("uncertain_reason")?
+            .as_deref()
+            != Some(reason)
+        {
+            return Err(FleetError::Conflict(
+                "session uncertainty was already recorded with different evidence".to_owned(),
+            ));
+        }
+    } else if state == "active" {
+        mark_turn_uncertain(
+            &mut transaction,
+            agent_id,
+            invocation_id,
+            binding,
+            reason,
+            now,
+        )
+        .await?;
+    } else {
+        return Err(FleetError::Conflict(format!(
+            "session turn cannot become uncertain while binding is {state}"
+        )));
     }
+    let session = binding_by_identity(&mut transaction, agent_id, binding).await?;
+    transaction.commit().await?;
+    Ok(session)
+}
+
+/// Retires a non-active binding generation under its exact owner fence.
+/// A later acquisition creates the next generation.
+///
+/// # Errors
+///
+/// Returns an error for invalid evidence, stale ownership, an active turn,
+/// conflicting replay, unknown binding, or persistence failure.
+pub async fn retire_session_binding(
+    store: &Store,
+    agent_id: &str,
+    binding: &Binding,
+    reason: &str,
+) -> Result<SessionBinding, FleetError> {
+    validate_binding(binding)?;
+    validate_bounded("retirement reason", reason, MAX_REASON_BYTES)?;
+    let generation = as_i64("binding generation", binding.binding_generation)?;
+    let owner_epoch = as_i64("owner epoch", binding.owner_epoch)?;
+    let now = now_ms();
+    let mut transaction = store.begin_immediate().await?;
+    let row = exact_binding_row(&mut transaction, agent_id, binding).await?;
+    validate_owner(&row, binding)?;
+    let state: String = row.try_get("state")?;
+    if state == "active" {
+        return Err(FleetError::Conflict(
+            "active session binding must become uncertain before retirement".to_owned(),
+        ));
+    }
+    if state == "retired" {
+        if row
+            .try_get::<Option<String>, _>("retired_reason")?
+            .as_deref()
+            != Some(reason)
+        {
+            return Err(FleetError::Conflict(
+                "session binding was already retired for a different reason".to_owned(),
+            ));
+        }
+    } else {
+        let updated = sqlx::query(
+            r"
+            UPDATE session_bindings
+            SET state = 'retired', active_invocation_id = NULL,
+                retired_reason = ?, retired_at_ms = ?, updated_at_ms = ?
+            WHERE binding_id = ? AND binding_generation = ? AND agent_id = ?
+              AND owner_epoch = ? AND state != 'active' AND state != 'retired'
+            ",
+        )
+        .bind(reason)
+        .bind(now)
+        .bind(now)
+        .bind(&binding.binding_id)
+        .bind(generation)
+        .bind(agent_id)
+        .bind(owner_epoch)
+        .execute(&mut *transaction)
+        .await?;
+        require_one(
+            updated.rows_affected(),
+            "session binding changed during retirement",
+        )?;
+    }
+    let session = binding_by_identity(&mut transaction, agent_id, binding).await?;
+    transaction.commit().await?;
+    Ok(session)
+}
+
+/// Lists durable session generations for controller or operator inspection.
+///
+/// # Errors
+///
+/// Returns an error when stored records cannot be read or decoded.
+pub async fn list_session_bindings(
+    store: &Store,
+    agent_id: Option<&str>,
+) -> Result<Vec<SessionBinding>, FleetError> {
+    let rows = match agent_id {
+        Some(agent_id) => sqlx::query(&format!(
+            "{} WHERE agent_id = ? ORDER BY updated_at_ms DESC, binding_id, binding_generation DESC LIMIT 500",
+            binding_select()
+        ))
+        .bind(agent_id)
+        .fetch_all(store.pool())
+        .await?,
+        None => sqlx::query(&format!(
+            "{} ORDER BY updated_at_ms DESC, binding_id, binding_generation DESC LIMIT 500",
+            binding_select()
+        ))
+        .fetch_all(store.pool())
+        .await?,
+    };
+    rows.iter().map(binding_from_row).collect()
 }
 
 pub(crate) async fn ensure_invocation_not_active_on_session(

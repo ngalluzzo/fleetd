@@ -6,6 +6,8 @@ use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use crate::operations;
+use crate::session_binding;
 use crate::settlement;
 use crate::{
     error::FleetError,
@@ -129,19 +131,19 @@ impl<'store> ManagedHarnessController<'store> {
             result_capture,
             result_context,
         } = turn;
-        self.store
-            .arm_session_invocation(
-                &invocation.agent_id,
-                &invocation.id,
-                &binding,
-                &session_ref,
-                &generation_id,
-                ArmInvocation {
-                    lease_token: invocation.lease_token.clone(),
-                    fence_token: invocation.fence_token.clone(),
-                },
-            )
-            .await?;
+        session_binding::arm_session_invocation(
+            self.store,
+            &invocation.agent_id,
+            &invocation.id,
+            &binding,
+            &session_ref,
+            &generation_id,
+            ArmInvocation {
+                lease_token: invocation.lease_token.clone(),
+                fence_token: invocation.fence_token.clone(),
+            },
+        )
+        .await?;
 
         for (activated, grant) in grants.iter().enumerate() {
             if let Err(error) = grant.activate(&invocation).await {
@@ -310,21 +312,20 @@ impl<'store> ManagedHarnessController<'store> {
             &terminal,
             host_stop_reason,
         );
-        let (completion, _created) = self
-            .store
-            .complete_session_invocation(
-                &invocation.agent_id,
-                &invocation.id,
-                binding,
-                terminal.session_persistence,
-                CompleteInvocation {
-                    lease_token: invocation.lease_token.clone(),
-                    fence_token: invocation.fence_token.clone(),
-                    kind: result_kind,
-                    payload,
-                },
-            )
-            .await?;
+        let (completion, _created) = session_binding::complete_session_invocation(
+            self.store,
+            &invocation.agent_id,
+            &invocation.id,
+            binding,
+            terminal.session_persistence,
+            CompleteInvocation {
+                lease_token: invocation.lease_token.clone(),
+                fence_token: invocation.fence_token.clone(),
+                kind: result_kind,
+                payload,
+            },
+        )
+        .await?;
         Ok(ManagedTurnOutcome::Completed(Box::new(completion)))
     }
 
@@ -356,14 +357,14 @@ impl<'store> ManagedHarnessController<'store> {
         reason: String,
     ) -> Result<BlockedDelivery, FleetError> {
         let reason = bounded_reason(reason);
-        self.store
-            .mark_session_invocation_uncertain(
-                &invocation.agent_id,
-                &invocation.id,
-                binding,
-                &reason,
-            )
-            .await?;
+        session_binding::mark_session_invocation_uncertain(
+            self.store,
+            &invocation.agent_id,
+            &invocation.id,
+            binding,
+            &reason,
+        )
+        .await?;
         let (blocked, _created) = settlement::block_delivery(
             self.store,
             &invocation.agent_id,
@@ -551,29 +552,29 @@ async fn drain_turn(
     loop {
         match harness.next_notification().await? {
             HarnessAcpNotification::TurnEvent(event) => {
-                store
-                    .record_invocation_event(
-                        generation_id,
-                        &fence.invocation_id,
-                        event.event_seq,
-                        event.observed_at_ms,
-                        &event.classification,
-                        &event.raw_update,
-                    )
-                    .await?;
+                operations::record_invocation_event(
+                    store,
+                    generation_id,
+                    &fence.invocation_id,
+                    event.event_seq,
+                    event.observed_at_ms,
+                    &event.classification,
+                    &event.raw_update,
+                )
+                .await?;
             }
             HarnessAcpNotification::PermissionRequested(permission) => {
                 let raw = serde_json::to_value(&permission)?;
-                store
-                    .record_invocation_event(
-                        generation_id,
-                        &fence.invocation_id,
-                        permission.event_seq,
-                        crate::store::now_ms(),
-                        "permission_request",
-                        &raw,
-                    )
-                    .await?;
+                operations::record_invocation_event(
+                    store,
+                    generation_id,
+                    &fence.invocation_id,
+                    permission.event_seq,
+                    crate::store::now_ms(),
+                    "permission_request",
+                    &raw,
+                )
+                .await?;
                 harness
                     .resolve_permission(&PermissionResolution {
                         fence: fence.clone(),
@@ -583,9 +584,7 @@ async fn drain_turn(
                     .await?;
             }
             HarnessAcpNotification::TurnTerminal(terminal) => {
-                store
-                    .record_invocation_terminal(generation_id, &terminal)
-                    .await?;
+                operations::record_invocation_terminal(store, generation_id, &terminal).await?;
                 return Ok(terminal);
             }
         }

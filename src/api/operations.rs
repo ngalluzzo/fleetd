@@ -52,10 +52,7 @@ async fn list_plugin_generations(
 ) -> Result<Json<Vec<crate::operations::PluginGeneration>>, FleetError> {
     require_operator(&principal)?;
     Ok(Json(
-        state
-            .store
-            .list_plugin_generations(query.agent.as_deref())
-            .await?,
+        crate::operations::list_plugin_generations(&state.store, query.agent.as_deref()).await?,
     ))
 }
 
@@ -82,9 +79,7 @@ async fn list_invocation_observations(
 ) -> Result<Json<Vec<crate::operations::InvocationObservation>>, FleetError> {
     require_operator(&principal)?;
     Ok(Json(
-        state
-            .store
-            .list_invocation_observations(query.agent.as_deref())
+        crate::operations::list_invocation_observations(&state.store, query.agent.as_deref())
             .await?,
     ))
 }
@@ -112,9 +107,6 @@ async fn list_session_bindings(
 ) -> Result<Json<Vec<crate::session_binding::SessionBinding>>, FleetError> {
     require_operator(&principal)?;
     Ok(Json(
-        state
-            .store
-            .list_session_bindings(query.agent.as_deref())
-            .await?,
+        crate::session_binding::list_session_bindings(&state.store, query.agent.as_deref()).await?,
     ))
 }

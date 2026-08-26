@@ -12,199 +12,194 @@ use crate::{
     store::{Store, insert_message, message_from_row, now_ms},
 };
 
-impl Store {
-    /// Atomically leases eligible deliveries and creates their durable managed
-    /// invocation records.
-    ///
-    /// Expired reservations that were never armed are proven not started and
-    /// may be reclaimed. Expired armed invocations are parked instead.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid bounds, an unknown agent, or a persistence
-    /// failure.
-    pub async fn reserve_invocations(
-        &self,
-        agent_id: &str,
-        input: ClaimDeliveries,
-    ) -> Result<InvocationBatch, FleetError> {
-        self.reserve_invocations_filtered(agent_id, input, None)
-            .await
-    }
+/// Atomically leases eligible deliveries and creates their durable managed
+/// invocation records.
+///
+/// Expired reservations that were never armed are proven not started and
+/// may be reclaimed. Expired armed invocations are parked instead.
+///
+/// # Errors
+///
+/// Returns an error for invalid bounds, an unknown agent, or a persistence
+/// failure.
+pub async fn reserve_invocations(
+    store: &Store,
+    agent_id: &str,
+    input: ClaimDeliveries,
+) -> Result<InvocationBatch, FleetError> {
+    reserve_invocations_filtered(store, agent_id, input, None).await
+}
 
-    /// Atomically reserves only deliveries whose opaque envelope kind appears
-    /// in the adapter-owned exact acceptance set.
-    ///
-    /// This trusted worker path does not interpret a kind or acknowledge
-    /// skipped deliveries. Non-matching deliveries remain pending with their
-    /// attempt count unchanged.
-    pub(crate) async fn reserve_invocations_by_kind(
-        &self,
-        agent_id: &str,
-        input: ClaimDeliveries,
-        message_kinds: &BTreeSet<String>,
-    ) -> Result<InvocationBatch, FleetError> {
-        if message_kinds.is_empty() {
-            return Err(FleetError::Invalid(
-                "invocation message-kind selector must not be empty".to_owned(),
-            ));
-        }
-        self.reserve_invocations_filtered(agent_id, input, Some(message_kinds))
-            .await
+/// Atomically reserves only deliveries whose opaque envelope kind appears
+/// in the adapter-owned exact acceptance set.
+///
+/// This trusted worker path does not interpret a kind or acknowledge
+/// skipped deliveries. Non-matching deliveries remain pending with their
+/// attempt count unchanged.
+pub(crate) async fn reserve_invocations_by_kind(
+    store: &Store,
+    agent_id: &str,
+    input: ClaimDeliveries,
+    message_kinds: &BTreeSet<String>,
+) -> Result<InvocationBatch, FleetError> {
+    if message_kinds.is_empty() {
+        return Err(FleetError::Invalid(
+            "invocation message-kind selector must not be empty".to_owned(),
+        ));
     }
+    reserve_invocations_filtered(store, agent_id, input, Some(message_kinds)).await
+}
 
-    /// Atomically leases eligible deliveries and creates their durable managed
-    /// invocation records.
-    ///
-    /// Expired reservations that were never armed are proven not started and
-    /// may be reclaimed. Expired armed invocations are parked instead.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid bounds, an unknown agent, or a persistence
-    /// failure.
-    async fn reserve_invocations_filtered(
-        &self,
-        agent_id: &str,
-        input: ClaimDeliveries,
-        message_kinds: Option<&BTreeSet<String>>,
-    ) -> Result<InvocationBatch, FleetError> {
-        crate::delivery::validate_claim(&input)?;
-        crate::delivery::ensure_agent(&self.pool, agent_id).await?;
-        let now = now_ms();
-        let lease_duration = i64::try_from(input.lease_duration_ms)
-            .map_err(|_| FleetError::Invalid("lease duration is too large".to_owned()))?;
-        let lease_expires_at_ms = now
-            .checked_add(lease_duration)
-            .ok_or_else(|| FleetError::Invalid("lease expiry overflowed".to_owned()))?;
-        let lease_token = Uuid::new_v4().to_string();
-        let message_kinds_json = message_kinds.map(serde_json::to_string).transpose()?;
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        recover_expired_invocations(&mut transaction, agent_id, now).await?;
-        crate::delivery::lease_claimable(
+/// Atomically leases eligible deliveries and creates their durable managed
+/// invocation records.
+///
+/// Expired reservations that were never armed are proven not started and
+/// may be reclaimed. Expired armed invocations are parked instead.
+///
+/// # Errors
+///
+/// Returns an error for invalid bounds, an unknown agent, or a persistence
+/// failure.
+async fn reserve_invocations_filtered(
+    store: &Store,
+    agent_id: &str,
+    input: ClaimDeliveries,
+    message_kinds: Option<&BTreeSet<String>>,
+) -> Result<InvocationBatch, FleetError> {
+    crate::delivery::validate_claim(&input)?;
+    crate::delivery::ensure_agent(store.pool(), agent_id).await?;
+    let now = now_ms();
+    let lease_duration = i64::try_from(input.lease_duration_ms)
+        .map_err(|_| FleetError::Invalid("lease duration is too large".to_owned()))?;
+    let lease_expires_at_ms = now
+        .checked_add(lease_duration)
+        .ok_or_else(|| FleetError::Invalid("lease expiry overflowed".to_owned()))?;
+    let lease_token = Uuid::new_v4().to_string();
+    let message_kinds_json = message_kinds.map(serde_json::to_string).transpose()?;
+    let mut transaction = store.begin_immediate().await?;
+    recover_expired_invocations(&mut transaction, agent_id, now).await?;
+    crate::delivery::lease_claimable(
+        &mut transaction,
+        agent_id,
+        &lease_token,
+        lease_expires_at_ms,
+        now,
+        input.limit,
+        message_kinds_json.as_deref(),
+    )
+    .await?;
+    let rows = sqlx::query(
+        r"
+        SELECT m.seq, m.id, m.channel_id, m.sender_id, m.recipient_id,
+               m.kind, m.payload_json, m.correlation_id, m.causation_id,
+               m.created_at_ms, d.attempt
+        FROM agent_deliveries d
+        JOIN messages m ON m.seq = d.message_seq
+        WHERE d.agent_id = ? AND d.state = 'leased' AND d.lease_token = ?
+        ORDER BY m.seq
+        ",
+    )
+    .bind(agent_id)
+    .bind(&lease_token)
+    .fetch_all(&mut *transaction)
+    .await?;
+    let mut invocations = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let invocation = reserve_row(
             &mut transaction,
+            row,
             agent_id,
             &lease_token,
             lease_expires_at_ms,
             now,
-            input.limit,
-            message_kinds_json.as_deref(),
         )
         .await?;
-        let rows = sqlx::query(
-            r"
-            SELECT m.seq, m.id, m.channel_id, m.sender_id, m.recipient_id,
-                   m.kind, m.payload_json, m.correlation_id, m.causation_id,
-                   m.created_at_ms, d.attempt
-            FROM agent_deliveries d
-            JOIN messages m ON m.seq = d.message_seq
-            WHERE d.agent_id = ? AND d.state = 'leased' AND d.lease_token = ?
-            ORDER BY m.seq
-            ",
-        )
-        .bind(agent_id)
-        .bind(&lease_token)
-        .fetch_all(&mut *transaction)
-        .await?;
-        let mut invocations = Vec::with_capacity(rows.len());
-        for row in &rows {
-            let invocation = reserve_row(
-                &mut transaction,
-                row,
-                agent_id,
-                &lease_token,
-                lease_expires_at_ms,
-                now,
-            )
-            .await?;
-            invocations.push(invocation);
+        invocations.push(invocation);
+    }
+    transaction.commit().await?;
+    Ok(InvocationBatch { invocations })
+}
+
+/// Durably arms one invocation immediately before an effectful dispatch.
+///
+/// The controller must not send the effectful request until this operation
+/// commits. An identical replay is idempotent while the lease remains live.
+///
+/// # Errors
+///
+/// Returns an error for invalid or stale fences, expired leases, an unknown
+/// invocation, conflicting state, or a persistence failure.
+pub async fn arm_invocation(
+    store: &Store,
+    agent_id: &str,
+    invocation_id: &str,
+    input: ArmInvocation,
+) -> Result<Invocation, FleetError> {
+    let now = now_ms();
+    let mut transaction = store.begin_immediate().await?;
+    let invocation =
+        arm_invocation_transaction(&mut transaction, agent_id, invocation_id, &input, now).await?;
+    transaction.commit().await?;
+    Ok(invocation)
+}
+
+/// Atomically publishes the invocation result and acknowledges its input
+/// delivery.
+///
+/// The result is addressed back to the input sender in the same channel,
+/// carries the input correlation, and uses the input message as causation.
+/// An identical replay returns the original completion.
+///
+/// # Errors
+///
+/// Returns an error for invalid or stale fences, an unarmed or terminal
+/// invocation, conflicting result replay, membership failure, or a
+/// persistence failure.
+pub async fn complete_invocation(
+    store: &Store,
+    agent_id: &str,
+    invocation_id: &str,
+    input: CompleteInvocation,
+) -> Result<(InvocationCompletion, bool), FleetError> {
+    let now = now_ms();
+    let mut transaction = store.begin_immediate().await?;
+    let completion = complete_invocation_transaction(
+        &mut transaction,
+        agent_id,
+        invocation_id,
+        &input,
+        now,
+        false,
+    )
+    .await?;
+    transaction.commit().await?;
+    store.notify_message_commit(completion.1);
+    Ok(completion)
+}
+
+/// Lists the latest durable invocation records for operator inspection.
+///
+/// # Errors
+///
+/// Returns an error when stored records cannot be read or decoded.
+pub async fn list_invocations(
+    store: &Store,
+    agent_id: Option<&str>,
+) -> Result<Vec<Invocation>, FleetError> {
+    let rows = match agent_id {
+        Some(agent_id) => {
+            sqlx::query(&invocation_list_query("AND i.agent_id = ?"))
+                .bind(agent_id)
+                .fetch_all(store.pool())
+                .await?
         }
-        transaction.commit().await?;
-        Ok(InvocationBatch { invocations })
-    }
-
-    /// Durably arms one invocation immediately before an effectful dispatch.
-    ///
-    /// The controller must not send the effectful request until this operation
-    /// commits. An identical replay is idempotent while the lease remains live.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid or stale fences, expired leases, an unknown
-    /// invocation, conflicting state, or a persistence failure.
-    pub async fn arm_invocation(
-        &self,
-        agent_id: &str,
-        invocation_id: &str,
-        input: ArmInvocation,
-    ) -> Result<Invocation, FleetError> {
-        let now = now_ms();
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let invocation =
-            arm_invocation_transaction(&mut transaction, agent_id, invocation_id, &input, now)
-                .await?;
-        transaction.commit().await?;
-        Ok(invocation)
-    }
-
-    /// Atomically publishes the invocation result and acknowledges its input
-    /// delivery.
-    ///
-    /// The result is addressed back to the input sender in the same channel,
-    /// carries the input correlation, and uses the input message as causation.
-    /// An identical replay returns the original completion.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid or stale fences, an unarmed or terminal
-    /// invocation, conflicting result replay, membership failure, or a
-    /// persistence failure.
-    pub async fn complete_invocation(
-        &self,
-        agent_id: &str,
-        invocation_id: &str,
-        input: CompleteInvocation,
-    ) -> Result<(InvocationCompletion, bool), FleetError> {
-        let now = now_ms();
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let completion = complete_invocation_transaction(
-            &mut transaction,
-            agent_id,
-            invocation_id,
-            &input,
-            now,
-            false,
-        )
-        .await?;
-        transaction.commit().await?;
-        self.notify_message_commit(completion.1);
-        Ok(completion)
-    }
-
-    /// Lists the latest durable invocation records for operator inspection.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when stored records cannot be read or decoded.
-    pub async fn list_invocations(
-        &self,
-        agent_id: Option<&str>,
-    ) -> Result<Vec<Invocation>, FleetError> {
-        let rows = match agent_id {
-            Some(agent_id) => {
-                sqlx::query(&invocation_list_query("AND i.agent_id = ?"))
-                    .bind(agent_id)
-                    .fetch_all(&self.pool)
-                    .await?
-            }
-            None => {
-                sqlx::query(&invocation_list_query(""))
-                    .fetch_all(&self.pool)
-                    .await?
-            }
-        };
-        rows.iter().map(invocation_from_row).collect()
-    }
+        None => {
+            sqlx::query(&invocation_list_query(""))
+                .fetch_all(store.pool())
+                .await?
+        }
+    };
+    rows.iter().map(invocation_from_row).collect()
 }
 
 pub(crate) async fn arm_invocation_transaction(

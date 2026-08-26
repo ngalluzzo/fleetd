@@ -14,6 +14,9 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::invocation;
+use crate::operations;
+use crate::session_binding;
 use crate::settlement;
 use crate::{
     controller::{
@@ -421,9 +424,9 @@ impl<'store> ContinuousHarnessWorker<'store> {
             compatibility_digest: compatibility_digest.clone(),
             profile_digest: description.profile_digest.clone(),
         };
-        if let Err(error) = self
-            .store
-            .record_plugin_generation(NewPluginGeneration {
+        if let Err(error) = operations::record_plugin_generation(
+            self.store,
+            NewPluginGeneration {
                 id: generation_id.clone(),
                 agent_id: self.config.agent_id.clone(),
                 plugin: harness.manifest().plugin.clone(),
@@ -432,8 +435,9 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 description,
                 compatibility_digest,
                 heartbeat_interval_ms: GENERATION_HEARTBEAT_INTERVAL_MS,
-            })
-            .await
+            },
+        )
+        .await
         {
             let _unused = harness.shutdown().await;
             return GenerationExit::Fatal(ContinuousWorkerError::OperationalEvidence {
@@ -475,18 +479,17 @@ impl<'store> ContinuousHarnessWorker<'store> {
             if cancellation.is_cancelled() || limit_reached(report, max_settled_turns) {
                 return GenerationExit::Stopped;
             }
-            let reservation = match self
-                .store
-                .reserve_invocations_by_kind(
-                    &self.config.agent_id,
-                    crate::model::ClaimDeliveries {
-                        limit: 1,
-                        lease_duration_ms: duration_ms(self.config.lease_duration)
-                            .expect("validated lease duration"),
-                    },
-                    self.adapter.inbound_acceptance().message_kinds(),
-                )
-                .await
+            let reservation = match invocation::reserve_invocations_by_kind(
+                self.store,
+                &self.config.agent_id,
+                crate::model::ClaimDeliveries {
+                    limit: 1,
+                    lease_duration_ms: duration_ms(self.config.lease_duration)
+                        .expect("validated lease duration"),
+                },
+                self.adapter.inbound_acceptance().message_kinds(),
+            )
+            .await
             {
                 Ok(reservation) => reservation,
                 Err(error) => {
@@ -738,22 +741,21 @@ impl<'store> ContinuousHarnessWorker<'store> {
             .map(|directory| directory.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
         let working_directory = self.config.working_directory.to_string_lossy().into_owned();
-        let acquisition = self
-            .store
-            .acquire_session_binding(
-                &invocation.agent_id,
-                AcquireSessionBinding {
-                    lane_policy: lane.policy.clone(),
-                    lane_key: lane.key.clone(),
-                    owner_instance_id: context.identity.owner_instance_id.clone(),
-                    profile_digest: context.identity.profile_digest.clone(),
-                    compatibility_digest: context.identity.compatibility_digest.clone(),
-                    working_directory: working_directory.clone(),
-                    additional_directories: additional_directories.clone(),
-                },
-            )
-            .await
-            .map_err(LaneOpenError::Fleet)?;
+        let acquisition = session_binding::acquire_session_binding(
+            self.store,
+            &invocation.agent_id,
+            AcquireSessionBinding {
+                lane_policy: lane.policy.clone(),
+                lane_key: lane.key.clone(),
+                owner_instance_id: context.identity.owner_instance_id.clone(),
+                profile_digest: context.identity.profile_digest.clone(),
+                compatibility_digest: context.identity.compatibility_digest.clone(),
+                working_directory: working_directory.clone(),
+                additional_directories: additional_directories.clone(),
+            },
+        )
+        .await
+        .map_err(LaneOpenError::Fleet)?;
         let mode = match acquisition.mode {
             SessionAcquisitionMode::Create => OpenSessionMode::Create,
             SessionAcquisitionMode::Resume { session_ref } => {
@@ -777,10 +779,14 @@ impl<'store> ContinuousHarnessWorker<'store> {
             })
             .await
             .map_err(LaneOpenError::Plugin)?;
-        self.store
-            .record_session_opened(&invocation.agent_id, &binding, &opened.session_ref)
-            .await
-            .map_err(LaneOpenError::Fleet)?;
+        session_binding::record_session_opened(
+            self.store,
+            &invocation.agent_id,
+            &binding,
+            &opened.session_ref,
+        )
+        .await
+        .map_err(LaneOpenError::Fleet)?;
         Ok(OpenedSession {
             binding,
             session_ref: opened.session_ref,
@@ -899,17 +905,17 @@ async fn stop_generation(
             (PluginShutdownOutcome::Failed, None)
         }
     };
-    if let Err(source) = store
-        .stop_plugin_generation(
-            generation_id,
-            StopPluginGeneration {
-                disposition,
-                reason,
-                shutdown_outcome,
-                shutdown_exit_code,
-            },
-        )
-        .await
+    if let Err(source) = operations::stop_plugin_generation(
+        store,
+        generation_id,
+        StopPluginGeneration {
+            disposition,
+            reason,
+            shutdown_outcome,
+            shutdown_exit_code,
+        },
+    )
+    .await
     {
         return GenerationExit::Fatal(ContinuousWorkerError::OperationalEvidence {
             context: format!("plugin generation stop {generation_id}"),
@@ -950,7 +956,7 @@ impl GenerationHeartbeat {
                 tokio::select! {
                     () = task_cancellation.cancelled() => break,
                     () = tokio::time::sleep(Duration::from_millis(GENERATION_HEARTBEAT_INTERVAL_MS)) => {
-                        if let Err(error) = store.heartbeat_plugin_generation(&generation_id).await {
+                        if let Err(error) = operations::heartbeat_plugin_generation(&store, &generation_id).await {
                             tracing::warn!(
                                 %generation_id,
                                 %error,

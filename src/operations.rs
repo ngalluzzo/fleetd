@@ -46,406 +46,411 @@ pub struct StopPluginGeneration {
     pub shutdown_exit_code: Option<i32>,
 }
 
-impl Store {
-    /// Persists exact identity for a ready plugin generation before work routes
-    /// through it.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when evidence is invalid or oversized, the agent does
-    /// not exist, the generation ID conflicts, or persistence fails.
-    pub async fn record_plugin_generation(
-        &self,
-        generation: NewPluginGeneration,
-    ) -> Result<PluginGeneration, FleetError> {
-        validate_generation(&generation)?;
-        let interfaces_json = bounded_json(&generation.interfaces, "plugin interfaces")?;
-        let capabilities_json = bounded_json(
-            &generation.description.agent_capabilities,
-            "agent capabilities",
-        )?;
-        let initialize_json = bounded_json(
-            &generation.description.raw_initialize_result,
-            "raw initialize result",
-        )?;
-        let now = now_ms();
-        let process_id = generation.process_id.map(i64::from);
-        let heartbeat_interval_ms = i64::try_from(generation.heartbeat_interval_ms)
-            .map_err(|_| FleetError::Invalid("heartbeat interval is too large".to_owned()))?;
-        let max_frame_bytes = i64::try_from(generation.description.limits.max_frame_bytes)
-            .map_err(|_| FleetError::Invalid("maximum frame size is too large".to_owned()))?;
-        let result = sqlx::query(
-            r"
-            INSERT INTO plugin_generations (
-                id, agent_id, plugin_id, plugin_name, plugin_version,
-                interfaces_json, process_id, driver_version, acp_sdk_version,
-                acp_protocol_version, runtime_name, runtime_version,
-                runtime_executable_digest, agent_capabilities_json,
-                max_concurrent_turns, max_frame_bytes, profile_digest,
-                compatibility_digest, raw_initialize_result_json,
-                heartbeat_interval_ms, state, started_at_ms, last_heartbeat_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
-            ",
-        )
-        .bind(&generation.id)
-        .bind(&generation.agent_id)
-        .bind(&generation.plugin.id)
-        .bind(&generation.plugin.name)
-        .bind(generation.plugin.version.to_string())
-        .bind(interfaces_json)
-        .bind(process_id)
-        .bind(&generation.description.driver.version)
-        .bind(&generation.description.driver.acp_sdk_version)
-        .bind(i64::from(
-            generation.description.driver.acp_protocol_version,
-        ))
-        .bind(&generation.description.runtime.name)
-        .bind(&generation.description.runtime.version)
-        .bind(&generation.description.runtime.executable_digest)
-        .bind(capabilities_json)
-        .bind(i64::from(
-            generation.description.limits.max_concurrent_turns,
-        ))
-        .bind(max_frame_bytes)
-        .bind(&generation.description.profile_digest)
-        .bind(&generation.compatibility_digest)
-        .bind(initialize_json)
-        .bind(heartbeat_interval_ms)
-        .bind(now)
-        .bind(now)
-        .execute(&self.pool)
-        .await;
-        match result {
-            Ok(_) => self.plugin_generation(&generation.id).await,
-            Err(error) if is_foreign_key_violation(&error) => Err(FleetError::NotFound {
-                entity: "agent",
-                id: generation.agent_id,
-            }),
-            Err(error) if is_unique_violation(&error) => Err(FleetError::Conflict(format!(
-                "plugin generation already exists: {}",
-                generation.id
-            ))),
-            Err(error) => Err(error.into()),
+/// Persists exact identity for a ready plugin generation before work routes
+/// through it.
+///
+/// # Errors
+///
+/// Returns an error when evidence is invalid or oversized, the agent does
+/// not exist, the generation ID conflicts, or persistence fails.
+pub async fn record_plugin_generation(
+    store: &Store,
+    generation: NewPluginGeneration,
+) -> Result<PluginGeneration, FleetError> {
+    validate_generation(&generation)?;
+    let interfaces_json = bounded_json(&generation.interfaces, "plugin interfaces")?;
+    let capabilities_json = bounded_json(
+        &generation.description.agent_capabilities,
+        "agent capabilities",
+    )?;
+    let initialize_json = bounded_json(
+        &generation.description.raw_initialize_result,
+        "raw initialize result",
+    )?;
+    let now = now_ms();
+    let process_id = generation.process_id.map(i64::from);
+    let heartbeat_interval_ms = i64::try_from(generation.heartbeat_interval_ms)
+        .map_err(|_| FleetError::Invalid("heartbeat interval is too large".to_owned()))?;
+    let max_frame_bytes = i64::try_from(generation.description.limits.max_frame_bytes)
+        .map_err(|_| FleetError::Invalid("maximum frame size is too large".to_owned()))?;
+    let result = sqlx::query(
+        r"
+        INSERT INTO plugin_generations (
+            id, agent_id, plugin_id, plugin_name, plugin_version,
+            interfaces_json, process_id, driver_version, acp_sdk_version,
+            acp_protocol_version, runtime_name, runtime_version,
+            runtime_executable_digest, agent_capabilities_json,
+            max_concurrent_turns, max_frame_bytes, profile_digest,
+            compatibility_digest, raw_initialize_result_json,
+            heartbeat_interval_ms, state, started_at_ms, last_heartbeat_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+        ",
+    )
+    .bind(&generation.id)
+    .bind(&generation.agent_id)
+    .bind(&generation.plugin.id)
+    .bind(&generation.plugin.name)
+    .bind(generation.plugin.version.to_string())
+    .bind(interfaces_json)
+    .bind(process_id)
+    .bind(&generation.description.driver.version)
+    .bind(&generation.description.driver.acp_sdk_version)
+    .bind(i64::from(
+        generation.description.driver.acp_protocol_version,
+    ))
+    .bind(&generation.description.runtime.name)
+    .bind(&generation.description.runtime.version)
+    .bind(&generation.description.runtime.executable_digest)
+    .bind(capabilities_json)
+    .bind(i64::from(
+        generation.description.limits.max_concurrent_turns,
+    ))
+    .bind(max_frame_bytes)
+    .bind(&generation.description.profile_digest)
+    .bind(&generation.compatibility_digest)
+    .bind(initialize_json)
+    .bind(heartbeat_interval_ms)
+    .bind(now)
+    .bind(now)
+    .execute(store.pool())
+    .await;
+    match result {
+        Ok(_) => plugin_generation(store, &generation.id).await,
+        Err(error) if is_foreign_key_violation(&error) => Err(FleetError::NotFound {
+            entity: "agent",
+            id: generation.agent_id,
+        }),
+        Err(error) if is_unique_violation(&error) => Err(FleetError::Conflict(format!(
+            "plugin generation already exists: {}",
+            generation.id
+        ))),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Advances liveness for one active generation.
+///
+/// # Errors
+///
+/// Returns an error when the generation is absent or stopped, or when
+/// persistence fails.
+pub async fn heartbeat_plugin_generation(
+    store: &Store,
+    generation_id: &str,
+) -> Result<(), FleetError> {
+    let result = sqlx::query(
+        "UPDATE plugin_generations SET last_heartbeat_at_ms = ? WHERE id = ? AND state = 'active'",
+    )
+    .bind(now_ms())
+    .bind(generation_id)
+    .execute(store.pool())
+    .await?;
+    if result.rows_affected() != 1 {
+        return Err(FleetError::Conflict(format!(
+            "plugin generation is not active: {generation_id}"
+        )));
+    }
+    Ok(())
+}
+
+/// Durably retires one generation. An exact replay is idempotent.
+///
+/// # Errors
+///
+/// Returns an error for invalid evidence, a changed replay, an unknown
+/// generation, or a persistence failure.
+pub async fn stop_plugin_generation(
+    store: &Store,
+    generation_id: &str,
+    stop: StopPluginGeneration,
+) -> Result<PluginGeneration, FleetError> {
+    validate_reason(&stop.reason)?;
+    let disposition = disposition_str(stop.disposition);
+    let shutdown = shutdown_str(stop.shutdown_outcome);
+    let now = now_ms();
+    let result = sqlx::query(
+        r"
+        UPDATE plugin_generations
+        SET state = 'stopped', last_heartbeat_at_ms = ?, stopped_at_ms = ?,
+            stop_disposition = ?, stop_reason = ?, shutdown_outcome = ?,
+            shutdown_exit_code = ?
+        WHERE id = ? AND state = 'active'
+        ",
+    )
+    .bind(now)
+    .bind(now)
+    .bind(disposition)
+    .bind(&stop.reason)
+    .bind(shutdown)
+    .bind(stop.shutdown_exit_code)
+    .bind(generation_id)
+    .execute(store.pool())
+    .await?;
+    if result.rows_affected() == 0 {
+        let existing = plugin_generation(store, generation_id).await?;
+        if existing.stop_disposition == Some(stop.disposition)
+            && existing.stop_reason.as_deref() == Some(stop.reason.as_str())
+            && existing.shutdown_outcome == Some(stop.shutdown_outcome)
+            && existing.shutdown_exit_code == stop.shutdown_exit_code
+        {
+            return Ok(existing);
         }
+        return Err(FleetError::Conflict(format!(
+            "plugin generation already stopped with different evidence: {generation_id}"
+        )));
     }
+    plugin_generation(store, generation_id).await
+}
 
-    /// Advances liveness for one active generation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the generation is absent or stopped, or when
-    /// persistence fails.
-    pub async fn heartbeat_plugin_generation(&self, generation_id: &str) -> Result<(), FleetError> {
-        let result = sqlx::query(
-            "UPDATE plugin_generations SET last_heartbeat_at_ms = ? WHERE id = ? AND state = 'active'",
-        )
-        .bind(now_ms())
-        .bind(generation_id)
-        .execute(&self.pool)
-        .await?;
-        if result.rows_affected() != 1 {
-            return Err(FleetError::Conflict(format!(
-                "plugin generation is not active: {generation_id}"
-            )));
-        }
-        Ok(())
-    }
-
-    /// Durably retires one generation. An exact replay is idempotent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid evidence, a changed replay, an unknown
-    /// generation, or a persistence failure.
-    pub async fn stop_plugin_generation(
-        &self,
-        generation_id: &str,
-        stop: StopPluginGeneration,
-    ) -> Result<PluginGeneration, FleetError> {
-        validate_reason(&stop.reason)?;
-        let disposition = disposition_str(stop.disposition);
-        let shutdown = shutdown_str(stop.shutdown_outcome);
-        let now = now_ms();
-        let result = sqlx::query(
-            r"
-            UPDATE plugin_generations
-            SET state = 'stopped', last_heartbeat_at_ms = ?, stopped_at_ms = ?,
-                stop_disposition = ?, stop_reason = ?, shutdown_outcome = ?,
-                shutdown_exit_code = ?
-            WHERE id = ? AND state = 'active'
-            ",
-        )
-        .bind(now)
-        .bind(now)
-        .bind(disposition)
-        .bind(&stop.reason)
-        .bind(shutdown)
-        .bind(stop.shutdown_exit_code)
-        .bind(generation_id)
-        .execute(&self.pool)
-        .await?;
-        if result.rows_affected() == 0 {
-            let existing = self.plugin_generation(generation_id).await?;
-            if existing.stop_disposition == Some(stop.disposition)
-                && existing.stop_reason.as_deref() == Some(stop.reason.as_str())
-                && existing.shutdown_outcome == Some(stop.shutdown_outcome)
-                && existing.shutdown_exit_code == stop.shutdown_exit_code
-            {
-                return Ok(existing);
-            }
-            return Err(FleetError::Conflict(format!(
-                "plugin generation already stopped with different evidence: {generation_id}"
-            )));
-        }
-        self.plugin_generation(generation_id).await
-    }
-
-    /// Lists the newest durable generation records, optionally for one agent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when persisted evidence is invalid or cannot be read.
-    pub async fn list_plugin_generations(
-        &self,
-        agent_id: Option<&str>,
-    ) -> Result<Vec<PluginGeneration>, FleetError> {
-        let rows = match agent_id {
-            Some(agent_id) => {
-                sqlx::query(&format!(
-                    "{} WHERE agent_id = ? ORDER BY started_at_ms DESC, id LIMIT 500",
-                    generation_select()
-                ))
-                .bind(agent_id)
-                .fetch_all(&self.pool)
-                .await?
-            }
-            None => {
-                sqlx::query(&format!(
-                    "{} ORDER BY started_at_ms DESC, id LIMIT 500",
-                    generation_select()
-                ))
-                .fetch_all(&self.pool)
-                .await?
-            }
-        };
-        rows.iter().map(generation_from_row).collect()
-    }
-
-    async fn plugin_generation(&self, generation_id: &str) -> Result<PluginGeneration, FleetError> {
-        let row = sqlx::query(&format!("{} WHERE id = ?", generation_select()))
-            .bind(generation_id)
-            .fetch_optional(&self.pool)
+/// Lists the newest durable generation records, optionally for one agent.
+///
+/// # Errors
+///
+/// Returns an error when persisted evidence is invalid or cannot be read.
+pub async fn list_plugin_generations(
+    store: &Store,
+    agent_id: Option<&str>,
+) -> Result<Vec<PluginGeneration>, FleetError> {
+    let rows = match agent_id {
+        Some(agent_id) => {
+            sqlx::query(&format!(
+                "{} WHERE agent_id = ? ORDER BY started_at_ms DESC, id LIMIT 500",
+                generation_select()
+            ))
+            .bind(agent_id)
+            .fetch_all(store.pool())
             .await?
-            .ok_or_else(|| FleetError::NotFound {
-                entity: "plugin generation",
-                id: generation_id.to_owned(),
-            })?;
-        generation_from_row(&row)
-    }
-
-    /// Folds one exact harness update into the invocation's bounded event
-    /// counters and chain digest. Exact duplicate delivery is idempotent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid, missing, stale, non-contiguous, changed,
-    /// post-terminal, or unpersistable evidence.
-    pub async fn record_invocation_event(
-        &self,
-        generation_id: &str,
-        invocation_id: &str,
-        event_seq: u64,
-        observed_at_ms: i64,
-        classification: &str,
-        raw: &Value,
-    ) -> Result<(), FleetError> {
-        if event_seq == 0 || observed_at_ms <= 0 || classification.trim().is_empty() {
-            return Err(FleetError::Invalid(
-                "invocation event sequence, time, and classification must be valid".to_owned(),
-            ));
         }
-        let event_seq = i64::try_from(event_seq)
-            .map_err(|_| FleetError::Invalid("event sequence is too large".to_owned()))?;
-        let raw_bytes = serde_json::to_vec(raw)?;
-        let raw_len = i64::try_from(raw_bytes.len())
-            .map_err(|_| FleetError::Invalid("event payload is too large".to_owned()))?;
-        let event_digest = event_digest(event_seq, observed_at_ms, classification, &raw_bytes);
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let row = sqlx::query(
-            r"
-            SELECT o.last_event_seq, o.last_event_digest, o.event_chain_digest,
-                   o.terminal_at_ms, g.state AS generation_state
-            FROM invocation_observations o
-            JOIN plugin_generations g ON g.id = o.generation_id
-            WHERE o.invocation_id = ? AND o.generation_id = ?
-            ",
-        )
-        .bind(invocation_id)
+        None => {
+            sqlx::query(&format!(
+                "{} ORDER BY started_at_ms DESC, id LIMIT 500",
+                generation_select()
+            ))
+            .fetch_all(store.pool())
+            .await?
+        }
+    };
+    rows.iter().map(generation_from_row).collect()
+}
+
+async fn plugin_generation(
+    store: &Store,
+    generation_id: &str,
+) -> Result<PluginGeneration, FleetError> {
+    let row = sqlx::query(&format!("{} WHERE id = ?", generation_select()))
         .bind(generation_id)
-        .fetch_optional(&mut *transaction)
+        .fetch_optional(store.pool())
         .await?
         .ok_or_else(|| FleetError::NotFound {
-            entity: "invocation observation",
-            id: invocation_id.to_owned(),
+            entity: "plugin generation",
+            id: generation_id.to_owned(),
         })?;
-        if row.try_get::<String, _>("generation_state")? != "active" {
-            return Err(FleetError::Conflict(
-                "invocation generation is no longer active".to_owned(),
-            ));
-        }
-        if row.try_get::<Option<i64>, _>("terminal_at_ms")?.is_some() {
-            return Err(FleetError::Conflict(
-                "invocation observation is already terminal".to_owned(),
-            ));
-        }
-        let previous_seq: i64 = row.try_get("last_event_seq")?;
-        if event_seq == previous_seq {
-            let previous_digest: Option<String> = row.try_get("last_event_digest")?;
-            if previous_digest.as_deref() == Some(event_digest.as_str()) {
-                transaction.commit().await?;
-                return Ok(());
-            }
-            return Err(FleetError::Conflict(
-                "event sequence was reused with different evidence".to_owned(),
-            ));
-        }
-        if event_seq != previous_seq.saturating_add(1) {
-            return Err(FleetError::Conflict(format!(
-                "event sequence is not contiguous: expected {}, received {event_seq}",
-                previous_seq.saturating_add(1)
-            )));
-        }
-        let previous_chain: Option<String> = row.try_get("event_chain_digest")?;
-        apply_event_fold(
-            &mut transaction,
-            EventFold {
-                generation_id,
-                invocation_id,
-                previous_seq,
-                event_seq,
-                observed_at_ms,
-                payload_bytes: raw_len,
-                chain_digest: chain_digest(previous_chain.as_deref(), &event_digest),
-                event_digest,
-                counts: event_increments(classification),
-            },
-        )
-        .await?;
-        transaction.commit().await?;
-        Ok(())
-    }
+    generation_from_row(&row)
+}
 
-    /// Records the exact terminal summary before result settlement. Transcript
-    /// content remains in the bounded result message rather than this row.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when terminal evidence is oversized, does not match
-    /// the durable event sequence, conflicts with a replay, or cannot persist.
-    pub async fn record_invocation_terminal(
-        &self,
-        generation_id: &str,
-        terminal: &TurnTerminal,
-    ) -> Result<(), FleetError> {
-        let invocation_id = &terminal.fence.invocation_id;
-        let last_event_seq = i64::try_from(terminal.last_event_seq)
-            .map_err(|_| FleetError::Invalid("terminal event sequence is too large".to_owned()))?;
-        let usage_json = bounded_json(&terminal.usage, "terminal usage")?;
-        let certainty = harness_certainty_str(terminal.execution_certainty);
-        let persistence = persistence_str(terminal.session_persistence);
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let row = sqlx::query(
-            r"
-            SELECT last_event_seq, terminal_at_ms, stop_reason,
-                   runtime_stop_reason, execution_certainty, session_quiescent,
-                   session_persistence, usage_json
-            FROM invocation_observations
-            WHERE invocation_id = ? AND generation_id = ?
-            ",
-        )
-        .bind(invocation_id)
-        .bind(generation_id)
-        .fetch_optional(&mut *transaction)
-        .await?
-        .ok_or_else(|| FleetError::NotFound {
-            entity: "invocation observation",
-            id: invocation_id.clone(),
-        })?;
-        if row.try_get::<i64, _>("last_event_seq")? != last_event_seq {
-            return Err(FleetError::Conflict(
-                "terminal event sequence does not match durable observations".to_owned(),
-            ));
-        }
-        if row.try_get::<Option<i64>, _>("terminal_at_ms")?.is_some() {
-            if terminal_matches(&row, terminal, certainty, persistence, &usage_json)? {
-                transaction.commit().await?;
-                return Ok(());
-            }
-            return Err(FleetError::Conflict(
-                "invocation terminal was already recorded with different evidence".to_owned(),
-            ));
-        }
-        let now = now_ms();
-        sqlx::query(
-            r"
-            UPDATE invocation_observations
-            SET updated_at_ms = ?, terminal_at_ms = ?, stop_reason = ?,
-                runtime_stop_reason = ?, execution_certainty = ?,
-                session_quiescent = ?, session_persistence = ?, usage_json = ?
-            WHERE invocation_id = ? AND generation_id = ? AND terminal_at_ms IS NULL
-            ",
-        )
-        .bind(now)
-        .bind(now)
-        .bind(&terminal.stop_reason)
-        .bind(&terminal.runtime_stop_reason)
-        .bind(certainty)
-        .bind(terminal.session_quiescent)
-        .bind(persistence)
-        .bind(usage_json)
-        .bind(invocation_id)
-        .bind(generation_id)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "UPDATE plugin_generations SET last_heartbeat_at_ms = ? WHERE id = ? AND state = 'active'",
-        )
-        .bind(now)
-        .bind(generation_id)
-        .execute(&mut *transaction)
-        .await?;
-        transaction.commit().await?;
-        Ok(())
+/// Folds one exact harness update into the invocation's bounded event
+/// counters and chain digest. Exact duplicate delivery is idempotent.
+///
+/// # Errors
+///
+/// Returns an error for invalid, missing, stale, non-contiguous, changed,
+/// post-terminal, or unpersistable evidence.
+pub async fn record_invocation_event(
+    store: &Store,
+    generation_id: &str,
+    invocation_id: &str,
+    event_seq: u64,
+    observed_at_ms: i64,
+    classification: &str,
+    raw: &Value,
+) -> Result<(), FleetError> {
+    if event_seq == 0 || observed_at_ms <= 0 || classification.trim().is_empty() {
+        return Err(FleetError::Invalid(
+            "invocation event sequence, time, and classification must be valid".to_owned(),
+        ));
     }
+    let event_seq = i64::try_from(event_seq)
+        .map_err(|_| FleetError::Invalid("event sequence is too large".to_owned()))?;
+    let raw_bytes = serde_json::to_vec(raw)?;
+    let raw_len = i64::try_from(raw_bytes.len())
+        .map_err(|_| FleetError::Invalid("event payload is too large".to_owned()))?;
+    let event_digest = event_digest(event_seq, observed_at_ms, classification, &raw_bytes);
+    let mut transaction = store.begin_immediate().await?;
+    let row = sqlx::query(
+        r"
+        SELECT o.last_event_seq, o.last_event_digest, o.event_chain_digest,
+               o.terminal_at_ms, g.state AS generation_state
+        FROM invocation_observations o
+        JOIN plugin_generations g ON g.id = o.generation_id
+        WHERE o.invocation_id = ? AND o.generation_id = ?
+        ",
+    )
+    .bind(invocation_id)
+    .bind(generation_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or_else(|| FleetError::NotFound {
+        entity: "invocation observation",
+        id: invocation_id.to_owned(),
+    })?;
+    if row.try_get::<String, _>("generation_state")? != "active" {
+        return Err(FleetError::Conflict(
+            "invocation generation is no longer active".to_owned(),
+        ));
+    }
+    if row.try_get::<Option<i64>, _>("terminal_at_ms")?.is_some() {
+        return Err(FleetError::Conflict(
+            "invocation observation is already terminal".to_owned(),
+        ));
+    }
+    let previous_seq: i64 = row.try_get("last_event_seq")?;
+    if event_seq == previous_seq {
+        let previous_digest: Option<String> = row.try_get("last_event_digest")?;
+        if previous_digest.as_deref() == Some(event_digest.as_str()) {
+            transaction.commit().await?;
+            return Ok(());
+        }
+        return Err(FleetError::Conflict(
+            "event sequence was reused with different evidence".to_owned(),
+        ));
+    }
+    if event_seq != previous_seq.saturating_add(1) {
+        return Err(FleetError::Conflict(format!(
+            "event sequence is not contiguous: expected {}, received {event_seq}",
+            previous_seq.saturating_add(1)
+        )));
+    }
+    let previous_chain: Option<String> = row.try_get("event_chain_digest")?;
+    apply_event_fold(
+        &mut transaction,
+        EventFold {
+            generation_id,
+            invocation_id,
+            previous_seq,
+            event_seq,
+            observed_at_ms,
+            payload_bytes: raw_len,
+            chain_digest: chain_digest(previous_chain.as_deref(), &event_digest),
+            event_digest,
+            counts: event_increments(classification),
+        },
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
 
-    /// Lists bounded invocation observations, optionally for one agent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when persisted evidence is invalid or cannot be read.
-    pub async fn list_invocation_observations(
-        &self,
-        agent_id: Option<&str>,
-    ) -> Result<Vec<InvocationObservation>, FleetError> {
-        let rows = match agent_id {
+/// Records the exact terminal summary before result settlement. Transcript
+/// content remains in the bounded result message rather than this row.
+///
+/// # Errors
+///
+/// Returns an error when terminal evidence is oversized, does not match
+/// the durable event sequence, conflicts with a replay, or cannot persist.
+pub async fn record_invocation_terminal(
+    store: &Store,
+    generation_id: &str,
+    terminal: &TurnTerminal,
+) -> Result<(), FleetError> {
+    let invocation_id = &terminal.fence.invocation_id;
+    let last_event_seq = i64::try_from(terminal.last_event_seq)
+        .map_err(|_| FleetError::Invalid("terminal event sequence is too large".to_owned()))?;
+    let usage_json = bounded_json(&terminal.usage, "terminal usage")?;
+    let certainty = harness_certainty_str(terminal.execution_certainty);
+    let persistence = persistence_str(terminal.session_persistence);
+    let mut transaction = store.begin_immediate().await?;
+    let row = sqlx::query(
+        r"
+        SELECT last_event_seq, terminal_at_ms, stop_reason,
+               runtime_stop_reason, execution_certainty, session_quiescent,
+               session_persistence, usage_json
+        FROM invocation_observations
+        WHERE invocation_id = ? AND generation_id = ?
+        ",
+    )
+    .bind(invocation_id)
+    .bind(generation_id)
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or_else(|| FleetError::NotFound {
+        entity: "invocation observation",
+        id: invocation_id.clone(),
+    })?;
+    if row.try_get::<i64, _>("last_event_seq")? != last_event_seq {
+        return Err(FleetError::Conflict(
+            "terminal event sequence does not match durable observations".to_owned(),
+        ));
+    }
+    if row.try_get::<Option<i64>, _>("terminal_at_ms")?.is_some() {
+        if terminal_matches(&row, terminal, certainty, persistence, &usage_json)? {
+            transaction.commit().await?;
+            return Ok(());
+        }
+        return Err(FleetError::Conflict(
+            "invocation terminal was already recorded with different evidence".to_owned(),
+        ));
+    }
+    let now = now_ms();
+    sqlx::query(
+        r"
+        UPDATE invocation_observations
+        SET updated_at_ms = ?, terminal_at_ms = ?, stop_reason = ?,
+            runtime_stop_reason = ?, execution_certainty = ?,
+            session_quiescent = ?, session_persistence = ?, usage_json = ?
+        WHERE invocation_id = ? AND generation_id = ? AND terminal_at_ms IS NULL
+        ",
+    )
+    .bind(now)
+    .bind(now)
+    .bind(&terminal.stop_reason)
+    .bind(&terminal.runtime_stop_reason)
+    .bind(certainty)
+    .bind(terminal.session_quiescent)
+    .bind(persistence)
+    .bind(usage_json)
+    .bind(invocation_id)
+    .bind(generation_id)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        "UPDATE plugin_generations SET last_heartbeat_at_ms = ? WHERE id = ? AND state = 'active'",
+    )
+    .bind(now)
+    .bind(generation_id)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Lists bounded invocation observations, optionally for one agent.
+///
+/// # Errors
+///
+/// Returns an error when persisted evidence is invalid or cannot be read.
+pub async fn list_invocation_observations(
+    store: &Store,
+    agent_id: Option<&str>,
+) -> Result<Vec<InvocationObservation>, FleetError> {
+    let rows =
+        match agent_id {
             Some(agent_id) => sqlx::query(&format!(
                 "{} WHERE i.agent_id = ? ORDER BY o.updated_at_ms DESC, o.invocation_id LIMIT 500",
                 observation_select()
             ))
             .bind(agent_id)
-            .fetch_all(&self.pool)
+            .fetch_all(store.pool())
             .await?,
             None => {
                 sqlx::query(&format!(
                     "{} ORDER BY o.updated_at_ms DESC, o.invocation_id LIMIT 500",
                     observation_select()
                 ))
-                .fetch_all(&self.pool)
+                .fetch_all(store.pool())
                 .await?
             }
         };
-        rows.iter().map(observation_from_row).collect()
-    }
+    rows.iter().map(observation_from_row).collect()
 }
 
 struct EventFold<'a> {

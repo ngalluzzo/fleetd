@@ -106,7 +106,7 @@ impl Store {
         &self.pool
     }
 
-    pub(crate) fn notify_message_commit(&self, created: bool) {
+    pub fn notify_message_commit(&self, created: bool) {
         if created && let Some(notifier) = &self.message_commit_notifier {
             notifier.notify();
         }
