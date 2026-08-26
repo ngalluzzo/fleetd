@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use fleetd::{
+use fleetd_proto::model::{
     AckDelivery, BlockDelivery, ChannelMember, ClaimBatch, ClaimDeliveries, Delivery, Message,
     MessagePage, RetryDelivery, SendMessage,
 };
@@ -1140,11 +1140,7 @@ fn workflow_member(member: &ChannelMember) -> WorkflowMember {
     WorkflowMember {
         agent_id: member.agent_id.clone(),
         agent_name: member.agent_name.clone(),
-        delivery_mode: match member.delivery_mode {
-            fleetd::MembershipDeliveryMode::Inbox => "inbox",
-            fleetd::MembershipDeliveryMode::StreamOnly => "stream_only",
-        }
-        .to_owned(),
+        delivery_mode: member.delivery_mode.as_str().to_owned(),
         joined_at_ms: member.joined_at_ms,
     }
 }

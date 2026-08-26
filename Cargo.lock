@@ -918,6 +918,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleetd-author-review"
+version = "0.0.1"
+dependencies = [
+ "axum",
+ "clap",
+ "fleetd",
+ "fleetd-proto",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "fleetd-conversation"
 version = "0.1.0"
 dependencies = [

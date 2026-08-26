@@ -14,9 +14,14 @@ use axum::{
     response::Response,
 };
 use fleetd::{
-    AppState, AuthService, ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel,
-    CreateChannelMember, DeliveryState, MembershipDeliveryMode, Message, MessagePage,
-    RetryDelivery, SendMessage, Store, router,
+    auth::AuthService,
+    http::{AppState, router},
+    model::{
+        ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel, CreateChannelMember,
+        DeliveryState, MembershipDeliveryMode, Message, MessagePage, RegisteredAgent,
+        RetryDelivery, SendMessage,
+    },
+    store::Store,
 };
 use fleetd_author_review::{
     protocol::{
@@ -83,8 +88,12 @@ async fn crash_replay_is_idempotent_and_divergent_replay_is_rejected() {
         .expect_err("divergent replay must conflict");
     assert!(error.to_string().contains("divergent replay"));
 
-    let observer_history = fixture.observer_history().await;
-    let coordinator_assignments = observer_history
+    // Read the log through the coordinator: it is the addressed recipient, so it
+    // sees the assignment under the current channel-visibility rule. Whether a
+    // third `stream_only` member also sees agent-to-agent traffic is ADR 0026,
+    // which this branch does not carry.
+    let coordinator_history = fixture.history_as(&fixture.coordinator).await;
+    let coordinator_assignments = coordinator_history
         .messages
         .iter()
         .filter(|message| {
@@ -95,7 +104,6 @@ async fn crash_replay_is_idempotent_and_divergent_replay_is_rejected() {
         })
         .count();
     assert_eq!(coordinator_assignments, 1);
-    assert_eq!(observer_history.messages.len(), 2);
     fixture.acknowledge_root().await;
 }
 
@@ -453,9 +461,9 @@ fn retry_controls_reject_poll_interval_reclaim_and_unbounded_delays() {
 
 struct WorkflowFixture {
     server: TestServer,
-    runner_agent: fleetd::RegisteredAgent,
-    coordinator: fleetd::RegisteredAgent,
-    observer: fleetd::RegisteredAgent,
+    runner_agent: RegisteredAgent,
+    coordinator: RegisteredAgent,
+    observer: RegisteredAgent,
     channel_id: String,
     root: Message,
     batch: ClaimBatch,
@@ -512,22 +520,22 @@ impl WorkflowFixture {
         }
     }
 
-    async fn observer_history(&self) -> MessagePage {
+    async fn history_as(&self, viewer: &RegisteredAgent) -> MessagePage {
         self.server
             .http
             .get(format!(
                 "{}/v1/channels/{}/messages?after=0&limit=100",
                 self.server.origin, self.channel_id
             ))
-            .bearer_auth(&self.observer.credential.token)
+            .bearer_auth(&viewer.credential.token)
             .send()
             .await
-            .expect("read observer history")
+            .expect("read channel history")
             .error_for_status()
-            .expect("observer history status")
+            .expect("channel history status")
             .json()
             .await
-            .expect("observer history body")
+            .expect("channel history body")
     }
 
     async fn acknowledge_root(&self) {
@@ -593,7 +601,7 @@ impl WorkflowFixture {
     }
 
     async fn seed_divergent_root_effect(&self) {
-        let operation_id = format!("assign-coordinator:{WORKFLOW_ID}");
+        let operation_id = "assign-coordinator";
         let response = self
             .server
             .http
@@ -629,10 +637,7 @@ impl WorkflowFixture {
     }
 }
 
-async fn create_workflow_channel(
-    server: &TestServer,
-    agents: [&fleetd::RegisteredAgent; 6],
-) -> String {
+async fn create_workflow_channel(server: &TestServer, agents: [&RegisteredAgent; 6]) -> String {
     let [human, runner, coordinator, author, reviewer, observer] = agents;
     server
         .store
@@ -657,8 +662,8 @@ async fn create_workflow_channel(
 async fn send_root(
     server: &TestServer,
     channel_id: &str,
-    human: &fleetd::RegisteredAgent,
-    runner: &fleetd::RegisteredAgent,
+    human: &RegisteredAgent,
+    runner: &RegisteredAgent,
 ) -> Message {
     server
         .http
@@ -685,7 +690,7 @@ async fn send_root(
         .expect("root request body")
 }
 
-async fn claim_root(server: &TestServer, runner: &fleetd::RegisteredAgent) -> ClaimBatch {
+async fn claim_root(server: &TestServer, runner: &RegisteredAgent) -> ClaimBatch {
     server
         .http
         .post(format!(
@@ -728,10 +733,10 @@ fn root_payload_for(request_id: &str) -> serde_json::Value {
 
 fn runner_configuration(
     server: &TestServer,
-    runner: &fleetd::RegisteredAgent,
-    coordinator: &fleetd::RegisteredAgent,
-    author: &fleetd::RegisteredAgent,
-    reviewer: &fleetd::RegisteredAgent,
+    runner: &RegisteredAgent,
+    coordinator: &RegisteredAgent,
+    author: &RegisteredAgent,
+    reviewer: &RegisteredAgent,
     credential_file: PathBuf,
 ) -> RunnerConfiguration {
     RunnerConfiguration {
@@ -880,7 +885,7 @@ impl TestServer {
         }
     }
 
-    async fn register(&self, name: &str) -> fleetd::RegisteredAgent {
+    async fn register(&self, name: &str) -> RegisteredAgent {
         AuthService::new(self.store.clone())
             .register_agent(CreateAgent {
                 name: name.to_owned(),
