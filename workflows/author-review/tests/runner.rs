@@ -88,12 +88,11 @@ async fn crash_replay_is_idempotent_and_divergent_replay_is_rejected() {
         .expect_err("divergent replay must conflict");
     assert!(error.to_string().contains("divergent replay"));
 
-    // Read the log through the coordinator: it is the addressed recipient, so it
-    // sees the assignment under the current channel-visibility rule. Whether a
-    // third `stream_only` member also sees agent-to-agent traffic is ADR 0026,
-    // which this branch does not carry.
-    let coordinator_history = fixture.history_as(&fixture.coordinator).await;
-    let coordinator_assignments = coordinator_history
+    // Read the log through the observer: a `stream_only` member involved in
+    // neither side of the assignment. Under ADR 0027 it follows the
+    // agent-to-agent exchange in full without accruing delivery rows.
+    let observer_history = fixture.history_as(&fixture.observer).await;
+    let coordinator_assignments = observer_history
         .messages
         .iter()
         .filter(|message| {
@@ -104,6 +103,7 @@ async fn crash_replay_is_idempotent_and_divergent_replay_is_rejected() {
         })
         .count();
     assert_eq!(coordinator_assignments, 1);
+    assert_eq!(observer_history.messages.len(), 2);
     fixture.acknowledge_root().await;
 }
 
