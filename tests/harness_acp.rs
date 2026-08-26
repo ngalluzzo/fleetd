@@ -2,7 +2,7 @@
 
 use std::{path::PathBuf, time::Duration};
 
-use fleetd::{
+use fleetd::plugin::{
     Binding, CloseSession, ExecutionFence, HarnessAcpNotification, OpenSession, OpenSessionMode,
     PluginError, PluginProcess, PluginSpec, PromptBlock, StartTurn, ToolBudget, TurnPolicy,
     TurnSource, harness_acp_interface,

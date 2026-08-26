@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
-use fleetd::{
+use fleetd::plugin::{
     Binding, ExecutionFence, HarnessAcpClient, HarnessAcpNotification, OpenSession,
     OpenSessionMode, PermissionOutcome, PermissionResolution, PluginProcess, PluginSpec,
     PromptBlock, StartTurn, ToolBudget, TurnPolicy, TurnSource, harness_acp_interface,

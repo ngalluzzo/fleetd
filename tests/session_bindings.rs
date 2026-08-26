@@ -1,9 +1,18 @@
 use fleetd::{
-    AcquireSessionBinding, ArmInvocation, BlockDelivery, ClaimDeliveries, CompleteInvocation,
-    CreateAgent, CreateChannel, CreateMessage, DescribeResult, DriverIdentity, FleetError,
-    HarnessLimits, Invocation, InvocationState, NewPluginGeneration, PluginIdentity,
-    RuntimeIdentity, SessionAcquisitionMode, SessionBinding, SessionBindingState,
-    SessionPersistence, Store, harness_acp_interface,
+    error::FleetError,
+    model::{
+        ArmInvocation, BlockDelivery, ClaimDeliveries, CompleteInvocation, CreateAgent,
+        CreateChannel, CreateMessage, Invocation, InvocationState,
+    },
+    operations::NewPluginGeneration,
+    plugin::{
+        DescribeResult, DriverIdentity, HarnessLimits, PluginIdentity, RuntimeIdentity,
+        SessionPersistence, harness_acp_interface,
+    },
+    session_binding::{
+        AcquireSessionBinding, SessionAcquisitionMode, SessionBinding, SessionBindingState,
+    },
+    store::Store,
 };
 use semver::Version;
 use serde_json::json;
@@ -11,7 +20,7 @@ use serde_json::json;
 struct Fixture {
     directory: tempfile::TempDir,
     store: Store,
-    receiver: fleetd::Agent,
+    receiver: fleetd::model::Agent,
     invocation: Invocation,
     generation_id: String,
 }
@@ -114,7 +123,7 @@ async fn generation(store: &Store, agent_id: &str) -> String {
     id
 }
 
-async fn agent(store: &Store, name: &str) -> fleetd::Agent {
+async fn agent(store: &Store, name: &str) -> fleetd::model::Agent {
     store
         .create_agent(CreateAgent {
             name: name.to_owned(),

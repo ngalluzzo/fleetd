@@ -2,7 +2,10 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use fleetd::{AppState, Store, router};
+use fleetd::{
+    api::{AppState, router},
+    store::Store,
+};
 use serde_json::Value;
 use tower::ServiceExt;
 

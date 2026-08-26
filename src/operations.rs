@@ -12,8 +12,12 @@ pub use fleetd_proto::operations::{
 };
 
 use crate::{
-    DescribeResult, ExecutionCertainty, FleetError, PluginIdentity, PluginInterface,
-    SessionPersistence, Store, TurnTerminal, plugin::Binding, store::now_ms,
+    error::FleetError,
+    model::ExecutionCertainty,
+    plugin::{
+        Binding, DescribeResult, PluginIdentity, PluginInterface, SessionPersistence, TurnTerminal,
+    },
+    store::{Store, now_ms},
 };
 
 const MAX_EVIDENCE_JSON_BYTES: usize = 1024 * 1024;
@@ -876,11 +880,11 @@ fn parse_generation_state(value: &str) -> Result<PluginGenerationState, FleetErr
     }
 }
 
-fn harness_certainty_str(value: crate::HarnessExecutionCertainty) -> &'static str {
+fn harness_certainty_str(value: crate::plugin::HarnessExecutionCertainty) -> &'static str {
     match value {
-        crate::HarnessExecutionCertainty::NotStarted => "not_started",
-        crate::HarnessExecutionCertainty::OutcomeKnown => "outcome_known",
-        crate::HarnessExecutionCertainty::OutcomeUnknown => "outcome_unknown",
+        crate::plugin::HarnessExecutionCertainty::NotStarted => "not_started",
+        crate::plugin::HarnessExecutionCertainty::OutcomeKnown => "outcome_known",
+        crate::plugin::HarnessExecutionCertainty::OutcomeUnknown => "outcome_unknown",
     }
 }
 

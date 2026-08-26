@@ -33,8 +33,11 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    CreateMessage, FleetError, Invocation, ManagedTurnGrant, ResolvedMcpEndpoint, ResolvedMcpGrant,
-    ResolvedMcpHttpHeader, Store,
+    controller::ManagedTurnGrant,
+    error::FleetError,
+    model::{CreateMessage, Invocation},
+    plugin::{ResolvedMcpEndpoint, ResolvedMcpGrant, ResolvedMcpHttpHeader},
+    store::Store,
 };
 
 /// Runtime grant name for invocation-scoped durable message publication.
@@ -411,7 +414,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::{Agent, Channel, ClaimDeliveries, CreateAgent, CreateChannel, Message};
+    use crate::model::{Agent, Channel, ClaimDeliveries, CreateAgent, CreateChannel, Message};
 
     struct Fixture {
         _directory: TempDir,

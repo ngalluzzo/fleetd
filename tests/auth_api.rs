@@ -1,8 +1,13 @@
 use fleetd::{
-    AppState, ArmInvocation, AuthService, BlockDelivery, BlockResolution, BlockedDelivery,
-    ClaimBatch, ClaimDeliveries, CompleteInvocation, CreateAgent, CreateChannel, Invocation,
-    InvocationBatch, InvocationCompletion, InvocationState, IssuedCredential, Message, MessagePage,
-    RegisteredAgent, ResolveDeliveryBlock, SendMessage, Store, router,
+    api::{AppState, router},
+    auth::AuthService,
+    model::{
+        ArmInvocation, BlockDelivery, BlockResolution, BlockedDelivery, ClaimBatch,
+        ClaimDeliveries, CompleteInvocation, CreateAgent, CreateChannel, Invocation,
+        InvocationBatch, InvocationCompletion, InvocationState, IssuedCredential, Message,
+        MessagePage, RegisteredAgent, ResolveDeliveryBlock, SendMessage,
+    },
+    store::Store,
 };
 use serde_json::json;
 
@@ -75,7 +80,7 @@ impl TestServer {
             .expect("registration body")
     }
 
-    async fn channel(&self, members: &[&str]) -> fleetd::Channel {
+    async fn channel(&self, members: &[&str]) -> fleetd::model::Channel {
         self.post("/v1/channels", Some(&self.operator_token))
             .json(&CreateChannel {
                 name: "auth-test".to_owned(),
@@ -187,7 +192,7 @@ async fn channel_membership_listing_is_exact_bounded_and_authorized() {
         .await
         .expect("create mixed membership channel");
     assert_eq!(created.status(), reqwest::StatusCode::CREATED);
-    let channel: fleetd::Channel = created.json().await.expect("channel body");
+    let channel: fleetd::model::Channel = created.json().await.expect("channel body");
 
     let operator_members = server
         .get(
@@ -337,7 +342,7 @@ async fn channel_membership_writes_are_atomic_immutable_and_strict() {
         .await
         .expect("duplicate initial membership response");
     assert_eq!(duplicate.status(), reqwest::StatusCode::BAD_REQUEST);
-    let channels: Vec<fleetd::Channel> = server
+    let channels: Vec<fleetd::model::Channel> = server
         .get("/v1/channels", Some(&server.operator_token))
         .send()
         .await

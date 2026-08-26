@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use tokio::{sync::broadcast, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-use crate::{FleetError, Message};
+use crate::{error::FleetError, model::Message};
 
 const HINT_BYTE: u8 = 1;
 

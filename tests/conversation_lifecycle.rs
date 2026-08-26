@@ -1,7 +1,11 @@
 use fleetd::{
-    AppState, AuthService, ConversationKind, CreateAgent, CreateChannel, CreateChannelMember,
-    CreateMessage, MembershipDeliveryMode, OpenDirectConversation, RenameChannel, SendMessage,
-    Store, router,
+    api::{AppState, router},
+    auth::AuthService,
+    model::{
+        ConversationKind, CreateAgent, CreateChannel, CreateChannelMember, CreateMessage,
+        MembershipDeliveryMode, OpenDirectConversation, RenameChannel, SendMessage,
+    },
+    store::Store,
 };
 use serde_json::json;
 
@@ -13,7 +17,7 @@ async fn test_store() -> (tempfile::TempDir, Store) {
     (directory, store)
 }
 
-async fn create_agent(store: &Store, name: &str) -> fleetd::Agent {
+async fn create_agent(store: &Store, name: &str) -> fleetd::model::Agent {
     store
         .create_agent(CreateAgent {
             name: name.to_owned(),
@@ -71,7 +75,10 @@ async fn direct_conversation_open_is_exact_pair_idempotent_and_concurrency_safe(
         })
         .await
         .expect_err("immutable mode mismatch");
-    assert!(matches!(incompatible, fleetd::FleetError::Conflict(_)));
+    assert!(matches!(
+        incompatible,
+        fleetd::error::FleetError::Conflict(_)
+    ));
     let fixed_membership = store
         .add_member_with_mode(
             &first.conversation.id,
@@ -80,17 +87,20 @@ async fn direct_conversation_open_is_exact_pair_idempotent_and_concurrency_safe(
         )
         .await
         .expect_err("direct membership cannot be mutated through channel API");
-    assert!(matches!(fixed_membership, fleetd::FleetError::Conflict(_)));
+    assert!(matches!(
+        fixed_membership,
+        fleetd::error::FleetError::Conflict(_)
+    ));
     let renamed = store
         .rename_channel(&first.conversation.id, "not-a-direct-name".to_owned())
         .await
         .expect_err("direct conversation name is fixed");
-    assert!(matches!(renamed, fleetd::FleetError::Conflict(_)));
+    assert!(matches!(renamed, fleetd::error::FleetError::Conflict(_)));
     let archived = store
         .archive_channel(&first.conversation.id)
         .await
         .expect_err("direct conversation lifecycle is fixed");
-    assert!(matches!(archived, fleetd::FleetError::Conflict(_)));
+    assert!(matches!(archived, fleetd::error::FleetError::Conflict(_)));
 
     for invalid_members in [
         vec![participant(&human.id, MembershipDeliveryMode::StreamOnly)],
@@ -105,7 +115,7 @@ async fn direct_conversation_open_is_exact_pair_idempotent_and_concurrency_safe(
             })
             .await
             .expect_err("invalid participant set");
-        assert!(matches!(invalid, fleetd::FleetError::Invalid(_)));
+        assert!(matches!(invalid, fleetd::error::FleetError::Invalid(_)));
     }
 }
 
@@ -183,7 +193,7 @@ async fn shared_channel_rename_and_archive_preserve_history_and_close_writes() {
         )
         .await
         .expect_err("archived channel rejects append");
-    assert!(matches!(append, fleetd::FleetError::Conflict(_)));
+    assert!(matches!(append, fleetd::error::FleetError::Conflict(_)));
     let history = store
         .list_messages(&channel.id, None, 0, 100)
         .await
@@ -236,7 +246,7 @@ impl TestServer {
             .bearer_auth(&self.operator_token)
     }
 
-    async fn register(&self, name: &str) -> fleetd::RegisteredAgent {
+    async fn register(&self, name: &str) -> fleetd::model::RegisteredAgent {
         self.request(reqwest::Method::POST, "/v1/agents")
             .json(&CreateAgent {
                 name: name.to_owned(),
@@ -279,7 +289,7 @@ async fn direct_conversation_http_open_is_idempotent_and_discoverable() {
         ])
         .await;
     assert_eq!(opened.status(), reqwest::StatusCode::CREATED);
-    let direct: fleetd::ConversationSummary = opened.json().await.expect("direct body");
+    let direct: fleetd::model::ConversationSummary = opened.json().await.expect("direct body");
     assert_eq!(direct.kind, ConversationKind::Direct);
     let replay = server
         .open_direct(vec![
@@ -289,7 +299,7 @@ async fn direct_conversation_http_open_is_idempotent_and_discoverable() {
         .await;
     assert_eq!(replay.status(), reqwest::StatusCode::OK);
 
-    let active: Vec<fleetd::ConversationSummary> = server
+    let active: Vec<fleetd::model::ConversationSummary> = server
         .request(reqwest::Method::GET, "/v1/conversations")
         .send()
         .await
@@ -307,7 +317,7 @@ async fn direct_conversation_http_open_is_idempotent_and_discoverable() {
 async fn shared_channel_http_lifecycle_is_closed_after_archive() {
     let server = TestServer::start().await;
     let human = server.register("api-shared-human").await;
-    let channel: fleetd::Channel = server
+    let channel: fleetd::model::Channel = server
         .request(reqwest::Method::POST, "/v1/channels")
         .json(&CreateChannel {
             name: "api-shared".to_owned(),
@@ -323,7 +333,7 @@ async fn shared_channel_http_lifecycle_is_closed_after_archive() {
         .json()
         .await
         .expect("channel body");
-    let renamed: fleetd::Channel = server
+    let renamed: fleetd::model::Channel = server
         .request(
             reqwest::Method::PATCH,
             &format!("/v1/channels/{}", channel.id),
@@ -340,7 +350,7 @@ async fn shared_channel_http_lifecycle_is_closed_after_archive() {
         .await
         .expect("renamed body");
     assert_eq!(renamed.name, "api-renamed");
-    let archived: fleetd::Channel = server
+    let archived: fleetd::model::Channel = server
         .request(
             reqwest::Method::POST,
             &format!("/v1/channels/{}/archive", channel.id),
@@ -355,7 +365,7 @@ async fn shared_channel_http_lifecycle_is_closed_after_archive() {
         .expect("archived body");
     assert!(archived.archived_at_ms.is_some());
 
-    let active: Vec<fleetd::ConversationSummary> = server
+    let active: Vec<fleetd::model::ConversationSummary> = server
         .request(reqwest::Method::GET, "/v1/conversations")
         .send()
         .await
@@ -366,7 +376,7 @@ async fn shared_channel_http_lifecycle_is_closed_after_archive() {
         .await
         .expect("active list body");
     assert!(active.is_empty());
-    let all: Vec<fleetd::ConversationSummary> = server
+    let all: Vec<fleetd::model::ConversationSummary> = server
         .request(
             reqwest::Method::GET,
             "/v1/conversations?include_archived=true",

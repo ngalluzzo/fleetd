@@ -1,16 +1,20 @@
 use fleetd::{
-    ArmInvocation, BlockResolution, ClaimDeliveries, CompleteInvocation, CreateAgent,
-    CreateChannel, CreateMessage, ExecutionCertainty, FleetError, Invocation, InvocationState,
-    ResolveDeliveryBlock, RetryDelivery, Store,
+    error::FleetError,
+    model::{
+        ArmInvocation, BlockResolution, ClaimDeliveries, CompleteInvocation, CreateAgent,
+        CreateChannel, CreateMessage, ExecutionCertainty, Invocation, InvocationState,
+        ResolveDeliveryBlock, RetryDelivery,
+    },
+    store::Store,
 };
 use serde_json::json;
 
 async fn fixture() -> (
     tempfile::TempDir,
     Store,
-    fleetd::Agent,
-    fleetd::Agent,
-    fleetd::Message,
+    fleetd::model::Agent,
+    fleetd::model::Agent,
+    fleetd::model::Message,
 ) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let store = Store::open(directory.path().join("fleetd.db"))
@@ -45,7 +49,7 @@ async fn fixture() -> (
     (directory, store, sender, receiver, message)
 }
 
-async fn agent(store: &Store, name: &str) -> fleetd::Agent {
+async fn agent(store: &Store, name: &str) -> fleetd::model::Agent {
     store
         .create_agent(CreateAgent {
             name: name.to_owned(),

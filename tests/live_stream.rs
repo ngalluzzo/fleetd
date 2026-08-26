@@ -1,8 +1,13 @@
 use std::time::Duration;
 
 use fleetd::{
-    AckDelivery, AppState, AuthService, ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel,
-    CreateMessage, Message, SendMessage, Store, router,
+    api::{AppState, router},
+    auth::AuthService,
+    model::{
+        AckDelivery, ClaimBatch, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
+        Message, SendMessage,
+    },
+    store::Store,
 };
 use futures_util::StreamExt;
 use serde_json::json;

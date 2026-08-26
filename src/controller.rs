@@ -7,10 +7,16 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::{
-    ArmInvocation, BlockDelivery, BlockedDelivery, CompleteInvocation, FleetError,
-    HarnessAcpClient, HarnessAcpNotification, HarnessExecutionCertainty, Invocation,
-    InvocationCompletion, InvocationState, PermissionOutcome, PermissionResolution, PromptBlock,
-    StartTurn, Store, TurnPolicy, TurnSource, plugin::Binding,
+    error::FleetError,
+    model::{
+        ArmInvocation, BlockDelivery, BlockedDelivery, CompleteInvocation, Invocation,
+        InvocationCompletion, InvocationState,
+    },
+    plugin::{
+        Binding, HarnessAcpClient, HarnessAcpNotification, HarnessExecutionCertainty,
+        PermissionOutcome, PermissionResolution, PromptBlock, StartTurn, TurnPolicy, TurnSource,
+    },
+    store::Store,
 };
 
 /// One reserved inbox attempt ready to be dispatched into an already-opened,
@@ -72,7 +78,7 @@ pub enum ManagedTurnError {
     #[error("managed turn persistence failed: {0}")]
     Fleet(#[from] FleetError),
     #[error("managed harness failed before dispatch was armed: {0}")]
-    HarnessBeforeArm(#[source] Box<crate::PluginError>),
+    HarnessBeforeArm(#[source] Box<crate::plugin::PluginError>),
 }
 
 /// Trusted controller that composes invocation fences with a typed harness
@@ -149,7 +155,7 @@ impl<'store> ManagedHarnessController<'store> {
             }
         }
 
-        let fence = crate::ExecutionFence {
+        let fence = crate::plugin::ExecutionFence {
             binding_id: binding.binding_id.clone(),
             binding_generation: binding.binding_generation,
             owner_epoch: binding.owner_epoch,
@@ -209,7 +215,7 @@ impl<'store> ManagedHarnessController<'store> {
         invocation: &Invocation,
         generation_id: &str,
         binding: &Binding,
-        fence: &crate::ExecutionFence,
+        fence: &crate::plugin::ExecutionFence,
         policy: &TurnPolicy,
     ) -> Result<TerminalDrain, ManagedTurnError> {
         match tokio::time::timeout(
@@ -376,7 +382,7 @@ fn terminal_payload(
     invocation_id: &str,
     result_capture: TurnResultCapture,
     result_context: &Value,
-    terminal: &crate::TurnTerminal,
+    terminal: &crate::plugin::TurnTerminal,
     host_stop_reason: Option<HostStopReason>,
 ) -> Value {
     let transcript_complete = terminal
@@ -446,7 +452,7 @@ async fn revoke_grants(grants: &[Arc<dyn ManagedTurnGrant>], invocation_id: &str
     }
 }
 
-fn capture_final_assistant_json(messages: &[crate::AssistantMessage]) -> Value {
+fn capture_final_assistant_json(messages: &[crate::plugin::AssistantMessage]) -> Value {
     let (message, selection) = match select_final_assistant_message(messages) {
         Ok(selected) => selected,
         Err(reason) => return json!({"status": "unavailable", "reason": reason}),
@@ -483,8 +489,8 @@ fn capture_final_assistant_json(messages: &[crate::AssistantMessage]) -> Value {
 }
 
 fn select_final_assistant_message(
-    messages: &[crate::AssistantMessage],
-) -> Result<(&crate::AssistantMessage, &'static str), &'static str> {
+    messages: &[crate::plugin::AssistantMessage],
+) -> Result<(&crate::plugin::AssistantMessage, &'static str), &'static str> {
     let Some(final_message) = messages.last() else {
         return Err("no_assistant_message");
     };
@@ -527,7 +533,7 @@ impl HostStopReason {
 }
 
 struct TerminalEvidence {
-    terminal: Box<crate::TurnTerminal>,
+    terminal: Box<crate::plugin::TurnTerminal>,
     host_stop_reason: Option<HostStopReason>,
 }
 
@@ -540,8 +546,8 @@ async fn drain_turn(
     store: &Store,
     generation_id: &str,
     harness: &mut HarnessAcpClient,
-    fence: &crate::ExecutionFence,
-) -> Result<crate::TurnTerminal, TurnDrainError> {
+    fence: &crate::plugin::ExecutionFence,
+) -> Result<crate::plugin::TurnTerminal, TurnDrainError> {
     loop {
         match harness.next_notification().await? {
             HarnessAcpNotification::TurnEvent(event) => {
@@ -589,7 +595,7 @@ async fn drain_turn(
 #[derive(Debug, Error)]
 enum TurnDrainError {
     #[error("harness protocol failed: {0}")]
-    Plugin(#[from] crate::PluginError),
+    Plugin(#[from] crate::plugin::PluginError),
     #[error("durable invocation evidence failed: {0}")]
     Evidence(#[from] FleetError),
     #[error("invocation evidence serialization failed: {0}")]

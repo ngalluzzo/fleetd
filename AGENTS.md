@@ -16,6 +16,9 @@ Read `VISION.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PROTOCOL.md`, and
   authenticated principal, not caller-supplied identity fields.
 - Keep network listeners on loopback until encrypted transport and enrollment
   are explicitly implemented.
+- Reach a type through the module that owns it. The crate root re-exports
+  modules, never individual items; a flat root list is a conflict magnet that
+  every change has to edit.
 - Keep boundary-crossing types in `fleetd-proto` and everything that reads,
   stores, or transports them in the crate that owns that behavior. Plugins,
   hosts, and tools depend on the wire crate, never on the daemon.

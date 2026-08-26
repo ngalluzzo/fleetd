@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use fleetd::{PluginIdentity, PluginInterface, PluginManifest};
+use fleetd::plugin::{PluginIdentity, PluginInterface, PluginManifest};
 use semver::Version;
 
 #[test]

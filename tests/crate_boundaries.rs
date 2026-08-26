@@ -178,3 +178,39 @@ fn api_composition_module_registers_every_domain() {
         );
     }
 }
+
+/// Returns each `pub use ...;` statement in a source file, joined onto one line.
+fn re_export_statements(source: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut rest = source;
+    while let Some(start) = rest.find("pub use ") {
+        rest = &rest[start..];
+        let Some(end) = rest.find(';') else { break };
+        statements.push(rest[..end].split_whitespace().collect::<Vec<_>>().join(" "));
+        rest = &rest[end + 1..];
+    }
+    statements
+}
+
+#[test]
+fn crate_root_re_exports_modules_only() {
+    let lib = fs::read_to_string(workspace_root().join("src/lib.rs")).expect("crate root");
+    for statement in re_export_statements(&lib) {
+        assert!(
+            !statement.contains('{'),
+            "crate root re-exports individual items: `{statement}`. A flat root list is a \
+             conflict magnet — every change appends to the same sorted block. Let consumers \
+             name the owning module instead."
+        );
+        let last = statement
+            .trim_end_matches(';')
+            .rsplit("::")
+            .next()
+            .expect("re-export path segment");
+        assert!(
+            last.chars().next().is_some_and(char::is_lowercase),
+            "crate root re-exports the type `{last}`. Only whole modules may be re-exported \
+             from the root."
+        );
+    }
+}

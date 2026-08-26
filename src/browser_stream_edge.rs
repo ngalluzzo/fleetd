@@ -18,7 +18,7 @@ use thiserror::Error;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use utoipa::ToSchema;
 
-use crate::Message;
+use crate::model::Message;
 
 pub const BROWSER_STREAM_PROTOCOL: &str = "fleetd.channel-stream.browser.v1";
 pub const BROWSER_STREAM_PATH: &str = "/v1/browser/channel-stream";
@@ -479,7 +479,7 @@ mod tests {
         MAX_REDEMPTION_FRAME_BYTES, MAX_UNUSED_GRANTS_PER_CREDENTIAL, MAX_UNUSED_GRANTS_PER_DAEMON,
         RedemptionFrameError, STREAM_GRANT_ENTROPY_BYTES, STREAM_GRANT_REDEMPTION_LIFETIME,
     };
-    use crate::Message;
+    use crate::model::Message;
 
     const VALID_GRANT: &str = "fl_sg_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 

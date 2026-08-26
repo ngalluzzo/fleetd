@@ -10,11 +10,20 @@ use std::{
 };
 
 use fleetd::{
-    AcquireSessionBinding, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, Invocation,
-    InvocationState, ManagedHarnessController, ManagedTurn, ManagedTurnGrant, ManagedTurnOutcome,
-    NewPluginGeneration, OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock,
-    SessionAcquisitionMode, SessionBindingState, SessionPersistence, Store, ToolBudget, TurnPolicy,
-    TurnResultCapture, harness_acp_interface,
+    controller::{
+        ManagedHarnessController, ManagedTurn, ManagedTurnGrant, ManagedTurnOutcome,
+        TurnResultCapture,
+    },
+    model::{
+        ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, Invocation, InvocationState,
+    },
+    operations::NewPluginGeneration,
+    plugin::{
+        OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock, SessionPersistence,
+        ToolBudget, TurnPolicy, harness_acp_interface,
+    },
+    session_binding::{AcquireSessionBinding, SessionAcquisitionMode, SessionBindingState},
+    store::Store,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -64,7 +73,12 @@ fn harness_spec(mode: &str) -> PluginSpec {
         .with_request_timeout(Duration::from_secs(2))
 }
 
-async fn fixture() -> (tempfile::TempDir, Store, fleetd::Agent, fleetd::Invocation) {
+async fn fixture() -> (
+    tempfile::TempDir,
+    Store,
+    fleetd::model::Agent,
+    fleetd::model::Invocation,
+) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let store = Store::open(directory.path().join("fleetd.db"))
         .await
@@ -142,7 +156,12 @@ async fn open_harness(
     store: &Store,
     agent_id: &str,
     mode: &str,
-) -> (fleetd::HarnessAcpClient, String, fleetd::Binding, String) {
+) -> (
+    fleetd::plugin::HarnessAcpClient,
+    String,
+    fleetd::plugin::Binding,
+    String,
+) {
     let process = PluginProcess::start(harness_spec(mode))
         .await
         .expect("start harness");
@@ -271,7 +290,7 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
     assert!(observation.event_chain_digest.is_some());
     assert_eq!(
         observation.execution_certainty,
-        Some(fleetd::ExecutionCertainty::OutcomeKnown)
+        Some(fleetd::model::ExecutionCertainty::OutcomeKnown)
     );
     assert_eq!(observation.session_quiescent, Some(true));
     assert_eq!(observation.usage, Some(json!({})));

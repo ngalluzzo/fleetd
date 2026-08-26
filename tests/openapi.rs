@@ -5,7 +5,10 @@ use axum::{
     http::{Request, StatusCode},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use fleetd::{AppState, Store, openapi_document, router};
+use fleetd::{
+    api::{AppState, openapi_document, router},
+    store::Store,
+};
 use serde_json::Value;
 use tower::ServiceExt;
 

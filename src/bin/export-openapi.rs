@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::create_dir_all(parent)?;
     }
 
-    let mut encoded = serde_json::to_string_pretty(&fleetd::openapi_document())?;
+    let mut encoded = serde_json::to_string_pretty(&fleetd::api::openapi_document())?;
     encoded.push('\n');
     fs::write(&output, encoded)?;
     println!("wrote {}", output.display());

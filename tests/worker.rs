@@ -3,11 +3,21 @@
 use std::{path::PathBuf, time::Duration};
 
 use fleetd::{
-    ClaimDeliveries, ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError,
-    CreateAgent, CreateChannel, CreateMessage, EnvelopeTurnAdapter, ExecutionCertainty,
-    InboundAcceptance, InvocationState, PluginGenerationDisposition, PluginGenerationHealth,
-    PluginGenerationState, PluginShutdownOutcome, PluginSpec, PreparedTurn, SessionBindingState,
-    Store, ToolBudget, TurnAdapter, TurnPolicy, harness_acp_interface,
+    model::{
+        ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, ExecutionCertainty,
+        InvocationState,
+    },
+    operations::{
+        PluginGenerationDisposition, PluginGenerationHealth, PluginGenerationState,
+        PluginShutdownOutcome,
+    },
+    plugin::{PluginSpec, ToolBudget, TurnPolicy, harness_acp_interface},
+    session_binding::SessionBindingState,
+    store::Store,
+    worker::{
+        ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError,
+        EnvelopeTurnAdapter, InboundAcceptance, PreparedTurn, TurnAdapter,
+    },
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -137,7 +147,11 @@ async fn fixture(message_count: usize) -> Fixture {
     }
 }
 
-async fn append_direct_kind(fixture: &Fixture, kind: &str, sequence: usize) -> fleetd::Message {
+async fn append_direct_kind(
+    fixture: &Fixture,
+    kind: &str,
+    sequence: usize,
+) -> fleetd::model::Message {
     fixture
         .store
         .append_message(
@@ -438,7 +452,7 @@ impl TurnAdapter for CancellingAdapter {
         self.delegate.inbound_acceptance()
     }
 
-    fn prepare(&self, invocation: &fleetd::Invocation) -> Result<PreparedTurn, String> {
+    fn prepare(&self, invocation: &fleetd::model::Invocation) -> Result<PreparedTurn, String> {
         self.cancellation.cancel();
         self.delegate.prepare(invocation)
     }
@@ -536,7 +550,7 @@ impl TurnAdapter for RejectingAdapter {
         &self.inbound_acceptance
     }
 
-    fn prepare(&self, _invocation: &fleetd::Invocation) -> Result<PreparedTurn, String> {
+    fn prepare(&self, _invocation: &fleetd::model::Invocation) -> Result<PreparedTurn, String> {
         Err("unsupported work kind".to_owned())
     }
 }
@@ -605,8 +619,8 @@ async fn worker_rejects_unknown_or_duplicate_mcp_grants_before_startup() {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")),
     );
     config.mcp_grants = vec![
-        fleetd::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
-        fleetd::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
+        fleetd::message_grant_broker::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
+        fleetd::message_grant_broker::PUBLISH_DURABLE_MESSAGE_GRANT.to_owned(),
     ];
     let error = ContinuousHarnessWorker::new(&fixture.store, config, envelope_adapter())
         .err()

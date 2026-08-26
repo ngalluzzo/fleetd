@@ -1,6 +1,8 @@
 use fleetd::{
-    AcquireSessionBinding, ArmInvocation, BlockDelivery, ClaimDeliveries, CreateAgent,
-    CreateChannel, CreateMessage, SessionBindingState,
+    model::{
+        ArmInvocation, BlockDelivery, ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage,
+    },
+    session_binding::{AcquireSessionBinding, SessionBindingState},
 };
 use serde_json::json;
 use sqlx::{Connection, sqlite::SqliteConnectOptions};
@@ -213,7 +215,9 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
     .expect("create M0 schema");
     connection.close().await.expect("close legacy database");
 
-    let store = fleetd::Store::open(&path).await.expect("migrate database");
+    let store = fleetd::store::Store::open(&path)
+        .await
+        .expect("migrate database");
     let agents = store.list_agents().await.expect("list migrated agents");
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].id, "legacy-agent");
@@ -261,7 +265,7 @@ async fn an_m0_database_upgrades_without_losing_existing_data() {
     assert_session_bindings_work_after_migration(&store, &recipient.id).await;
 }
 
-async fn assert_operational_tables_exist_after_migration(store: &fleetd::Store) {
+async fn assert_operational_tables_exist_after_migration(store: &fleetd::store::Store) {
     assert!(
         store
             .list_plugin_generations(None)
@@ -278,7 +282,10 @@ async fn assert_operational_tables_exist_after_migration(store: &fleetd::Store) 
     );
 }
 
-async fn assert_session_bindings_work_after_migration(store: &fleetd::Store, agent_id: &str) {
+async fn assert_session_bindings_work_after_migration(
+    store: &fleetd::store::Store,
+    agent_id: &str,
+) {
     let acquired = store
         .acquire_session_binding(
             agent_id,
@@ -303,7 +310,7 @@ async fn assert_session_bindings_work_after_migration(store: &fleetd::Store, age
 }
 
 async fn assert_managed_blocking_works_after_migration(
-    store: &fleetd::Store,
+    store: &fleetd::store::Store,
     recipient_id: &str,
     message_id: &str,
 ) {

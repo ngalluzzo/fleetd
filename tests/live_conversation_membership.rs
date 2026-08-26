@@ -1,9 +1,13 @@
 use std::{path::PathBuf, time::Duration};
 
 use fleetd::{
-    AppState, ArmInvocation, AuthService, ClaimDeliveries, CompleteInvocation, CreateAgent,
-    InvocationBatch, InvocationCompletion, Message, MessagePage, RegisteredAgent, SendMessage,
-    Store, router,
+    api::{AppState, router},
+    auth::AuthService,
+    model::{
+        ArmInvocation, ClaimDeliveries, CompleteInvocation, CreateAgent, InvocationBatch,
+        InvocationCompletion, Message, MessagePage, RegisteredAgent, SendMessage,
+    },
+    store::Store,
 };
 use futures_util::StreamExt;
 use serde_json::json;
@@ -157,7 +161,7 @@ async fn provision_public_memberships(daemon: &QualificationDaemon) -> Participa
         .expect("create channel request")
         .error_for_status()
         .expect("create channel response");
-    let channel: fleetd::Channel = response.json().await.expect("channel body");
+    let channel: fleetd::model::Channel = response.json().await.expect("channel body");
     Participants {
         human,
         worker,
@@ -213,7 +217,7 @@ async fn complete_worker_invocation(
         .expect("invocation batch");
     let invocation = batch.invocations.first().expect("reserved invocation");
     assert_eq!(invocation.message, *request);
-    let armed: fleetd::Invocation = daemon
+    let armed: fleetd::model::Invocation = daemon
         .post(
             &format!(
                 "/v1/agents/{}/invocations/{}/arm",

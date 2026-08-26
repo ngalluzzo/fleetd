@@ -8,9 +8,12 @@ use std::{
 };
 
 use fleetd::{
-    BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse, BrowserStreamRedemptionMessageType,
-    BrowserStreamRedemptionRequest, BrowserStreamServerFrame, Channel, CreateAgent, CreateChannel,
-    RegisteredAgent, SendMessage,
+    browser_stream_edge::{
+        BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse,
+        BrowserStreamRedemptionMessageType, BrowserStreamRedemptionRequest,
+        BrowserStreamServerFrame,
+    },
+    model::{Channel, CreateAgent, CreateChannel, RegisteredAgent, SendMessage},
 };
 use futures_util::{SinkExt, StreamExt};
 use nix::{

@@ -1,6 +1,10 @@
 use fleetd::{
-    ClaimDeliveries, CreateAgent, CreateChannel, CreateChannelMember, CreateMessage, FleetError,
-    MembershipDeliveryMode, Store,
+    error::FleetError,
+    model::{
+        ClaimDeliveries, CreateAgent, CreateChannel, CreateChannelMember, CreateMessage,
+        MembershipDeliveryMode,
+    },
+    store::Store,
 };
 use serde_json::json;
 
@@ -360,7 +364,7 @@ async fn message_idempotency_is_concurrent_durable_and_conflict_detecting() {
     let delivery = store
         .claim_deliveries(
             &weaver.id,
-            fleetd::ClaimDeliveries {
+            fleetd::model::ClaimDeliveries {
                 limit: 10,
                 lease_duration_ms: 10_000,
             },
@@ -443,7 +447,7 @@ async fn idempotency_keys_are_bounded() {
     }
 }
 
-async fn agent(store: &Store, name: &str) -> fleetd::Agent {
+async fn agent(store: &Store, name: &str) -> fleetd::model::Agent {
     store
         .create_agent(CreateAgent {
             name: name.to_owned(),
@@ -459,7 +463,7 @@ async fn append_text(
     sender_id: &str,
     recipient_id: Option<&str>,
     text: &str,
-) -> fleetd::Message {
+) -> fleetd::model::Message {
     store
         .append_message(
             channel_id,
@@ -484,7 +488,7 @@ fn exact_member(agent_id: &str, delivery_mode: MembershipDeliveryMode) -> Create
     }
 }
 
-async fn claim_all(store: &Store, agent_id: &str) -> fleetd::ClaimBatch {
+async fn claim_all(store: &Store, agent_id: &str) -> fleetd::model::ClaimBatch {
     store
         .claim_deliveries(
             agent_id,

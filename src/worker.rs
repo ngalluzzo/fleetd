@@ -15,12 +15,23 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    AcquireSessionBinding, FleetError, HarnessAcpClient, Invocation, ManagedHarnessController,
-    ManagedTurn, ManagedTurnError, ManagedTurnGrant, ManagedTurnOutcome, MessageGrantBroker,
-    NewPluginGeneration, OpenSession, OpenSessionMode, PUBLISH_DURABLE_MESSAGE_GRANT, PluginError,
-    PluginGenerationDisposition, PluginProcess, PluginShutdownOutcome, PluginSpec, PromptBlock,
-    RetryDelivery, SessionAcquisitionMode, ShutdownOutcome, StopPluginGeneration, Store,
-    TurnPolicy, TurnResultCapture, plugin::Binding,
+    controller::{
+        ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnGrant,
+        ManagedTurnOutcome, TurnResultCapture,
+    },
+    error::FleetError,
+    message_grant_broker::{MessageGrantBroker, PUBLISH_DURABLE_MESSAGE_GRANT},
+    model::{Invocation, RetryDelivery},
+    operations::{
+        NewPluginGeneration, PluginGenerationDisposition, PluginShutdownOutcome,
+        StopPluginGeneration,
+    },
+    plugin::{
+        Binding, HarnessAcpClient, OpenSession, OpenSessionMode, PluginError, PluginProcess,
+        PluginSpec, PromptBlock, ShutdownOutcome, TurnPolicy,
+    },
+    session_binding::{AcquireSessionBinding, SessionAcquisitionMode},
+    store::Store,
 };
 
 const MAX_LEASE_DURATION_MS: u64 = 3_600_000;
@@ -241,7 +252,7 @@ pub enum ContinuousWorkerError {
     #[error("turn adapter rejected a reserved message: {0}")]
     Adapter(String),
     #[error("message grant broker failed: {0}")]
-    MessageGrantBroker(#[from] crate::MessageGrantBrokerError),
+    MessageGrantBroker(#[from] crate::message_grant_broker::MessageGrantBrokerError),
     #[error("failed to safely release an unarmed reservation after {context}: {source}")]
     PreArmSettlement {
         context: String,
@@ -467,7 +478,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 .store
                 .reserve_invocations_by_kind(
                     &self.config.agent_id,
-                    crate::ClaimDeliveries {
+                    crate::model::ClaimDeliveries {
                         limit: 1,
                         lease_duration_ms: duration_ms(self.config.lease_duration)
                             .expect("validated lease duration"),

@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use fleetd::{PluginError, PluginInterface, PluginProcess, PluginSpec, ShutdownOutcome};
+use fleetd::plugin::{PluginError, PluginInterface, PluginProcess, PluginSpec, ShutdownOutcome};
 use semver::Version;
 use serde_json::json;
 

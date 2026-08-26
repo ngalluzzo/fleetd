@@ -1,10 +1,16 @@
 //! Durable, local-first coordination primitives for cooperating software agents.
+//!
+//! Types are reached through the module that owns them — `model::Message`,
+//! `store::Store`, `plugin::PluginProcess`. There is deliberately no flat
+//! re-export at the crate root: an import should say which boundary it depends
+//! on, and adding a type should not mean editing a list every other change
+//! also edits.
 
 pub use fleetd_proto::model;
 
 pub mod api;
 pub mod auth;
-mod browser_stream_edge;
+pub mod browser_stream_edge;
 mod channel_stream;
 pub mod controller;
 mod conversation_surface;
@@ -21,52 +27,3 @@ pub mod store;
 mod stream_grant_broker;
 mod web_surface;
 pub mod worker;
-
-pub use api::{AppState, openapi_document, router};
-pub use auth::{AuthService, OperatorBootstrap, Principal};
-pub use browser_stream_edge::{
-    BROWSER_STREAM_PATH, BROWSER_STREAM_PROTOCOL, BrowserStreamCursor, BrowserStreamGrant,
-    BrowserStreamGrantIssueRequest, BrowserStreamGrantIssueResponse, BrowserStreamPath,
-    BrowserStreamProtocol, BrowserStreamRedemptionMessageType, BrowserStreamRedemptionRequest,
-    BrowserStreamServerFrame,
-};
-pub use controller::{
-    ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnGrant, ManagedTurnOutcome,
-    TurnResultCapture,
-};
-pub use error::{ErrorResponse, FleetError};
-pub use message_grant_broker::{
-    MessageGrantBroker, MessageGrantBrokerError, PUBLISH_DURABLE_MESSAGE_GRANT,
-};
-pub use model::{
-    AckDelivery, AddMember, Agent, ArmInvocation, BlockDelivery, BlockResolution, BlockedDelivery,
-    Channel, ChannelMember, ClaimBatch, ClaimDeliveries, CompleteInvocation, ConversationKind,
-    ConversationSummary, CreateAgent, CreateChannel, CreateChannelMember, CreateMessage, Delivery,
-    ExecutionCertainty, Invocation, InvocationBatch, InvocationCompletion, InvocationState,
-    IssuedCredential, MembershipDeliveryMode, Message, MessagePage, OpenDirectConversation,
-    RegisteredAgent, RenameChannel, ResolveDeliveryBlock, RetryDelivery, SendMessage,
-};
-pub use operations::{
-    InvocationEventCounts, InvocationObservation, NewPluginGeneration, ObservedPluginInterface,
-    PluginGeneration, PluginGenerationDisposition, PluginGenerationHealth, PluginGenerationState,
-    PluginShutdownOutcome, StopPluginGeneration,
-};
-pub use plugin::{
-    AcceptedResult, AssistantMessage, Binding, CancelTurn, CloseSession, CloseSessionResult,
-    DescribeResult, DriverIdentity, EffectiveEnforcement, ExecutionFence, HarnessAcpClient,
-    HarnessAcpNotification, HarnessExecutionCertainty, HarnessLimits, OpenSession, OpenSessionMode,
-    OpenSessionResult, PermissionOutcome, PermissionRequested, PermissionResolution, PluginError,
-    PluginExit, PluginIdentity, PluginInterface, PluginManifest, PluginNotification, PluginProcess,
-    PluginSpec, PromptBlock, ResolvedMcpEndpoint, ResolvedMcpGrant, ResolvedMcpHttpHeader,
-    RuntimeIdentity, SessionPersistence, ShutdownOutcome, StartTurn, StartTurnResult, ToolBudget,
-    TurnEvent, TurnPolicy, TurnSource, TurnTerminal, harness_acp_interface,
-};
-pub use session_binding::{
-    AcquireSessionBinding, BoundInvocation, SessionAcquisition, SessionAcquisitionMode,
-    SessionBinding, SessionBindingState,
-};
-pub use store::{AppendMessageResult, OpenDirectConversationResult, Store};
-pub use worker::{
-    ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError, EnvelopeTurnAdapter,
-    InboundAcceptance, PreparedTurn, TurnAdapter, WorkerReport,
-};

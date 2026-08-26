@@ -1,8 +1,13 @@
 use std::{net::SocketAddr, time::Duration};
 
 use fleetd::{
-    AppState, AuthService, BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse,
-    BrowserStreamServerFrame, CreateAgent, CreateChannel, RegisteredAgent, Store, router,
+    api::{AppState, router},
+    auth::AuthService,
+    browser_stream_edge::{
+        BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse, BrowserStreamServerFrame,
+    },
+    model::{CreateAgent, CreateChannel, RegisteredAgent},
+    store::Store,
 };
 use futures_util::{SinkExt, StreamExt, future::join_all, stream};
 use serde_json::json;
@@ -106,11 +111,11 @@ impl BrowserDaemon {
             .expect("rotate credential response");
     }
 
-    async fn channel(&self, member_id: &str) -> fleetd::Channel {
+    async fn channel(&self, member_id: &str) -> fleetd::model::Channel {
         self.channel_with_members(vec![member_id.to_owned()]).await
     }
 
-    async fn channel_with_members(&self, member_ids: Vec<String>) -> fleetd::Channel {
+    async fn channel_with_members(&self, member_ids: Vec<String>) -> fleetd::model::Channel {
         self.client
             .post(format!("http://{}/v1/channels", self.address))
             .bearer_auth(&self.operator_token)

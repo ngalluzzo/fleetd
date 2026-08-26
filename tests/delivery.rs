@@ -1,10 +1,14 @@
 use fleetd::{
-    BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries, CreateAgent, CreateChannel,
-    CreateMessage, FleetError, ResolveDeliveryBlock, RetryDelivery, Store,
+    error::FleetError,
+    model::{
+        BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries, CreateAgent,
+        CreateChannel, CreateMessage, ResolveDeliveryBlock, RetryDelivery,
+    },
+    store::Store,
 };
 use serde_json::json;
 
-async fn agent(store: &Store, name: &str) -> fleetd::Agent {
+async fn agent(store: &Store, name: &str) -> fleetd::model::Agent {
     store
         .create_agent(CreateAgent {
             name: name.to_owned(),
@@ -17,9 +21,9 @@ async fn agent(store: &Store, name: &str) -> fleetd::Agent {
 async fn fixture() -> (
     tempfile::TempDir,
     Store,
-    fleetd::Agent,
-    fleetd::Agent,
-    fleetd::Channel,
+    fleetd::model::Agent,
+    fleetd::model::Agent,
+    fleetd::model::Channel,
 ) {
     let directory = tempfile::tempdir().expect("temporary directory");
     let store = Store::open(directory.path().join("fleetd.db"))
@@ -52,7 +56,7 @@ async fn send(
     sender_id: &str,
     recipient_id: Option<String>,
     text: &str,
-) -> fleetd::Message {
+) -> fleetd::model::Message {
     store
         .append_message(
             channel_id,
@@ -346,7 +350,7 @@ async fn assert_abandon(
 async fn assert_block_replay(
     store: &Store,
     agent_id: &str,
-    message: &fleetd::Message,
+    message: &fleetd::model::Message,
     lease_token: String,
 ) -> BlockedDelivery {
     let block = BlockDelivery {

@@ -5,9 +5,15 @@ use std::{
 };
 
 use fleetd::{
-    AppState, AuthService, BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse,
-    BrowserStreamRedemptionMessageType, BrowserStreamRedemptionRequest, BrowserStreamServerFrame,
-    CreateAgent, CreateChannel, Message, RegisteredAgent, SendMessage, Store, router,
+    api::{AppState, router},
+    auth::AuthService,
+    browser_stream_edge::{
+        BROWSER_STREAM_PROTOCOL, BrowserStreamGrantIssueResponse,
+        BrowserStreamRedemptionMessageType, BrowserStreamRedemptionRequest,
+        BrowserStreamServerFrame,
+    },
+    model::{CreateAgent, CreateChannel, Message, RegisteredAgent, SendMessage},
+    store::Store,
 };
 use futures_util::{SinkExt, StreamExt, future::join_all, stream};
 use serde_json::{Value, json};
@@ -110,7 +116,7 @@ impl BrowserDaemon {
             .expect("register agent")
     }
 
-    async fn channel(&self, name: &str, member_ids: Vec<String>) -> fleetd::Channel {
+    async fn channel(&self, name: &str, member_ids: Vec<String>) -> fleetd::model::Channel {
         self.client
             .post(format!("http://{}/v1/channels", self.address))
             .bearer_auth(&self.operator_token)

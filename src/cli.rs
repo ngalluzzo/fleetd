@@ -8,11 +8,16 @@ use std::{
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleetd::{
-    AckDelivery, AddMember, AppState, ArmInvocation, AuthService, BlockDelivery, BlockResolution,
-    ClaimDeliveries, CompleteInvocation, ContinuousHarnessWorker, ContinuousWorkerConfig,
-    CreateAgent, CreateChannel, EnvelopeTurnAdapter, IssuedCredential, MembershipDeliveryMode,
-    MessagePage, PluginSpec, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery, SendMessage,
-    Store, ToolBudget, TurnPolicy, harness_acp_interface, router,
+    api::{AppState, router},
+    auth::AuthService,
+    model::{
+        AckDelivery, AddMember, ArmInvocation, BlockDelivery, BlockResolution, ClaimDeliveries,
+        CompleteInvocation, CreateAgent, CreateChannel, IssuedCredential, MembershipDeliveryMode,
+        MessagePage, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery, SendMessage,
+    },
+    plugin::{PluginSpec, ToolBudget, TurnPolicy, harness_acp_interface},
+    store::Store,
+    worker::{ContinuousHarnessWorker, ContinuousWorkerConfig, EnvelopeTurnAdapter},
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -1115,7 +1120,7 @@ fn base_url(server: &str) -> &str {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-    use fleetd::TurnAdapter;
+    use fleetd::worker::TurnAdapter;
     use serde_json::json;
 
     use super::{

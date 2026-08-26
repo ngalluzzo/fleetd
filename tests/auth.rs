@@ -1,6 +1,11 @@
 use std::fs;
 
-use fleetd::{AuthService, CreateAgent, FleetError, Principal, Store};
+use fleetd::{
+    auth::{AuthService, Principal},
+    error::FleetError,
+    model::CreateAgent,
+    store::Store,
+};
 use serde_json::json;
 
 #[tokio::test]
