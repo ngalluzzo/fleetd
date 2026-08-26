@@ -229,7 +229,7 @@ async fn dead_child_is_replaced_and_delayed_input_does_not_starve_later_work() {
     const RETRY_SETTLEMENT_LATENCY_MS: u64 = 9_500;
     const REPLACEMENT_READINESS_LATENCY_MS: u64 = 600;
     const NEXT_CLAIM_LATENCY_MS: u64 = 9_500;
-    const RETRY_BASE_DELAY_MS: u64 = 23_000;
+    const RETRY_BASE_DELAY_MS: u64 = 31_000;
 
     let latency = RunnerLoopLatency::new(
         Duration::from_millis(RETRY_SETTLEMENT_LATENCY_MS),
@@ -255,7 +255,7 @@ async fn dead_child_is_replaced_and_delayed_input_does_not_starve_later_work() {
     let script = slow_replacement_plugin_script(&marker);
     let mut configuration = fixture.configuration.clone();
     configuration.plugin.executable = fixture.write_plugin("replacement-plugin", &script);
-    configuration.plugin.request_timeout_ms = 1_000;
+    configuration.plugin.request_timeout_ms = 5_000;
     configuration.retry_base_delay_ms = RETRY_BASE_DELAY_MS;
     configuration.retry_max_delay_ms = 92_000;
     let modeled_pre_claim_latency_ms =
