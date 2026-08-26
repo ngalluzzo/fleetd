@@ -11,6 +11,8 @@
 // a helper only one suite needs looks unused from all the others.
 #![allow(dead_code)]
 
+pub mod api;
+
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},

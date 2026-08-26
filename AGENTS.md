@@ -28,6 +28,9 @@ working at once.
   rather than inserting: the list fixes the order operations appear in the
   generated contract. Declare a schema no route body mentions beside the type,
   not in the composition module.
+- Put an HTTP-surface test in `tests/api_<domain>.rs` for the domain it asserts
+  about, over the shared harness in `tests/common/api.rs`. A suite may be large
+  when it covers one domain; it may not cover several.
 - Never hand-merge a generated artifact. The contract, the generated client, and
   the served bundle are marked unmergeable; take either side and run
   `bin/regenerate`, which rebuilds them in the order they depend on each other.

@@ -95,9 +95,21 @@ all publish under the `channels` tag, and neither `messages` nor `streams` added
 a tag when they arrived. A genuinely new resource family adds one line here; a
 new domain usually adds none.
 
+## An API suite per domain
+
+`tests/api_<domain>.rs` holds the HTTP-surface tests for one domain, pairing with
+`src/http/<domain>.rs`. They share `tests/common/api.rs`, which starts a daemon
+with an operator credential and offers the moves every suite needs — register an
+agent, open a channel, send a message, claim an inbox.
+
+This replaced one 970-line suite that was cohesive by concern and spread across
+six domains, so every domain owner had to edit it. `tests/browser_stream.rs` is
+larger still and was deliberately left alone: all of its tests are the browser
+edge, and big-but-cohesive costs a fleet nothing.
+
 ## Known chokepoints
 
-Ranked by what they cost a fleet. All but the last two are addressed above.
+Ranked by what they cost a fleet. All but the last are addressed above.
 
 | Chokepoint | Status |
 | --- | --- |
@@ -105,7 +117,7 @@ Ranked by what they cost a fleet. All but the last two are addressed above.
 | `store.rs` holding five concepts | split per concept |
 | Migration ordinals | timestamp naming, enforced by test |
 | `src/http/mod.rs` | one `route_domains!` list; schemas moved to their owner |
-| `tests/browser_stream.rs`, `tests/auth_api.rs` | **open** — large, cross-domain; this is where conflicts actually landed |
+| Cross-domain test suites | one `tests/api_<domain>.rs` per domain over a shared harness |
 | `docs/**` | **open** — 78% co-change, mostly shared documents rather than per-domain ones |
 
 ## Owning a slice

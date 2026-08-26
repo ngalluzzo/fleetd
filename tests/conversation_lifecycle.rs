@@ -1,5 +1,4 @@
 use fleetd::{
-    http::AppState,
     model::{
         ConversationKind, CreateAgent, CreateChannel, CreateChannelMember, CreateMessage,
         MembershipDeliveryMode, OpenDirectConversation, RenameChannel, SendMessage,
@@ -9,6 +8,8 @@ use fleetd::{
 use serde_json::json;
 
 mod common;
+
+use common::api::Daemon;
 
 async fn test_store() -> (tempfile::TempDir, Store) {
     let common::TempStore {
@@ -201,88 +202,44 @@ async fn shared_channel_rename_and_archive_preserve_history_and_close_writes() {
     assert_eq!(history.messages, vec![message]);
 }
 
-struct TestServer {
-    _temporary: common::TempStore,
-    address: std::net::SocketAddr,
-    operator_token: String,
-    process: tokio::task::JoinHandle<()>,
-}
-
-impl TestServer {
-    async fn start() -> Self {
-        let temporary = common::temp_store().await;
-        let operator_token =
-            common::bootstrap_operator(&temporary.store, temporary.directory.path()).await;
-        let (address, process) = common::serve(AppState::new(temporary.store.clone())).await;
-        Self {
-            _temporary: temporary,
-            address,
-            operator_token,
-            process,
-        }
-    }
-
-    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        reqwest::Client::new()
-            .request(method, format!("http://{}{path}", self.address))
-            .bearer_auth(&self.operator_token)
-    }
-
-    async fn register(&self, name: &str) -> fleetd::model::RegisteredAgent {
-        self.request(reqwest::Method::POST, "/v1/agents")
-            .json(&CreateAgent {
-                name: name.to_owned(),
-                metadata: json!({}),
-            })
-            .send()
-            .await
-            .expect("register request")
-            .error_for_status()
-            .expect("register response")
-            .json()
-            .await
-            .expect("registration body")
-    }
-
-    async fn open_direct(&self, members: Vec<CreateChannelMember>) -> reqwest::Response {
-        self.request(reqwest::Method::POST, "/v1/direct-conversations")
-            .json(&OpenDirectConversation { members })
-            .send()
-            .await
-            .expect("open direct request")
-    }
-}
-
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        self.process.abort();
-    }
+/// Opening a direct conversation is this suite's own subject, so it stays here.
+async fn open_direct(server: &Daemon, members: Vec<CreateChannelMember>) -> reqwest::Response {
+    server
+        .post("/v1/direct-conversations", Some(&server.operator_token))
+        .json(&OpenDirectConversation { members })
+        .send()
+        .await
+        .expect("open direct request")
 }
 
 #[tokio::test]
 async fn direct_conversation_http_open_is_idempotent_and_discoverable() {
-    let server = TestServer::start().await;
+    let server = Daemon::start().await;
     let human = server.register("api-human").await;
     let worker = server.register("api-worker").await;
-    let opened = server
-        .open_direct(vec![
+    let opened = open_direct(
+        &server,
+        vec![
             participant(&human.agent.id, MembershipDeliveryMode::StreamOnly),
             participant(&worker.agent.id, MembershipDeliveryMode::Inbox),
-        ])
-        .await;
+        ],
+    )
+    .await;
     assert_eq!(opened.status(), reqwest::StatusCode::CREATED);
     let direct: fleetd::model::ConversationSummary = opened.json().await.expect("direct body");
     assert_eq!(direct.kind, ConversationKind::Direct);
-    let replay = server
-        .open_direct(vec![
+    let replay = open_direct(
+        &server,
+        vec![
             participant(&worker.agent.id, MembershipDeliveryMode::Inbox),
             participant(&human.agent.id, MembershipDeliveryMode::StreamOnly),
-        ])
-        .await;
+        ],
+    )
+    .await;
     assert_eq!(replay.status(), reqwest::StatusCode::OK);
 
     let active: Vec<fleetd::model::ConversationSummary> = server
-        .request(reqwest::Method::GET, "/v1/conversations")
+        .get("/v1/conversations", Some(&server.operator_token))
         .send()
         .await
         .expect("active list")
@@ -297,10 +254,10 @@ async fn direct_conversation_http_open_is_idempotent_and_discoverable() {
 
 #[tokio::test]
 async fn shared_channel_http_lifecycle_is_closed_after_archive() {
-    let server = TestServer::start().await;
+    let server = Daemon::start().await;
     let human = server.register("api-shared-human").await;
     let channel: fleetd::model::Channel = server
-        .request(reqwest::Method::POST, "/v1/channels")
+        .post("/v1/channels", Some(&server.operator_token))
         .json(&CreateChannel {
             name: "api-shared".to_owned(),
             metadata: json!({}),
@@ -319,6 +276,7 @@ async fn shared_channel_http_lifecycle_is_closed_after_archive() {
         .request(
             reqwest::Method::PATCH,
             &format!("/v1/channels/{}", channel.id),
+            Some(&server.operator_token),
         )
         .json(&RenameChannel {
             name: "api-renamed".to_owned(),
@@ -333,9 +291,9 @@ async fn shared_channel_http_lifecycle_is_closed_after_archive() {
         .expect("renamed body");
     assert_eq!(renamed.name, "api-renamed");
     let archived: fleetd::model::Channel = server
-        .request(
-            reqwest::Method::POST,
+        .post(
             &format!("/v1/channels/{}/archive", channel.id),
+            Some(&server.operator_token),
         )
         .send()
         .await
@@ -348,7 +306,7 @@ async fn shared_channel_http_lifecycle_is_closed_after_archive() {
     assert!(archived.archived_at_ms.is_some());
 
     let active: Vec<fleetd::model::ConversationSummary> = server
-        .request(reqwest::Method::GET, "/v1/conversations")
+        .get("/v1/conversations", Some(&server.operator_token))
         .send()
         .await
         .expect("active list")
@@ -359,9 +317,9 @@ async fn shared_channel_http_lifecycle_is_closed_after_archive() {
         .expect("active list body");
     assert!(active.is_empty());
     let all: Vec<fleetd::model::ConversationSummary> = server
-        .request(
-            reqwest::Method::GET,
+        .get(
             "/v1/conversations?include_archived=true",
+            Some(&server.operator_token),
         )
         .send()
         .await
