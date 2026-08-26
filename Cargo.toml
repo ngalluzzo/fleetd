@@ -13,14 +13,15 @@ members = [
     "crates/conversation",
     "crates/execution",
     "crates/http",
-    "crates/mcp",
     "crates/kernel",
+    "crates/mcp",
     "crates/plugin-host",
     "crates/proto",
     "plugins/acp-reference",
     "plugins/codex",
     "plugins/opencode",
     "tools/soak",
+    "workflows/author-review",
 ]
 resolver = "2"
 

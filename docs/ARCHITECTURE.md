@@ -215,6 +215,15 @@ The envelope adapter provides the complete immutable Fleetd message to the
 harness. It neither recognizes product contracts nor parses domain results.
 Its exact inbound-kind allowlist is routing policy only.
 
+The first author-review dogfood remains an external paired experiment. A
+credential-owning runner leases ordinary messages through the public API and
+passes credential-free history and membership to one deterministic child
+plugin. That plugin proposes bounded transitions; the runner derives their
+Fleetd authority and idempotency. Neither the vocabulary nor its projection
+enters the daemon, and `fleetd.workflow-draft@0.0.1` remains explicitly
+unstable until another real workflow reveals a shared interface. See the
+[draft contract](contracts/author-review-workflow-draft.md).
+
 ## Invocation-scoped message grant
 
 An armed turn may receive the named runtime grant `fleet.messaging.send`.

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "fleetd": {
+    "origin": "http://127.0.0.1:8787",
+    "agent_id": "REPLACE_WITH_WORKFLOW_RUNNER_AGENT_ID",
+    "credential_file": "/absolute/path/to/workflow-runner.token"
+  },
+  "plugin": {
+    "executable": "/absolute/path/to/fleetd/target/debug/fleetd-author-review-plugin",
+    "args": [],
+    "request_timeout_ms": 5000
+  },
+  "plugin_configuration": {
+    "schema_version": 1,
+    "coordinator_agent_id": "REPLACE_WITH_COORDINATOR_AGENT_ID",
+    "author_agent_ids": [
+      "REPLACE_WITH_AUTHOR_AGENT_ID"
+    ],
+    "reviewer_agent_ids": [
+      "REPLACE_WITH_REVIEWER_AGENT_ID"
+    ],
+    "max_children": 4,
+    "max_revision_rounds": 2
+  },
+  "lease_duration_ms": 30000,
+  "poll_interval_ms": 1000
+}
