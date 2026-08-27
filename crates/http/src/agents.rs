@@ -12,9 +12,12 @@ use fleetd_proto::model::CreateAgent;
 
 use super::{AppState, error::ApiError, guard::require_operator};
 
+mod generated_list_agents;
+
 pub(super) fn routes() -> OpenApiRouter<AppState> {
     OpenApiRouter::default()
-        .routes(routes!(create_agent, list_agents))
+        .routes(routes!(create_agent))
+        .merge(generated_list_agents::routes())
         .routes(routes!(rotate_agent_credential))
 }
 
@@ -44,28 +47,6 @@ async fn create_agent(
     require_operator(&principal)?;
     let registration = state.auth.register_agent(input).await?;
     Ok((StatusCode::CREATED, Json(registration)))
-}
-
-#[utoipa::path(
-    get,
-    path = "/v1/agents",
-    operation_id = "listAgents",
-    tag = "agents",
-    summary = "List agents",
-    description = "Operator-only.",
-    security(("bearerAuth" = [])),
-    responses(
-        (status = 200, description = "Registered agents", body = [fleetd_proto::model::Agent]),
-        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
-        (status = 403, description = "Operator credential required", body = ErrorResponse),
-        (status = 500, description = "Internal failure", body = ErrorResponse)
-    )
-)]
-async fn list_agents(
-    State(state): State<AppState>,
-    Extension(principal): Extension<Principal>,
-) -> Result<Json<Vec<fleetd_proto::model::Agent>>, ApiError> {
-    Ok(Json(list_agents_operation(&state, &principal).await?))
 }
 
 /// Product-owned operation behind the replaceable HTTP adapter.

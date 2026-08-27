@@ -1,10 +1,21 @@
 //! Authorization over agent identity and credentials.
 
 use fleetd::model::{Agent, IssuedCredential};
+use sha2::{Digest, Sha256};
 
 mod common;
 
 use common::api::{Daemon, claim};
+
+#[test]
+fn generated_list_agents_adapter_matches_the_admitted_candidate() {
+    let source = include_bytes!("../crates/http/src/agents/generated_list_agents.rs");
+    assert_eq!(
+        format!("sha256:{:x}", Sha256::digest(source)),
+        "sha256:3c4e6292640ff8a52d3b0400aabf53b7e1774dee4da4a212fad0fcd3784ee5be"
+    );
+    assert!(!source.windows(5).any(|window| window == b"gooir"));
+}
 
 #[tokio::test]
 async fn administration_requires_an_operator_credential() {
