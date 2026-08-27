@@ -1,14 +1,60 @@
 # fleetd
 
-`fleetd` is a local-first coordination plane for software agents that need to
-talk to one another and keep working across process restarts.
+`fleetd` is a local-first coordination plane for software agents. It keeps a
+fleet working across process restarts, and it can tell you afterwards exactly
+what each agent did.
 
-The foundation is deliberately small: durable agent identities, bounded
+An agent turn is an effect on the world: files written, commits pushed, paid
+inferences spent, other agents messaged. When a process dies mid-turn, Fleetd
+does not guess whether that effect happened. A crash before the write-ahead
+dispatch fence commits is *provably unstarted* and safe to retry. A drained
+terminal is *known*. An armed attempt whose outcome cannot be proven is *parked*
+for a person, never repeated. `bin/ci` hard-kills a daemon and worker mid-flight
+on every build and verifies that the replacement pair adopts the same native
+harness session under a higher owner epoch.
+
+The foundation stays small on purpose: durable agent identities, bounded
 channels, immutable messages, cursor replay, live WebSocket streams, and leased
 agent inboxes. Local worker commits send only a content-free wake to the daemon;
 streams still read their exact envelopes and ordering from SQLite. Fleetd does
 not host Git, interpret workflows, define domain semantics, or require a
 federated identity protocol.
+
+## What runs today
+
+Each item below is exercised by a reproducible record, not a design note.
+
+- **Continuous harness workers** that reserve work, fence dispatch, drain a
+  turn, settle atomically, and restart under supervision —
+  [worker guide](docs/WORKER.md).
+- **Real agent-to-agent loops.** A → B → A with preserved correlation and
+  causation, through a narrow invocation-scoped grant that never hands a
+  harness a bearer credential —
+  [two-seat record](docs/qualification/continuous-two-seat-opencode-loop-2026-08-24.md).
+- **Humans in the same conversation** as autonomous seats, through a real
+  browser stream, without accumulating leased work —
+  [record](docs/qualification/live-human-agent-conversation-2026-08-25.md).
+- **Native session continuity** across daemon, worker, and harness replacement,
+  under owner epochs that fence the stale owner —
+  [ADR 0010](docs/adr/0010-durable-session-bindings-and-owner-epochs.md).
+- **Bounded operational evidence** with fixed counters and a cryptographic
+  chain digest per invocation, read by `fleetd status` and `fleetd trace`, and
+  tailable losslessly by an external collector —
+  [ADR 0020](docs/adr/0020-bounded-operational-observations.md).
+- **Optional OpenTelemetry egress** for the in-flight reasoning and tool calls
+  the durable record deliberately does not keep —
+  [ADR 0028](docs/adr/0028-opentelemetry-is-a-projection.md).
+- **Three surfaces over one execution layer** — HTTP, MCP, and the CLI as
+  peers, plus a served browser presentation and a native desktop host, from one
+  generated contract that CI verifies against its sources.
+- **Architecture held by tests.** `tests/crate_boundaries.rs` fails the build if
+  the kernel names a layer above it or `execution` acquires a transport.
+
+Twenty-four [ADRs](docs/adr/) record what was decided and what it cost; fifteen
+[qualification records](docs/qualification/) carry exact message identifiers,
+real model routes, and content hashes. What is deliberately *not* built yet —
+remote workers, the full-night soak, a second qualified harness — is listed in
+[the vision](VISION.md).
 
 ## Run it
 
@@ -138,6 +184,15 @@ digests at `/v1/plugin-generations`, `/v1/session-bindings`, and
 `/v1/invocation-observations`. Fleetd does not duplicate raw harness
 transcripts in SQLite.
 
+A seat may also enable optional trajectory egress, which exports the reasoning,
+tool calls, and plans that exist only while a turn is draining as
+OpenTelemetry spans. It is absent by default, explicitly lossy, cannot delay a
+settlement, and withholds model and user text unless an operator names a level
+that includes it. The durable row stays authoritative. See
+[ADR 0028](docs/adr/0028-opentelemetry-is-a-projection.md), the
+[egress contract](docs/contracts/worker-trajectory-egress-v1.md), and its
+[collector qualification](docs/qualification/trajectory-egress-collector-2026-08-27.md).
+
 The productized operator journey is documented in
 [getting started](docs/GETTING_STARTED.md). `fleetd status`, read-only delivery
 views, exact invocation traces, the existing retry and requeue/abandon
@@ -232,10 +287,12 @@ remote workers remain unsupported until TLS and enrollment are designed.
 
 ## Development
 
+`bin/ci` is the gate. It mirrors the merge workflow job for job and adds the
+checks that only run locally, including the hard crash and restart
+demonstration:
+
 ```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+bin/ci
 ```
 
 See [the vision](VISION.md), [architecture](docs/ARCHITECTURE.md),
