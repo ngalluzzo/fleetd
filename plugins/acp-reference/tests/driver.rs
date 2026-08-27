@@ -4,8 +4,8 @@ use std::{path::PathBuf, time::Duration};
 
 use fleetd_plugin_host::{
     Binding, ExecutionFence, HarnessAcpClient, HarnessAcpNotification, HarnessExecutionCertainty,
-    OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock, StartTurn, ToolBudget,
-    TurnPolicy, TurnSource, harness_acp_interface,
+    OpenSession, OpenSessionMode, PluginProcess, PluginSpec, PromptBlock, StartTranscript,
+    StartTurn, ToolBudget, TurnPolicy, TurnSource, harness_acp_interface,
 };
 use serde_json::json;
 
@@ -14,6 +14,12 @@ fn fixture_path() -> PathBuf {
 }
 
 fn driver_spec() -> PluginSpec {
+    driver_spec_in_mode("resumable")
+}
+
+/// The mock runtime's mode selects which adoption methods it advertises and
+/// whether it can replay, so one fixture covers every path.
+fn driver_spec_in_mode(mode: &str) -> PluginSpec {
     PluginSpec::new(
         "fleetd.acp-reference",
         env!("CARGO_BIN_EXE_fleetd-acp-reference"),
@@ -25,7 +31,7 @@ fn driver_spec() -> PluginSpec {
             "expected_version": "1.0.0",
             "executable": "/usr/bin/python3",
             "identity_path": fixture_path(),
-            "args": [fixture_path()],
+            "args": [fixture_path(), mode],
             "environment": {}
         }
     }))
@@ -207,4 +213,165 @@ async fn driver_preserves_host_deadline_over_runtime_end_turn() {
     );
     assert!(terminal.session_quiescent);
     harness.shutdown().await.expect("shutdown driver");
+}
+
+fn binding() -> Binding {
+    Binding {
+        binding_id: "binding-transcript".to_owned(),
+        binding_generation: 1,
+        owner_epoch: 1,
+    }
+}
+
+/// Opens a session through the real driver in the given mode.
+async fn opened_in_mode(mode: &str) -> (HarnessAcpClient, String) {
+    let process = PluginProcess::start(driver_spec_in_mode(mode))
+        .await
+        .expect("start the reference driver");
+    let harness = process.into_harness_acp().expect("typed harness client");
+    let session = harness
+        .open_session(&OpenSession {
+            binding: binding(),
+            mode: OpenSessionMode::Create,
+            working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
+            additional_directories: Vec::new(),
+            mcp_grants: Vec::new(),
+            resolved_mcp_grants: Vec::new(),
+            profile_digest: "sha256:mock-profile".to_owned(),
+        })
+        .await
+        .expect("open a session");
+    (harness, session.session_ref)
+}
+
+fn transcript_request(session_ref: &str) -> StartTranscript {
+    StartTranscript {
+        binding_id: binding().binding_id,
+        binding_generation: binding().binding_generation,
+        owner_epoch: binding().owner_epoch,
+        session_ref: session_ref.to_owned(),
+    }
+}
+
+/// The real driver turns a runtime's `session/load` replay into ordered entries
+/// closed by one completion, carrying reasoning and tool calls rather than only
+/// messages.
+#[tokio::test]
+async fn real_driver_replays_a_stored_transcript() {
+    let (mut harness, session_ref) = opened_in_mode("resumable").await;
+    harness
+        .start_transcript(&transcript_request(&session_ref))
+        .await
+        .expect("start a replay");
+
+    let mut classifications = Vec::new();
+    let mut tool_input = None;
+    let complete = loop {
+        match harness
+            .next_notification()
+            .await
+            .expect("a transcript notification")
+        {
+            HarnessAcpNotification::TranscriptEntry(entry) => {
+                assert_eq!(entry.session_ref, session_ref);
+                assert_eq!(
+                    entry.entry_seq,
+                    u64::try_from(classifications.len()).expect("fits") + 1
+                );
+                if entry.classification == "tool_call" {
+                    tool_input = entry.raw_update["rawInput"]["path"]
+                        .as_str()
+                        .map(str::to_owned);
+                }
+                classifications.push(entry.classification);
+            }
+            HarnessAcpNotification::TranscriptComplete(complete) => break complete,
+            other => panic!("unexpected notification during a replay: {other:?}"),
+        }
+    };
+
+    assert_eq!(
+        classifications,
+        vec![
+            "reasoning_content".to_owned(),
+            "tool_call".to_owned(),
+            "agent_message_content".to_owned(),
+        ]
+    );
+    assert_eq!(
+        tool_input.as_deref(),
+        Some("notes.txt"),
+        "a replayed tool call keeps its arguments"
+    );
+    assert_eq!(complete.entry_count, 3);
+    assert!(complete.observed_payload_bytes > 0);
+    assert!(!complete.truncated);
+    assert!(complete.failure.is_none());
+}
+
+/// A runtime without `loadSession` must report that it cannot replay, rather
+/// than returning an empty transcript that reads like an agent which did
+/// nothing.
+#[tokio::test]
+async fn real_driver_refuses_a_replay_it_cannot_perform() {
+    let (harness, session_ref) = opened_in_mode("no-load").await;
+    let error = harness
+        .start_transcript(&transcript_request(&session_ref))
+        .await
+        .expect_err("the driver refuses");
+    assert!(
+        format!("{error}").contains("does not support session/load"),
+        "unexpected error: {error}"
+    );
+}
+
+/// A replay under a binding that does not own the lane is refused, because
+/// retrieval is the most sensitive thing this interface does.
+#[tokio::test]
+async fn real_driver_refuses_a_replay_for_another_binding() {
+    let (harness, session_ref) = opened_in_mode("resumable").await;
+    let mut foreign = transcript_request(&session_ref);
+    foreign.owner_epoch += 1;
+    let error = harness
+        .start_transcript(&foreign)
+        .await
+        .expect_err("the driver refuses");
+    assert!(
+        format!("{error}").contains("does not own this session"),
+        "unexpected error: {error}"
+    );
+}
+
+/// Adoption through the real driver sends `session/resume`, which ACP obliges
+/// not to replay, and falls back to `session/load` for a runtime predating the
+/// split. The mock answers each with a distinct `_meta`, so the raw session
+/// result names the method that actually ran.
+#[tokio::test]
+async fn real_driver_adopts_through_resume_and_falls_back_to_load() {
+    for (mode, expected) in [("resumable", "resume"), ("load-only", "load")] {
+        let process = PluginProcess::start(driver_spec_in_mode(mode))
+            .await
+            .expect("start the reference driver");
+        let harness = process.into_harness_acp().expect("typed harness client");
+        let adopted = harness
+            .open_session(&OpenSession {
+                binding: binding(),
+                mode: OpenSessionMode::Resume {
+                    session_ref: "mock-session".to_owned(),
+                },
+                working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
+                additional_directories: Vec::new(),
+                mcp_grants: Vec::new(),
+                resolved_mcp_grants: Vec::new(),
+                profile_digest: "sha256:mock-profile".to_owned(),
+            })
+            .await
+            .expect("adopt a session");
+        assert!(adopted.resumed);
+        assert_eq!(
+            adopted.raw_session_result["_meta"][expected]["preserved"], true,
+            "mode {mode} should have adopted through session/{expected}, got {:?}",
+            adopted.raw_session_result
+        );
+    }
 }

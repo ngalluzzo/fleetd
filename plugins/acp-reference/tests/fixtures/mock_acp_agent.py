@@ -2,6 +2,10 @@ import json
 import sys
 import time
 
+# Modes let one fixture cover both adoption paths and a runtime that cannot
+# replay at all. Default advertises everything.
+MODE = sys.argv[1] if len(sys.argv) > 1 else "resumable"
+
 
 def send(payload):
     sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
@@ -21,7 +25,10 @@ for line in sys.stdin:
                 "result": {
                     "protocolVersion": 1,
                     "agentCapabilities": {
-                        "loadSession": True,
+                        "loadSession": MODE != "no-load",
+                        "sessionCapabilities": (
+                            {"resume": {}} if MODE == "resumable" else {}
+                        ),
                         "promptCapabilities": {},
                         "mcpCapabilities": {},
                     },
@@ -41,7 +48,42 @@ for line in sys.stdin:
                 },
             }
         )
+    elif method == "session/resume":
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {"_meta": {"resume": {"preserved": True}}},
+            }
+        )
     elif method == "session/load":
+        for entry in (
+            {
+                "sessionUpdate": "agent_thought_chunk",
+                "content": {"type": "text", "text": "stored reasoning"},
+            },
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "stored-call-1",
+                "kind": "read",
+                "status": "completed",
+                "rawInput": {"path": "notes.txt"},
+            },
+            {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "stored answer"},
+            },
+        ):
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": params["sessionId"],
+                        "update": entry,
+                    },
+                }
+            )
         send(
             {
                 "jsonrpc": "2.0",
