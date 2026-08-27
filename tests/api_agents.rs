@@ -1,6 +1,6 @@
 //! Authorization over agent identity and credentials.
 
-use fleetd::model::IssuedCredential;
+use fleetd::model::{Agent, IssuedCredential};
 
 mod common;
 
@@ -37,6 +37,39 @@ async fn administration_requires_an_operator_credential() {
         .await
         .expect("agent administration response");
     assert_eq!(forbidden.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn list_agents_returns_the_exact_durable_projection_without_credentials() {
+    let server = Daemon::start().await;
+    let first = server.register("first-agent").await;
+    let second = server.register("second-agent").await;
+
+    let response = server
+        .get("/v1/agents", Some(&server.operator_token))
+        .send()
+        .await
+        .expect("list agents response")
+        .error_for_status()
+        .expect("list agents success");
+    let body = response.bytes().await.expect("list agents body");
+    let listed: Vec<Agent> = serde_json::from_slice(&body).expect("list agents JSON");
+
+    let mut expected = vec![first.agent, second.agent];
+    expected.sort_by(|left, right| {
+        left.created_at_ms
+            .cmp(&right.created_at_ms)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    assert_eq!(listed, expected);
+
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("list agents JSON value");
+    for agent in json.as_array().expect("agent array") {
+        let object = agent.as_object().expect("agent object");
+        assert_eq!(object.len(), 4);
+        assert!(!object.contains_key("credential"));
+        assert!(!object.contains_key("token"));
+    }
 }
 
 #[tokio::test]

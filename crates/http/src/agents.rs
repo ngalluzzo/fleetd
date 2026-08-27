@@ -65,8 +65,20 @@ async fn list_agents(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
 ) -> Result<Json<Vec<fleetd_proto::model::Agent>>, ApiError> {
-    require_operator(&principal)?;
-    Ok(Json(state.store.list_agents().await?))
+    Ok(Json(list_agents_operation(&state, &principal).await?))
+}
+
+/// Product-owned operation behind the replaceable HTTP adapter.
+///
+/// This function contains Fleetd's authorization and durable read. Axum owns
+/// only extraction and response rendering, so a generated adapter can bind the
+/// same operation without moving product behavior into generated source.
+pub(super) async fn list_agents_operation(
+    state: &AppState,
+    principal: &Principal,
+) -> Result<Vec<fleetd_proto::model::Agent>, fleetd_kernel::error::FleetError> {
+    require_operator(principal)?;
+    state.store.list_agents().await
 }
 
 #[utoipa::path(
