@@ -521,6 +521,20 @@ it, so an entry is not an event and must never be folded into an invocation's
 durable evidence. A transcript notification arriving while a turn is draining is
 a protocol violation and fails that turn.
 
+`observed_at_ms` is when the entry was replayed, not when it originally
+happened. A replay carries no original timestamps, so entry order comes from
+`entry_seq` and nothing in a transcript can be aligned to an invocation by time.
+
+Attribution therefore rests on the prompt, which makes it an adapter obligation:
+**an adapter whose turns are to be attributable must name its invocation inside
+the prompt text it sends.** A replay carries prompt text verbatim, so each
+dispatched turn opens with a user message a reader can split on and read that id
+out of. The built-in envelope adapter satisfies this by including
+`invocation.id` in the JSON envelope it sends, after an instruction preamble —
+so a reader takes the text from its first `{`. A user message carrying no such
+identity marks a turn that something other than Fleetd started, which is
+information rather than an error.
+
 ## `harness.acp.session.transcript.complete`
 
 The end of one replay, complete or not. Added in `0.2.0`.

@@ -78,9 +78,15 @@ Three limits are worth knowing before relying on it:
 - **A read during an active turn is stale, not torn.** The turn in flight has
   stored nothing yet, so the reply is complete through the last settled entry.
 - **One session serves a whole channel.** A replay covers every invocation on
-  that lane, and attributing a span of entries to one invocation means matching
-  it against that invocation's observation window — a projection, not a
-  boundary the harness reports.
+  that lane. Attribution is exact rather than approximate: the envelope adapter
+  names its invocation in the prompt, and a replay carries prompt text verbatim,
+  so each turn opens with a user message whose text contains that invocation's
+  id after an instruction preamble. Split on user messages, take the text from
+  its first `{`, and read `invocation.id`. A user message with no envelope is a
+  turn something other than Fleetd started.
+- **Entry timestamps are read times, not event times.** A replay carries no
+  original timestamps, so `observed_at_ms` says when the entry was replayed.
+  Ordering comes from `entry_seq`.
 
 A runtime that cannot replay says so rather than returning an empty transcript,
 and an unknown session names the agent whose bindings to check. See

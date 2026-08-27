@@ -108,15 +108,31 @@ transcript may be appended to a channel as a message, and no transcript may
 influence a settlement, a fence, or a park. A control-plane decision that reads
 a transcript is a bug.
 
-**Per-invocation segmentation is approximate, and says so.** One durable
-session binding serves a whole channel, so a session accumulates many
-invocations while `session/load` replays all of them. Fleetd already stores
-`first_event_at_ms`, `last_event_at_ms`, and `event_count` per invocation
-observation, which is enough to attribute a replayed span of entries to an
-invocation by time window. That attribution is a projection, not a proof, and
-must be labelled as such wherever it is presented. Making it exact would
-require the harness to carry a turn boundary through the replay, which ACP does
-not specify today.
+**Per-invocation segmentation is exact, because Fleetd put the key in the
+conversation.** One durable session binding serves a whole channel, so a session
+accumulates many invocations while `session/load` replays all of them. The
+envelope adapter's prompt names its own invocation, and a replay carries prompt
+text verbatim, so every turn Fleetd dispatched opens with a user message
+containing that invocation's id. A reader splits the replay on user messages,
+reads the id out of each, and attributes every following entry to it.
+
+This was measured rather than assumed, and the first draft of this decision got
+it wrong twice. Attribution by time window is impossible: no replayed update
+carries an original timestamp, and the `observed_at_ms` on an entry is when the
+replay was read, so every entry in one replay shares roughly one instant. The
+envelope also does not arrive as bare JSON — the adapter prepends an instruction
+preamble — so a reader takes the text from its first `{` rather than parsing the
+whole thing. Against a real OpenCode seat holding two invocations, both segments
+resolved to invocations Fleetd had dispatched, and the multi-line envelope
+replayed as one entry rather than several. See the
+[real-harness qualification](../qualification/opencode-transcript-retrieval-2026-08-27.md).
+
+Two consequences follow. A turn that Fleetd did not dispatch has a user message
+that contains no envelope, which makes foreign activity identifiable rather than
+silently mis-attributed. And this is a property of the adapter, not of ACP: an
+adapter that wants attributable transcripts must name its invocation in the
+prompt, which is now a stated requirement of the interface rather than a
+fortunate accident.
 
 **The two paths stay complementary, and the split is timing against content.**
 The transcript answers what was reasoned, called, and concluded, completely, and
@@ -169,10 +185,23 @@ Nothing in the product calls the method yet. That is deliberate — see below.
 
 ## Deliberately not here
 
-Multi-turn segmentation, measured. Every probe session held exactly one turn, so
-the time-window attribution above is reasoned rather than tested. A session that
-accumulates a night of invocations is the case that will show whether an
-approximate boundary is good enough to present to an operator.
+Segmentation at scale. Two invocations on one lane resolved exactly, so the
+mechanism is tested rather than reasoned, but a session accumulating a night of
+invocations is where the key could fail: compaction, pruning, or a rewritten
+prompt would take the invocation id with them, and none of those is measured.
+
+Grouping in the product. Fleetd knows the key and does not use it: `fleetd
+transcript` returns a flat lane and leaves splitting to the reader. Presenting a
+transcript per invocation is now a small change rather than an open question,
+which makes it a decision about the command's output rather than about whether
+attribution works.
+
+Naming the prompt. ACP's `user_message_chunk` has no case in
+`classify_update`, so the entries carrying the segmentation key are labelled
+`unknown`, and every live OpenCode turn has been adding one to
+`InvocationEventCounts.unknown` for a recognised kind. That erodes the signal
+ADR 0020 kept the counter for. Fixing it needs an `EventClass` variant, a
+counter field, and a forward migration.
 
 Transcript lifetime. How long a harness keeps a session before pruning is
 unmeasured, and `session/list` and `session/delete` — the ACP methods that would

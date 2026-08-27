@@ -79,8 +79,11 @@
 - [ ] Per-model throughput. Fleet health, blocked work, invocation traces, and
   session ownership already ship through the productized commands above; this is
   the one part of that set still missing.
-- [ ] Qualify transcript retrieval against a real vendor harness, and against a
-  session holding a night of invocations. Per-invocation attribution is a
-  time-window projection over the observation record rather than a boundary any
-  harness reports, and every session exercised so far held one or two turns.
+- [x] Qualify transcript retrieval against a real vendor harness, with exact
+  per-invocation attribution: the envelope adapter names its invocation in the
+  prompt and a replay carries prompt text verbatim, so a session holding two
+  OpenCode invocations resolved both segments to invocations Fleetd dispatched.
+- [ ] Qualify the same attribution across a session holding a night of
+  invocations, where compaction, pruning, or a rewritten prompt could break the
+  key that makes it exact.
 - Remote workers only after authenticated encrypted transport and enrollment.
