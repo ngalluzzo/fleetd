@@ -1,6 +1,17 @@
 import json
 import sys
 
+# Adoption records the method it was asked for, so run.sh can assert that
+# resuming a native session does not replay its transcript. The path arrives as
+# an argument because a plugin launches its runtime with an empty environment.
+ADOPTION_LOG = sys.argv[1] if len(sys.argv) > 1 else None
+
+
+def record(method):
+    if ADOPTION_LOG:
+        with open(ADOPTION_LOG, "a", encoding="utf-8") as handle:
+            handle.write(method + "\n")
+
 
 def send(payload):
     sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
@@ -23,6 +34,7 @@ for line in sys.stdin:
                         "loadSession": True,
                         "promptCapabilities": {},
                         "mcpCapabilities": {},
+                        "sessionCapabilities": {"resume": {}},
                     },
                     "agentInfo": {"name": "fleetd-restart-demo", "version": "1.0.0"},
                 },
@@ -36,7 +48,8 @@ for line in sys.stdin:
                 "result": {"sessionId": "restart-demo-native-session"},
             }
         )
-    elif method == "session/load":
+    elif method in ("session/load", "session/resume"):
+        record(method)
         send({"jsonrpc": "2.0", "id": request_id, "result": {}})
     elif method == "session/prompt":
         send(

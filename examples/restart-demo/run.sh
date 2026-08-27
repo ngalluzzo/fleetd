@@ -107,11 +107,12 @@ worker_id=$("${python_bin}" -c 'import json,sys; print(json.load(open(sys.argv[1
 channel_id=$("${python_bin}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${demo_dir}/channel.json")
 
 "${python_bin}" - "${demo_dir}/worker.json" "${worker_id}" "${demo_dir}/workspace" \
-    "${reference_plugin}" "${python_bin}" "${script_dir}/mock-acp-agent.py" <<'PY'
+    "${reference_plugin}" "${python_bin}" "${script_dir}/mock-acp-agent.py" \
+    "${demo_dir}/adoption.log" <<'PY'
 import json
 import sys
 
-output, agent_id, workspace, plugin, python, mock = sys.argv[1:]
+output, agent_id, workspace, plugin, python, mock, adoption_log = sys.argv[1:]
 config = {
     "schema_version": 2,
     "agent_id": agent_id,
@@ -130,7 +131,7 @@ config = {
                 "expected_version": "1.0.0",
                 "executable": python,
                 "identity_path": mock,
-                "args": [mock],
+                "args": [mock, adoption_log],
                 "environment": {},
             },
         },
@@ -193,7 +194,20 @@ assert trace["invocation"]["execution_certainty"] == "outcome_known"
 assert observation["owner_epoch"] >= 2
 assert session["binding"]["owner_epoch"] >= 2
 assert generation["health"] == "active"
+
+# Adoption must restore the session without replaying its conversation. ACP
+# obliges `session/load` to stream every prior entry before it answers, and a
+# replayed entry belongs to no invocation, so asking for one would be asking
+# for evidence there is no honest place to put.
+adoption_log = f"{sys.argv[3]}/adoption.log"
+with open(adoption_log, encoding="utf-8") as source:
+    adoption = [line.strip() for line in source if line.strip()]
+assert adoption, "the replacement worker never adopted the native session"
+assert adoption == ["session/resume"] * len(adoption), (
+    f"adoption replayed a transcript it cannot attribute: {adoption}"
+)
 print("fleetd crash/restart demonstration passed")
+print(f"  session adoption: {', '.join(adoption)}")
 print(f"  native session: {session['session_ref']}")
 print(f"  owner epoch after restart: {observation['owner_epoch']}")
 print(f"  latest invocation certainty: {trace['invocation']['execution_certainty']}")

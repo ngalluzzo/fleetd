@@ -10,7 +10,10 @@ use agent_client_protocol::{
     JsonRpcResponse,
     schema::{
         ProtocolVersion,
-        v1::{CancelNotification, Implementation, InitializeRequest, InitializeResponse},
+        v1::{
+            AgentCapabilities, CancelNotification, Implementation, InitializeRequest,
+            InitializeResponse,
+        },
     },
 };
 use fleetd_proto::harness_acp::{
@@ -333,6 +336,11 @@ struct RawNewSessionRequest(Value);
 struct RawLoadSessionRequest(Value);
 
 #[derive(Clone, Debug, Deserialize, Serialize, JsonRpcRequest)]
+#[request(method = "session/resume", response = RawResponse)]
+#[serde(transparent)]
+struct RawResumeSessionRequest(Value);
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonRpcRequest)]
 #[request(method = "session/prompt", response = RawResponse)]
 #[serde(transparent)]
 struct RawPromptRequest(Value);
@@ -380,7 +388,7 @@ async fn run_acp(
         .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
             let initialized =
                 initialize_runtime(&connection, &runtime, executable_digest, profile_digest).await;
-            let (description, load_session) = match initialized {
+            let (description, adoption) = match initialized {
                 Ok(initialized) => initialized,
                 Err(error) => {
                     let _unused = ready.send(Err(error));
@@ -393,7 +401,7 @@ async fn run_acp(
                 &shared,
                 &notifications,
                 &mut commands,
-                load_session,
+                adoption,
             )
             .await
         })
@@ -433,12 +441,49 @@ fn parent_process_group() -> Result<String, DriverError> {
     ))
 }
 
+/// Which session-adoption methods the inner runtime advertised.
+///
+/// ACP requires `session/load` to replay the entire conversation as
+/// `session/update` notifications before it answers, and requires
+/// `session/resume` not to. Adoption wants the session back rather than its
+/// transcript, so it prefers `resume`; `load` remains the fallback for a
+/// runtime that predates it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct AdoptionMethods {
+    load: bool,
+    resume: bool,
+}
+
+impl AdoptionMethods {
+    fn from_capabilities(capabilities: &AgentCapabilities) -> Self {
+        Self {
+            load: capabilities.load_session,
+            resume: capabilities.session_capabilities.resume.is_some(),
+        }
+    }
+
+    /// Which ACP method adopts an existing session, or `None` when the runtime
+    /// advertises neither.
+    ///
+    /// `resume` wins wherever it exists: both restore the session, and only
+    /// `load` is obliged to replay the entire conversation first.
+    const fn method(self) -> Option<&'static str> {
+        if self.resume {
+            Some("session/resume")
+        } else if self.load {
+            Some("session/load")
+        } else {
+            None
+        }
+    }
+}
+
 async fn initialize_runtime(
     connection: &ConnectionTo<Agent>,
     runtime: &RuntimeConfig,
     executable_digest: String,
     profile_digest: String,
-) -> Result<(DescribeResult, bool), DriverError> {
+) -> Result<(DescribeResult, AdoptionMethods), DriverError> {
     let request = InitializeRequest::new(ProtocolVersion::V1).client_info(Implementation::new(
         "fleetd-acp-host",
         env!("CARGO_PKG_VERSION"),
@@ -458,7 +503,7 @@ async fn initialize_runtime(
             runtime.expected_name, runtime.expected_version, agent_info.name, agent_info.version
         )));
     }
-    let load_session = parsed.agent_capabilities.load_session;
+    let adoption = AdoptionMethods::from_capabilities(&parsed.agent_capabilities);
     let description = DescribeResult {
         driver: DriverIdentity {
             version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -478,7 +523,7 @@ async fn initialize_runtime(
         profile_digest,
         raw_initialize_result: bound_json(raw_initialize.0, MAX_FRAME_BYTES / 2),
     };
-    Ok((description, load_session))
+    Ok((description, adoption))
 }
 
 async fn serve_commands(
@@ -486,12 +531,12 @@ async fn serve_commands(
     shared: &Arc<Mutex<SharedState>>,
     notifications: &mpsc::Sender<DriverNotification>,
     commands: &mut mpsc::Receiver<Command>,
-    load_session: bool,
+    adoption: AdoptionMethods,
 ) -> Result<(), agent_client_protocol::Error> {
     while let Some(command) = commands.recv().await {
         match command {
             Command::Open { request, reply } => {
-                let result = open_session(connection, shared, request, load_session).await;
+                let result = open_session(connection, shared, request, adoption).await;
                 let _unused = reply.send(result);
             }
             Command::Start { request, reply } => {
@@ -520,7 +565,7 @@ async fn open_session(
     connection: &ConnectionTo<Agent>,
     shared: &Arc<Mutex<SharedState>>,
     request: OpenSession,
-    load_session: bool,
+    adoption: AdoptionMethods,
 ) -> Result<OpenSessionResult, DriverError> {
     let mcp_servers = resolve_mcp_servers(&request)?;
     let directories = request
@@ -549,22 +594,29 @@ async fn open_session(
             (session_ref, false, response.0)
         }
         OpenSessionMode::Resume { session_ref } => {
-            if !load_session {
+            let Some(method) = adoption.method() else {
                 return Err(DriverError::Protocol(
-                    "inner ACP runtime does not support session/load".to_owned(),
+                    "inner ACP runtime supports neither session/resume nor session/load".to_owned(),
                 ));
-            }
+            };
             let raw_request = json!({
                 "sessionId": session_ref,
                 "cwd": request.working_directory,
                 "additionalDirectories": directories,
                 "mcpServers": mcp_servers
             });
-            let response = connection
-                .send_request(RawLoadSessionRequest(raw_request))
-                .block_task()
-                .await
-                .map_err(|error| DriverError::Runtime(error.to_string()))?;
+            let response = if method == "session/resume" {
+                connection
+                    .send_request(RawResumeSessionRequest(raw_request))
+                    .block_task()
+                    .await
+            } else {
+                connection
+                    .send_request(RawLoadSessionRequest(raw_request))
+                    .block_task()
+                    .await
+            }
+            .map_err(|error| DriverError::Runtime(error.to_string()))?;
             (session_ref.clone(), true, response.0)
         }
     };
@@ -1011,6 +1063,12 @@ async fn handle_session_update(
         let Some(session) = state.sessions.get_mut(session_ref) else {
             return Ok(());
         };
+        // An update outside any active turn belongs to no invocation, and
+        // attributing it to the next one would corrupt that invocation's event
+        // count and chain digest. Adoption no longer produces these: it sends
+        // `session/resume`, which must not replay. What reaches here now is a
+        // runtime volunteering activity Fleetd never fenced, which is exactly
+        // what there is no honest place to put.
         let Some(active) = session.active.as_mut() else {
             return Ok(());
         };
@@ -1380,6 +1438,76 @@ mod tests {
     use fleetd_proto::harness_acp::{ResolvedMcpGrant, ResolvedMcpHttpHeader};
 
     use super::*;
+
+    /// Adoption wants the session back, not its transcript. ACP obliges
+    /// `session/load` to replay the entire conversation before it answers and
+    /// obliges `session/resume` not to, so resume wins wherever it exists.
+    #[test]
+    fn adoption_prefers_resume_and_falls_back_to_load() {
+        assert_eq!(
+            AdoptionMethods {
+                load: true,
+                resume: true
+            }
+            .method(),
+            Some("session/resume")
+        );
+        assert_eq!(
+            AdoptionMethods {
+                load: true,
+                resume: false
+            }
+            .method(),
+            Some("session/load")
+        );
+        assert_eq!(
+            AdoptionMethods {
+                load: false,
+                resume: true
+            }
+            .method(),
+            Some("session/resume")
+        );
+        assert_eq!(
+            AdoptionMethods {
+                load: false,
+                resume: false
+            }
+            .method(),
+            None,
+            "a runtime advertising neither cannot be adopted, and must not \
+             silently open a fresh session instead"
+        );
+    }
+
+    /// The capability shape is read from the runtime's own initialize response,
+    /// so a runtime that omits `sessionCapabilities` entirely is load-only
+    /// rather than unadoptable.
+    #[test]
+    fn adoption_methods_are_read_from_advertised_capabilities() {
+        let load_only: AgentCapabilities = serde_json::from_value(json!({"loadSession": true}))
+            .expect("capabilities without sessionCapabilities parse");
+        assert_eq!(
+            AdoptionMethods::from_capabilities(&load_only).method(),
+            Some("session/load")
+        );
+
+        let resumable: AgentCapabilities = serde_json::from_value(
+            json!({"loadSession": true, "sessionCapabilities": {"resume": {}}}),
+        )
+        .expect("capabilities with resume parse");
+        assert_eq!(
+            AdoptionMethods::from_capabilities(&resumable).method(),
+            Some("session/resume")
+        );
+
+        let fresh_only: AgentCapabilities =
+            serde_json::from_value(json!({})).expect("empty capabilities parse");
+        assert_eq!(
+            AdoptionMethods::from_capabilities(&fresh_only).method(),
+            None
+        );
+    }
 
     #[test]
     fn mcp_resolution_requires_an_exact_requested_loopback_endpoint() {
