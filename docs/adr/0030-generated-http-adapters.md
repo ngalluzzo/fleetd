@@ -46,7 +46,7 @@ derive downstream from the admitted Rust adapter.
 
 The first admitted slice is protected `GET /v1/agents`, compiled by
 `gooir-fleetd-http` commit
-`912e82e5eda4b32bd392419f08639e72eb975b1f` from the Fleetd operation port at
+`bad756d13b6e0a95dd54dfad3e4d6dc8c06a38a4` from the Fleetd operation port at
 `cf00d81831128a1ea45006535347438ffb53a3e5`.
 
 ## Consequences

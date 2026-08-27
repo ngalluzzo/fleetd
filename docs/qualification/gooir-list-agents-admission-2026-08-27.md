@@ -2,7 +2,7 @@
 
 Fleetd admits the generated adapter for protected `GET /v1/agents` from the
 external `gooir-fleetd-http` integration commit
-`912e82e5eda4b32bd392419f08639e72eb975b1f`.
+`bad756d13b6e0a95dd54dfad3e4d6dc8c06a38a4`.
 
 The integration compiled native HTTP, exact Fleetd handler bindings, and the
 Axum target profile through two neutral provider invocations. The candidate
@@ -15,14 +15,14 @@ operation-port revision
 
 Exact provenance:
 
-- GOOIR: `4d0cc31799be4e5ab1a4f60b5d6f894bc0eb9fa3`
+- GOOIR: `291519e160222e57bfb489bdf9d850bdae365ee6`
 - reusable HTTP/Axum providers:
-  `ba82ce1d9f45799608e283beb53d0b05a470d14e`
+  `d72b536a5aa5616fa0edd93067e9964525085408`
 - measured compiler executable:
-  `sha256:8a9f2bfed35598cbfda407841bceea77f03707e6b3fad3d2d94f62f0fd9d671d`
-  (`12,361,256` bytes)
+  `sha256:dd305017ed3d18a767b8f4209b623a79c6757d6b28047e94d03a5c4145086c24`
+  (`12,423,080` bytes)
 - measured provider source closure:
-  `sha256:3be6f4c144cd23b0b052817235f4c9d9b22a243a447962122dcefeb0cdb731fc`
+  `sha256:a70a44f9f42065a5cf4be9f3a6e30e9f0f79c81b95ec27d0aea05d46f299e32d`
 - admitted generated source:
   `sha256:3c4e6292640ff8a52d3b0400aabf53b7e1774dee4da4a212fad0fcd3784ee5be`
 
@@ -31,6 +31,12 @@ The pinned Fleetd evidence includes the exact commit and tree plus Git blobs for
 `openapi/fleetd-v1.json`. Acceptance validates the Axum-free operation port,
 the protected OpenAPI operation, dependency declarations, and the selected
 Axum `0.8.9`, Utoipa `5.5.0`, and Utoipa-Axum `0.2.0` lockfile versions.
+
+The provider closure is also measured from Cargo's actual sibling path inputs
+at integration build time and embedded in the compiler executable. Each input
+is a Cargo rebuild trigger, and compilation proceeds only when that embedded
+digest equals the closure reconstructed from the pinned GOOIR and GOOIR HTTP
+Git objects.
 
 Local admission verified that the candidate digest is exact, the generated
 module imports no GOOIR crate, Fleetd compiles it as ordinary Axum code, and the
