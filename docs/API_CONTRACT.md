@@ -4,11 +4,13 @@ fleetd has one machine-readable HTTP contract: the OpenAPI 3.1 document at
 `openapi/fleetd-v1.json`. A running daemon serves the same document from
 `GET /openapi.json`.
 
-The Rust wire types, handler annotations, and `OpenApiRouter` registrations are
-the implementation authority. The committed JSON is the language-neutral
-artifact consumed by other repositories. A test regenerates it and fails when
-the snapshot drifts, so neither side should copy request or response shapes
-from prose or infer them from handler bodies.
+The Rust wire types and admitted route adapters are the implementation
+authority. An adapter's Utoipa annotation and `OpenApiRouter` registration may
+be generated from an external native HTTP contract and exact implementation
+bindings; its called operation remains handwritten Fleetd behavior. The
+committed JSON is the language-neutral artifact consumed by other repositories.
+A test regenerates it and fails when the snapshot drifts, so neither side should
+copy request or response shapes from prose or infer them from operation bodies.
 
 ## Consumer workflow
 
@@ -162,11 +164,13 @@ rows it inspected, so a bounded read is visible as a bound.
 
 For any wire change:
 
-1. Change the Rust DTO and annotated handler together.
-2. Add or update behavioral API tests.
-3. Regenerate `openapi/fleetd-v1.json`.
-4. Regenerate and typecheck `clients/typescript`.
-5. Review both generated diffs for compatibility and run `bin/ci`.
+1. Change the Rust DTO and handwritten operation behavior.
+2. For a generated adapter, change its external native contract or bindings,
+   compile the exact candidate, and admit its digest; never patch it locally.
+3. Add or update behavioral API tests.
+4. Regenerate `openapi/fleetd-v1.json`.
+5. Regenerate and typecheck `clients/typescript`.
+6. Review all generated diffs for compatibility and run `bin/ci`.
 
 Do not directly patch the OpenAPI JSON or generated TypeScript to make a UI
 compile. A mismatch there means the server authority or generator policy needs

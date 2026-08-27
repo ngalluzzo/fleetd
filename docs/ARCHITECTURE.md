@@ -245,25 +245,33 @@ expires with the invocation. See
 
 ## External semantic integration
 
-Fleetd has no semantic compiler dependency and no special semantic document
-paths. An external integration may:
+Fleetd has no semantic compiler dependency and no semantic runtime document
+path. An external integration may:
 
 1. lift Fleetd's public API, plugin observations, or generated artifacts into
    its own native facts;
 2. bridge those facts to semantic claims only with explicit evidence and
    qualification;
-3. lower an already-linked deployment to Fleetd's public API or worker config.
+3. lower an already-linked deployment to Fleetd's public API or worker config;
+4. compile an independently authored mechanism contract through an
+   implementation dialect to an ordinary source-tree candidate.
 
 That lift/bridge/lower package is independently versioned and outside Fleetd.
-Fleetd transports any documents it emits as ordinary opaque messages. See
-[the integration boundary](INTEGRATION_BOUNDARY.md).
+Fleetd transports runtime documents it emits as ordinary opaque messages. A
+source candidate crosses the repository boundary only after its exact compiler
+closure, source facts, output digest, and Fleetd behavior are checked; the
+admitted source contains no GOOIR dependency. See [the integration
+boundary](INTEGRATION_BOUNDARY.md) and [ADR 0030](adr/0030-generated-http-adapters.md).
 
 ## HTTP surface
 
 One module owns composition: shared state, the route graph, the generated
 document, and the authentication layer every protected route sits behind. One
-module per domain owns its handlers and declares its own routes, and domains
+module per domain owns its product operations and route adapters, and domains
 reach composition and the shared authorization guards but never each other.
+Generated adapters own extraction, response wrapping, registration, and Utoipa
+metadata. Handwritten operation ports own authorization and durable behavior
+without accepting Axum types.
 
 The merge order in the composition module fixes the order operations register
 in, and therefore their order in the generated contract.

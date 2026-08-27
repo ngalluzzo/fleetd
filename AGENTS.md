@@ -45,9 +45,10 @@ promised, and every command they name is expected to exist.
 - Put an HTTP-surface test in `tests/api_<domain>.rs` for the domain it asserts
   about, over the shared harness in `tests/common/api.rs`. A suite may be large
   when it covers one domain; it may not cover several.
-- Never hand-merge a generated artifact. The contract, the generated client, and
-  the served bundle are marked unmergeable; take either side and run
-  `bin/regenerate`, which rebuilds them in the order they depend on each other.
+- Never hand-merge a generated artifact. Regenerate an HTTP adapter in its
+  external pinned integration and admit its exact candidate first; then run
+  `bin/regenerate` for the contract, client, and served bundle in dependency
+  order.
 - Split a module into a directory once it holds more than one concept, giving
   each concept its own source and its own `impl` block. Reaching a parent's
   private state from a child module is allowed, so the split costs call sites
@@ -75,9 +76,11 @@ promised, and every command they name is expected to exist.
 - Plugin manifests negotiate transport interfaces, never semantic capability
   claims. Fleetd must not import a semantic compiler or understand its facts,
   plans, offers, invocations, candidates, or conformance results.
-- Semantic integrations use public Fleetd artifacts through a separately
-  versioned lift/bridge/lower package. Fleetd source contains neither side of
-  that bridge and transports any resulting documents as opaque message data.
+- Semantic compilers and product-specific facts stay in separately versioned
+  external integrations. Fleetd may admit an ordinary generated source
+  candidate under exact provenance and behavioral tests, but it imports no
+  semantic compiler, fact, plan, provider, or conformance runtime. Generated
+  adapters contain mechanism glue only; product behavior remains handwritten.
 - Launch plugin executables directly without a shell. Plugin stdout is protocol
   traffic only, and plugins must not receive fleetd credentials or ambient
   environment variables.

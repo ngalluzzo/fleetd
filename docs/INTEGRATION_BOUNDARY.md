@@ -3,8 +3,8 @@
 Fleetd is an agent coordination runtime. It does not embed a semantic compiler
 or treat its plugin model as a semantic capability system.
 
-The sole supported relationship with GOOIR or another semantic compiler is an
-independently versioned integration package outside both cores:
+Every supported relationship with GOOIR or another semantic compiler passes
+through an independently versioned integration package outside both cores:
 
 ```text
 Fleetd public artifacts
@@ -22,6 +22,16 @@ linked semantic implementation deployment
         │ lower
         ▼
 Fleetd public API calls or worker configuration
+
+native mechanism facts + implementation bindings
+        │
+        │ compile outside Fleetd
+        ▼
+content-addressed ordinary source candidate
+        │
+        │ independent admission
+        ▼
+Fleetd mechanism adapter
 ```
 
 ## Lift
@@ -59,12 +69,27 @@ using Fleetd's public contracts.
 Fleetd validates only its own operational contract. It does not re-plan the
 capability graph, choose an implementation, or validate semantic results.
 
+## Build-time source generation
+
+A product integration may pair independently authored HTTP, CLI, or MCP facts
+with an implementation dialect and emit an ordinary source tree. The external
+integration owns the facts, exact provider invocations, implementation closure,
+and compilation bundle. Fleetd admits only the selected source bytes and a
+qualification record, then compiles and exercises them through its normal
+tests. The generated adapter may extract inputs, call an explicit product port,
+wrap outputs, register the route, and declare contract metadata. It may not own
+authorization policy, durable state transitions, or product decisions.
+
+Generation is a contribution-time operation. Fleetd does not load GOOIR,
+interpret semantic facts, or invoke providers at build time or runtime.
+
 ## Repository rule
 
 The integration package does not live in the Fleetd runtime repository or the
-semantic compiler core. Fleetd publishes operational artifacts; the compiler
-publishes semantic artifacts; the bridge depends on both and neither core
-depends on the bridge.
+semantic compiler core. Fleetd publishes operational artifacts and explicit
+operation ports; the compiler publishes semantic artifacts; the integration
+depends on both and neither core depends on it. An admitted generated source
+file is a terminal artifact, not either side of the integration package.
 
 Any proposal that adds semantic fact, offer, invocation, candidate,
 conformance, or planner types to Fleetd bypasses this boundary and must be

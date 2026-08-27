@@ -47,8 +47,10 @@ It is how many *shared* files a slice is forced through on its way out.
 
 ## Derived artifacts are never merged
 
-Three paths are generated, and each is generated from the one above it:
+The generated chain now has an externally admitted first stage. Fleetd's local
+regenerator owns the last three stages:
 
+    native HTTP + bindings -> crates/http/src/**/generated_*.rs
     the handlers  ->  openapi/fleetd-v1.json
     the contract  ->  clients/typescript/src/generated/**
     the client    ->  web/conversation/conversation.{js,css}
@@ -60,7 +62,9 @@ with `include_str!`, so two concurrent changes both rebuild them.
 `.gitattributes` marks these paths unmergeable: Git leaves the file intact and
 flags a conflict rather than interleaving two regenerated blobs, because a text
 merge of a 4,000-line generated document produces something that is neither side
-and does not parse. Resolve by regenerating:
+and does not parse. Resolve an HTTP-adapter conflict in its pinned external
+integration and admit the exact candidate. Resolve downstream artifacts by
+regenerating:
 
     bin/regenerate
 

@@ -41,6 +41,9 @@
 
 ## M3 — Integration ecosystem
 
+- [x] Compile the first Fleetd HTTP adapter through independent native HTTP and
+  Axum dialects, admit only the content-addressed Rust candidate, and retain no
+  semantic compiler dependency in Fleetd.
 - Stabilize the plugin authoring SDK only after two independent integrations
   pass the same operational-interface suite.
 - Keep Git, GitHub, GitLab, issue trackers, and model servers in external
