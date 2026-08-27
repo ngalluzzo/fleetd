@@ -73,11 +73,14 @@ capability graph, choose an implementation, or validate semantic results.
 
 A product integration may pair independently authored HTTP, CLI, or MCP facts
 with an implementation dialect and emit an ordinary source tree. The external
-integration owns the facts, exact provider invocations, implementation closure,
-and compilation bundle. Fleetd admits only the selected source bytes and a
-qualification record, then compiles and exercises them through its normal
-tests. The generated adapter may extract inputs, call an explicit product port,
-wrap outputs, register the route, and declare contract metadata. It may not own
+integration owns the facts, compilation bundle, installed package documents,
+provider and attester artifacts, loader-derived offers, source observations,
+and per-hop authority records. Fleetd admits only the selected source bytes and
+a qualification record, then compiles and exercises them through its normal
+tests. An integration checkout may be recorded as reproducibility context, but
+it is not source provenance unless the bundle itself establishes that claim.
+The generated adapter may extract inputs, call an explicit product port, wrap
+outputs, register the route, and declare contract metadata. It may not own
 authorization policy, durable state transitions, or product decisions.
 
 Generation is a contribution-time operation. Fleetd does not load GOOIR,

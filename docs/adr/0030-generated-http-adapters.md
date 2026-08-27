@@ -35,19 +35,26 @@ filesystem authority.
 Fleetd admits only a reviewed source candidate under its content digest. The
 generated module owns Axum extraction, output wrapping, route registration, and
 Utoipa metadata. It calls a handwritten, Axum-free operation port that retains
-authorization and durable behavior. The complete compilation bundle and source
-facts remain in the external integration; Fleetd records the selected revisions
-and verifies the candidate digest and behavior.
+authorization and durable behavior. The complete compilation bundle remains in
+the external integration. It identifies installed semantic packages by content
+digest, exact provider and independent attester artifacts, loader-derived
+offers, admitted source observations, and the authority for each selected hop.
+Fleetd verifies the terminal source digest and behavior without treating an
+integration checkout revision as provenance the bundle does not claim.
 
 Generation happens during contribution, not in Fleetd's build or request path.
 Fleetd has no dependency on GOOIR facts, plans, providers, conformance types, or
 runtime code. OpenAPI, the TypeScript client, and the served bundle continue to
 derive downstream from the admitted Rust adapter.
 
-The first admitted slice is protected `GET /v1/agents`, compiled by
-`gooir-fleetd-http` commit
-`bad756d13b6e0a95dd54dfad3e4d6dc8c06a38a4` from the Fleetd operation port at
-`cf00d81831128a1ea45006535347438ffb53a3e5`.
+The first admitted slice is protected `GET /v1/agents`, compiled from the
+Fleetd operation port at
+`cf00d81831128a1ea45006535347438ffb53a3e5`. Its current qualification replay
+used `gooir-fleetd-http` checkout
+`d9b918a2679d603d60c2787058064a43ef24da13` as reproducibility context. The
+CompilerDriver-based bundle deliberately claims no GOOIR or `gooir-http` source
+revision. Its output is byte-for-byte identical to the already-admitted module,
+so the replay required no source re-admission or runtime change.
 
 ## Consequences
 
