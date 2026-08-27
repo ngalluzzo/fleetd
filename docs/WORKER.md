@@ -139,3 +139,40 @@ then reads the exact source/result, generation, session owner epoch, and bounded
 turn evidence for one attempt. The self-contained
 [`examples/restart-demo`](../examples/restart-demo/run.sh) performs a hard
 daemon and worker replacement and verifies that composition end to end.
+
+## Trajectory egress
+
+Status: proposed, not implemented. `fleetd worker run` refuses an `egress`
+block as an unknown field today. The decision is
+[ADR 0028](adr/0028-opentelemetry-is-a-projection.md) and the field rules are
+the [v1 draft](contracts/worker-trajectory-egress-v1-draft.md).
+
+The bounded observation a turn already records keeps counters, byte totals, and
+a chain digest, not content. Reasoning, tool arguments, and intermediate plans
+exist only while a turn is draining. Egress is the optional per-seat sink that
+would export them as OpenTelemetry spans before that evidence is folded away.
+It is absent by default: with no `egress` block there is no exporter and no
+queue. See
+[`examples/worker.acp.egress.draft.json`](../examples/worker.acp.egress.draft.json),
+which differs from the ACP reference example by exactly that block.
+
+`content` decides what may leave the process. `none` exports timing and
+ordering only; `metadata`, the default, adds tool names, statuses, plan sizes,
+and stop reasons but never model or user text; `full` adds assistant text,
+reasoning, and tool arguments, each bounded by `max_attribute_bytes`. A
+non-loopback `endpoint` must be `https`, and a collector requiring
+authorization reads it from an owner-only `headers_file` rather than an inline
+value. As everywhere else in this file, no credential belongs in the
+desired-state document.
+
+The sink is lossy deliberately. A full queue drops the event and counts it, an
+unreachable collector cannot delay a settlement or influence a fence, and drops
+surface in the log stream rather than in the final JSON report. Nothing an
+operator is promised depends on it, and neither `fleetd status` nor
+`fleetd trace` consults it. For a lossless reader, tail
+`/v1/invocation-observations` and `/v1/plugin-generations` through their
+cursors instead; that path needs no collector and no egress block.
+
+Enabling egress does not rotate a binding generation. Unlike inbound
+acceptance, it changes nothing the harness sees, so it must not discard native
+conversational state.

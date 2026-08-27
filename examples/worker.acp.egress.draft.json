@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "agent_id": "REPLACE_WITH_FLEETD_AGENT_ID",
+  "working_directory": "/absolute/path/to/workspace",
+  "additional_directories": [],
+  "mcp_grants": [],
+  "adapter": {
+    "kind": "envelope",
+    "inbound": {
+      "schema_version": 1,
+      "message_kinds": ["work.request/v1"]
+    }
+  },
+  "plugin": {
+    "id": "fleetd.acp-reference",
+    "executable": "/absolute/path/to/fleetd/target/debug/fleetd-acp-reference",
+    "args": [],
+    "config": {
+      "profile_digest": "replace-with-qualified-profile-identity",
+      "runtime": {
+        "expected_name": "replace-with-exact-acp-agent-name",
+        "expected_version": "replace-with-exact-acp-agent-version",
+        "executable": "/absolute/path/to/node",
+        "identity_path": "/absolute/path/to/acp-adapter.js",
+        "args": [
+          "/absolute/path/to/acp-adapter.js"
+        ],
+        "environment": {
+          "HOME": "/absolute/home/path",
+          "PATH": "/explicit/non-secret/path",
+          "TERM": "xterm-256color",
+          "TMPDIR": "/absolute/private/tmp/path"
+        }
+      }
+    },
+    "initialize_timeout_ms": 30000,
+    "request_timeout_ms": 30000,
+    "shutdown_timeout_ms": 5000
+  },
+  "result_kind": "work.result/v1",
+  "lease_duration_ms": 900000,
+  "poll_interval_ms": 1000,
+  "restart_backoff_ms": 5000,
+  "pre_arm_retry_delay_ms": 5000,
+  "turn": {
+    "idle_timeout_ms": 120000,
+    "wall_timeout_ms": 600000,
+    "cancel_drain_timeout_ms": 15000,
+    "max_captured_output_bytes": 524288,
+    "tool_budget": 64
+  },
+  "egress": {
+    "schema_version": 1,
+    "kind": "otlp_http",
+    "endpoint": "http://127.0.0.1:4318/v1/traces",
+    "content": "metadata",
+    "resource_attributes": {
+      "deployment.environment": "dogfood"
+    },
+    "queue_capacity": 1024,
+    "export_timeout_ms": 5000,
+    "shutdown_flush_ms": 2000
+  }
+}
