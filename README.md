@@ -148,8 +148,9 @@ and gives it neither Fleetd credentials nor ambient secrets.
 
 Lifecycle initialization returns plugin identity plus exact operational
 interfaces. Current harness integrations implement
-`fleetd.harness-acp@0.1.0`; that interface identifies the typed wire contract
-for session open/resume, fenced turns, permission resolution, events, and close.
+`fleetd.harness-acp@0.1.0` and `fleetd.harness-acp@0.2.0`; those interfaces
+identify the typed wire contract for session open/resume, fenced turns,
+permission resolution, events, close, and transcript retrieval.
 It makes no claim about what semantic work a model or agent can perform.
 
 The workspace contains:

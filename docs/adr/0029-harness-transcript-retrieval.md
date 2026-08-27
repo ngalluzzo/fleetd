@@ -1,6 +1,6 @@
 # ADR 0029: Trajectory has two retrieval paths, and Fleetd stores neither
 
-- Status: proposed
+- Status: accepted for experimental dogfood
 - Date: 2026-08-27
 
 ## Context
@@ -77,9 +77,24 @@ load-time replay to its caller instead of dropping it, and it is gated on the
 runtime advertising `loadSession`: a harness without that capability reports
 that it cannot, rather than returning an empty transcript that reads like an
 agent which did nothing. The interface becomes
-`fleetd.harness-acp@0.2.0`; per this repository's rule, the method is unstable
-until two independent integrations implement it, so OpenCode and Codex both
-qualify before the contract is treated as settled.
+`fleetd.harness-acp@0.2.0`, declared beside `0.1.0` because identity is matched
+by equality rather than by SemVer range; per this repository's rule, the method
+is unstable until two independent integrations implement it, so OpenCode and
+Codex both qualify before the contract is treated as settled.
+
+**The method starts a replay rather than returning one.** It answers as soon as
+the replay is under way, entries arrive as notifications, and exactly one
+completion closes it. This is a constraint, not a style: a plugin drains its
+notification channel only between requests, so a method that awaited the whole
+replay would deadlock once a conversation outgrew the channel — an intermittent
+hang on long sessions and nowhere else. A turn already has this shape.
+
+**A replay is bounded and says when it was bounded.** Fleetd cannot limit what a
+runtime chooses to replay, so the driver stops at 10,000 entries or 8 MiB and
+reports `truncated`. Completeness is never inferred from a stream that stopped.
+Two refusals beyond the three above fall out of the same reasoning: a second
+concurrent replay on one session, and a transcript notification arriving while a
+turn drains, which fails that turn rather than being tolerated.
 
 **Fleetd transports and does not retain.** No new kernel table, no new column,
 no migration. A transcript passes through to whoever asked and is not written
@@ -137,6 +152,21 @@ An interface version bump obliges both harness plugins. Codex has no
 real-runtime qualification even at `0.1.0`, so this raises the cost of the
 already-open milestone rather than adding an independent one.
 
+## What was built
+
+Three commits, each green through `bin/ci`:
+
+- adoption sends `session/resume` where the runtime advertises it and falls back
+  to `session/load` otherwise, so a replacement worker no longer streams and
+  discards an entire conversation on every restart;
+- `harness.acp.session.transcript.start` with its two notifications, the
+  `0.2.0` declaration, and the four refusals;
+- coverage through the real `fleetd-acp-reference` binary against a mock ACP
+  runtime, which is the only place `acp-host` is exercised for real, plus the
+  restart demonstration asserting that adoption used `session/resume`.
+
+Nothing in the product calls the method yet. That is deliberate — see below.
+
 ## Deliberately not here
 
 Multi-turn segmentation, measured. Every probe session held exactly one turn, so
@@ -155,4 +185,7 @@ decision because it reopens retention and redaction, which is exactly the cost
 
 Presenting a transcript. This ADR adds an address, not an operator surface. Who
 renders one, at what granularity, and with what redaction is downstream of the
-segmentation limit above.
+segmentation limit above, and it has an unresolved question of its own: the
+harness process is owned by a running worker, so an operator path either goes
+through that worker or starts a second plugin process against a session the
+first one holds. Whether a runtime tolerates that is unmeasured.

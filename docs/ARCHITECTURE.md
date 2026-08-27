@@ -164,10 +164,17 @@ is not an operating-system security sandbox. See
 ## Harness boundary
 
 ACP is an inner harness interoperability protocol. Fleetd's current harness
-plugins negotiate the operational interface `fleetd.harness-acp@0.1.0`, whose
-typed methods cover description, session open/resume, fenced turn start,
-permission resolution, cancellation, ordered events, terminal evidence, and
-close.
+plugins negotiate the operational interfaces `fleetd.harness-acp@0.1.0` and
+`fleetd.harness-acp@0.2.0`, whose typed methods cover description, session
+open/resume, fenced turn start, permission resolution, cancellation, ordered
+events, terminal evidence, close, and transcript retrieval.
+
+Adoption and retrieval use different ACP methods on purpose. Resuming a session
+sends `session/resume`, which must not replay the conversation; retrieving a
+transcript sends `session/load`, which must. Fleetd transports a replay to
+whoever asked and stores none of it, so ADR 0020's bounded evidence remains the
+only durable record. See
+[ADR 0029](adr/0029-harness-transcript-retrieval.md).
 
 The shared ACP host owns protocol translation and process containment. Each
 vendor plugin owns launch arguments, environment grants, model routing, and

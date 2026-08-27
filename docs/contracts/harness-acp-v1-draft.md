@@ -5,8 +5,12 @@ acceptance matrix passes.
 
 This typed protocol adapter is carried over Fleetd's plugin lifecycle JSON-RPC
 transport. It wraps one ACP client connection with Fleetd ownership, fencing,
-deadlines, and evidence. Plugins advertise the exact operational interface
-`fleetd.harness-acp@0.1.0`; the `harness.acp.*` names below are its typed methods.
+deadlines, and evidence. Plugins advertise the exact operational interfaces
+`fleetd.harness-acp@0.1.0` and `fleetd.harness-acp@0.2.0`; the `harness.acp.*`
+names below are their typed methods. Interface identity is matched by equality
+rather than by SemVer range, so both are declared and a host requiring either
+negotiates. `0.2.0` adds transcript retrieval and nothing else; it stays
+unstable until two independent integrations have qualified against it.
 The adapter is deliberately smaller than ACP and is not an arbitrary protocol
 tunnel. It makes no semantic claim about the work an agent can perform.
 
@@ -82,6 +86,11 @@ ACP feature observations do not match the immutable profile.
 ## `harness.acp.session.open`
 
 Creates or resumes a native session before an effectful turn begins.
+
+Resuming sends ACP `session/resume`, which must not replay the conversation,
+and falls back to `session/load` only for a runtime that advertises no resume
+capability. Adoption wants the session back rather than its transcript, and a
+replayed entry belongs to no invocation.
 
 Request:
 
@@ -448,6 +457,91 @@ that the protocol did not provide. See
 The controller validates result content and policy separately. A terminal
 notification never acknowledges an inbox delivery and never grants itself a
 retry.
+
+## `harness.acp.session.transcript.start`
+
+Replays one native session's stored conversation. Added in `0.2.0`.
+
+This is retrieval, not adoption or work. It carries the owning binding rather
+than a fence, because it starts nothing.
+
+Request:
+
+```json
+{
+  "binding_id": "uuid",
+  "binding_generation": 1,
+  "owner_epoch": 3,
+  "session_ref": "opaque-native-session-reference"
+}
+```
+
+Result:
+
+```json
+{
+  "accepted": true
+}
+```
+
+The result means the replay is under way, not finished. Entries then arrive as
+`harness.acp.session.transcript.entry` notifications and exactly one
+`harness.acp.session.transcript.complete` closes the replay. Answering only
+after the whole replay would deadlock: a plugin drains its notification channel
+between requests, so a long conversation would fill the channel while the
+request it belongs to was still being served. A turn already has this shape and
+a replay follows it.
+
+The driver refuses a replay when the inner runtime cannot replay at all, when
+the supplied binding does not own the session lane, when a turn is active on
+that session, and when a replay is already in flight for it. A runtime that
+cannot replay reports that rather than returning an empty transcript, which
+would read like an agent that did nothing.
+
+## `harness.acp.session.transcript.entry`
+
+One stored conversation entry, as the runtime replayed it. Added in `0.2.0`.
+
+```json
+{
+  "method": "harness.acp.session.transcript.entry",
+  "params": {
+    "session_ref": "opaque-native-session-reference",
+    "entry_seq": 1,
+    "observed_at_ms": 1700000000000,
+    "classification": "reasoning_content",
+    "raw_update": {"sessionUpdate": "agent_thought_chunk"}
+  }
+}
+```
+
+`entry_seq` orders the replay and is unrelated to a turn's `event_seq`. A replay
+carries each entry's final state rather than the streamed updates that produced
+it, so an entry is not an event and must never be folded into an invocation's
+durable evidence. A transcript notification arriving while a turn is draining is
+a protocol violation and fails that turn.
+
+## `harness.acp.session.transcript.complete`
+
+The end of one replay, complete or not. Added in `0.2.0`.
+
+```json
+{
+  "method": "harness.acp.session.transcript.complete",
+  "params": {
+    "session_ref": "opaque-native-session-reference",
+    "entry_count": 3,
+    "observed_payload_bytes": 240,
+    "truncated": false,
+    "failure": null
+  }
+}
+```
+
+Fleetd cannot bound what a runtime chooses to replay, so the driver bounds it:
+10,000 entries and 8 MiB. `truncated` distinguishes a capped replay from a short
+conversation, so completeness is never inferred from a stream that stopped.
+`failure` carries a bounded diagnostic when the runtime refused mid-replay.
 
 ## `harness.acp.session.close`
 
