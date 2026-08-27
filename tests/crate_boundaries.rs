@@ -254,7 +254,7 @@ fn crate_root_re_exports_modules_only() {
 }
 
 /// The layer that decides what happens to durable state.
-const EXECUTION_MODULES: [&str; 8] = [
+const EXECUTION_MODULES: [&str; 9] = [
     "controller",
     "health",
     "invocation",
@@ -262,6 +262,7 @@ const EXECUTION_MODULES: [&str; 8] = [
     "operations",
     "session_binding",
     "settlement",
+    "trajectory",
     "worker",
 ];
 
@@ -314,12 +315,13 @@ fn collect_sources(path: &Path, sources: &mut Vec<PathBuf>) {
 /// `only_the_kernel_writes_kernel_tables`. That makes the list of places it is
 /// checked load-bearing: a new crate above the substrate that is missing here is
 /// unchecked, not compliant.
-const ABOVE_SUBSTRATE_CRATES: [&str; 5] = [
+const ABOVE_SUBSTRATE_CRATES: [&str; 6] = [
     "crates/conversation/src",
     "crates/execution/src",
     "crates/fleet/src",
     "crates/http/src",
     "crates/mcp/src",
+    "crates/otlp/src",
 ];
 
 /// Checks the one rule in this file that cannot be made structural.

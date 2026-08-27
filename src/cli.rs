@@ -8,6 +8,7 @@ use std::{
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use fleetd_fleet::{base_url, validate_listen_address};
+use fleetd_otlp::config::EgressRequest;
 
 use fleetd::{
     auth::AuthService,
@@ -392,6 +393,37 @@ struct WorkerFileConfig {
     pre_arm_retry_delay_ms: u64,
     #[serde(default)]
     turn: WorkerTurnConfig,
+    /// Optional lossy trajectory egress. Absent means no exporter and no queue.
+    #[serde(default)]
+    egress: Option<WorkerEgressConfig>,
+}
+
+/// One seat's trajectory egress, exactly as written.
+///
+/// The rules live in `fleetd-otlp`, which is the mechanism that has to honour
+/// them; this is only the shape the file is allowed to have.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerEgressConfig {
+    schema_version: u32,
+    kind: String,
+    endpoint: String,
+    #[serde(default)]
+    headers_file: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    classifications: Option<Vec<String>>,
+    #[serde(default)]
+    resource_attributes: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    max_attribute_bytes: Option<usize>,
+    #[serde(default)]
+    queue_capacity: Option<usize>,
+    #[serde(default)]
+    export_timeout_ms: Option<u64>,
+    #[serde(default)]
+    shutdown_flush_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -594,7 +626,27 @@ async fn run_worker(args: WorkerRunArgs, fleet: &fleetd_fleet::ResolvedFleet) ->
     }
     let store = Store::open_with_message_commit_hints(&db).await?;
     let adapter = desired.turn_adapter()?;
+    // Egress is a transport, so the binary provisions it for the same reason it
+    // provisions the MCP endpoint below: the worker is handed a sink and never
+    // learns that an exporter is a thing that can be started. Validation
+    // happens here, before a plugin process exists, because a malformed block
+    // is a configuration mistake rather than a runtime condition.
+    let egress = desired.egress_request();
     let mut config = desired.into_runtime_config();
+    if let Some(request) = egress {
+        let validated = request
+            .validate()
+            .map_err(|error| format!("worker configuration egress block is invalid: {error}"))?;
+        tracing::info!(
+            endpoint = %validated.endpoint,
+            content = validated.content.as_str(),
+            "trajectory egress enabled for this seat"
+        );
+        config.trajectory_sink = Some(std::sync::Arc::new(
+            fleetd_otlp::sink::TrajectoryEgress::start(validated)
+                .map_err(|error| format!("trajectory egress could not start: {error}"))?,
+        ));
+    }
     // Whether a turn is offered an MCP endpoint is a deployment decision, so the
     // binary makes it. The worker is handed the result and never learns that an
     // endpoint is a thing that can be started.
@@ -649,6 +701,28 @@ impl WorkerFileConfig {
         }
     }
 
+    /// Restates the egress block as the request `fleetd-otlp` validates.
+    ///
+    /// Read before `into_runtime_config` consumes the file, and separate from it
+    /// because constructing the sink needs a runtime and can fail.
+    fn egress_request(&self) -> Option<EgressRequest> {
+        let egress = self.egress.as_ref()?;
+        Some(EgressRequest {
+            schema_version: egress.schema_version,
+            kind: egress.kind.clone(),
+            endpoint: egress.endpoint.clone(),
+            headers_file: egress.headers_file.clone(),
+            content: egress.content.clone(),
+            classifications: egress.classifications.clone(),
+            resource_attributes: egress.resource_attributes.clone(),
+            max_attribute_bytes: egress.max_attribute_bytes,
+            queue_capacity: egress.queue_capacity,
+            export_timeout_ms: egress.export_timeout_ms,
+            shutdown_flush_ms: egress.shutdown_flush_ms,
+            agent_id: self.agent_id.clone(),
+        })
+    }
+
     fn into_runtime_config(self) -> ContinuousWorkerConfig {
         ContinuousWorkerConfig {
             agent_id: self.agent_id,
@@ -674,6 +748,7 @@ impl WorkerFileConfig {
                 },
                 token_budget: None,
             },
+            trajectory_sink: None,
         }
     }
 }
@@ -1326,6 +1401,63 @@ mod tests {
     // The loopback rule and its assertions moved to `fleetd-fleet`, which owns
     // the listen address every surface reads.
     use super::{WorkerFileConfig, persist_secret_file, replace_secret_file};
+
+    /// A committed example is a template an operator copies, so it has to load.
+    #[test]
+    fn the_egress_example_parses_and_validates() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/worker.acp.egress.example.json");
+        let text = std::fs::read_to_string(&path).expect("read the egress example");
+        let desired: WorkerFileConfig =
+            serde_json::from_str(&text).expect("the egress example is a valid worker file");
+        let validated = desired
+            .egress_request()
+            .expect("the example configures egress")
+            .validate()
+            .expect("the example satisfies the egress contract");
+        assert_eq!(validated.content.as_str(), "metadata");
+        assert!(validated.endpoint.starts_with("http://127.0.0.1:"));
+    }
+
+    #[test]
+    fn a_seat_without_an_egress_block_provisions_no_sink() {
+        let desired: WorkerFileConfig = serde_json::from_value(json!({
+            "schema_version": 2,
+            "agent_id": "agent-id",
+            "working_directory": env!("CARGO_MANIFEST_DIR"),
+            "adapter": {
+                "kind": "envelope",
+                "inbound": {"schema_version": 1, "message_kinds": ["work.request/v1"]}
+            },
+            "plugin": {"id": "mock.harness", "executable": "/usr/bin/python3"}
+        }))
+        .expect("parse without egress");
+        assert!(desired.egress_request().is_none());
+        assert!(desired.into_runtime_config().trajectory_sink.is_none());
+    }
+
+    /// An unknown field inside the egress block fails the seat rather than
+    /// starting one that exports something other than what was written.
+    #[test]
+    fn an_unknown_egress_field_is_refused() {
+        let value = json!({
+            "schema_version": 2,
+            "agent_id": "agent-id",
+            "working_directory": env!("CARGO_MANIFEST_DIR"),
+            "adapter": {
+                "kind": "envelope",
+                "inbound": {"schema_version": 1, "message_kinds": ["work.request/v1"]}
+            },
+            "plugin": {"id": "mock.harness", "executable": "/usr/bin/python3"},
+            "egress": {
+                "schema_version": 1,
+                "kind": "otlp_http",
+                "endpoint": "http://127.0.0.1:4318/v1/traces",
+                "sampling": 0.5
+            }
+        });
+        assert!(serde_json::from_value::<WorkerFileConfig>(value).is_err());
+    }
 
     #[test]
     fn worker_config_defaults_are_bounded_and_inbound_acceptance_is_exact() {

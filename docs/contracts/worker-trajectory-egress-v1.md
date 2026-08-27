@@ -1,8 +1,9 @@
-# Worker trajectory egress v1 draft
+# Worker trajectory egress v1
 
-Status: proposed. Nothing here is implemented, and `fleetd worker run` currently
-refuses an `egress` block as an unknown field. The decision this contract serves
-is [ADR 0028](../adr/0028-opentelemetry-is-a-projection.md).
+Status: implemented for experimental dogfood. The decision this contract serves
+is [ADR 0028](../adr/0028-opentelemetry-is-a-projection.md); one real turn per
+content level is recorded in the
+[collector qualification](../qualification/trajectory-egress-collector-2026-08-27.md).
 
 ## Purpose
 
@@ -58,6 +59,12 @@ database are untouched.
 needs no gRPC stack in the daemon. An `otlp_grpc` or airgapped `file` variant is
 a later tagged variant, not a reshaping.
 
+Spans are assembled as `SpanData` and handed straight to the OTLP exporter
+rather than produced through a tracer. A tracer instruments the code it runs
+inside; this projects records that already happened, so it needs externally
+supplied identity and explicit start and end timestamps. It also keeps the queue
+and its drop accounting Fleetd's rather than a batch processor's.
+
 ## Field rules
 
 `endpoint` is required and absolute, and is refused unless its host is a
@@ -81,30 +88,37 @@ contract.
 `content` selects what may be lifted out of `raw_update`:
 
 - `none` — nothing. Spans carry timing, ordering, and counts only.
-- `metadata` (default) — tool name, tool call id, tool kind and status, plan
-  entry count, stop reason. Never model or user text, never tool arguments or
-  tool output.
-- `full` — assistant text, reasoning text, tool arguments, and tool output,
-  each truncated to `max_attribute_bytes`.
+- `metadata` (default) — tool kind and status, tool call id, plan entry count,
+  stop reason, certainty. `gen_ai.tool.name` carries ACP's `kind`, which is an
+  enumeration; a tool call's `title` is agent-authored prose that can name a
+  path or quote a request, so it is not metadata. Never model or user text,
+  never tool arguments or tool output.
+- `full` — assistant text, reasoning text, the tool `title`, tool arguments,
+  and tool output, each truncated to `max_attribute_bytes` on a character
+  boundary.
 
 `metadata` is the default because writing an `egress` block is already the
 explicit act, and this level cannot carry model or user text. `full` must be
 named. At `full`, an `unknown` update exports its raw JSON, since an
 unrecognized update has no fields to select.
 
-`classifications` is an optional allowlist over the vocabulary
-`event_increments` already counts, defaulting to all of them. It is orthogonal
-to `content`: removing `reasoning` here drops those events entirely, which is a
-stronger control than redacting them. `unknown` defaults on because an
-unrecognized update is the one an operator most needs to see.
+`classifications` is an optional allowlist over `EventClass`, defaulting to all
+of it. Those are the names `InvocationEventCounts` reports, so an operator
+selects by what an operator already reads: `tool`, not the two wire spellings
+`tool_call` and `tool_call_update` that reduce to it. The reduction lives in
+`fleetd-proto` beside the counters it names, so the durable fold and this sink
+share one table. The allowlist is orthogonal to `content`: removing `reasoning`
+drops those events entirely, which is a stronger control than redacting them.
+`unknown` defaults on because an unrecognized update is the one an operator most
+needs to see.
 
 `resource_attributes` is a flat string map, at most 32 entries of at most 256
-bytes each. Fleetd sets `service.name`, `service.instance.id`, and the seat
-identity itself; an operator key colliding with a reserved key is refused
-rather than merged.
+bytes each. Fleetd sets `service.name` and `fleetd.agent_id` itself; an operator
+key colliding with either is refused rather than merged, because two sources for
+one key is a silent winner.
 
-Bounds, all validated in `validate_config` before a plugin starts, so a
-malformed block cannot be discovered after a turn is armed:
+Bounds, all checked by `EgressRequest::validate` before a plugin process
+exists, so a malformed block cannot be discovered after a turn is armed:
 `max_attribute_bytes` 1..=65536, default 4096, a second and tighter bound than
 `turn.max_captured_output_bytes` because this one governs what leaves the
 process; `queue_capacity` 1..=65536, default 1024; `export_timeout_ms`
@@ -114,36 +128,48 @@ process; `queue_capacity` 1..=65536, default 1024; `export_timeout_ms`
 
 One `invoke_agent` span per managed invocation. It opens when the arming
 transaction commits — the same moment the `invocation_observations` row is
-created — and closes at `record_invocation_terminal`. Its parent is the
-envelope's `traceparent` when one is present, and it is a root span otherwise.
+created — and closes when the turn settles or parks.
+
+It is a root span. Its trace identity is derived from the `correlation_id` the
+immutable envelope already carries, falling back to the source message id, so an
+A -> B -> A run is one trace with no new envelope field and no transport header.
+The derivation is deterministic and domain-separated, which means an external
+projection of the durable rows computes the same trace and span ids from the
+same evidence: the two halves of ADR 0028 merge in the backend instead of
+producing two disconnected views of one run.
 
 Children and events follow what the update actually is:
 
 - `tool` — one `execute_tool` child span per tool call id, opened on its first
   update and closed on its last.
-- `permission` — one child span carrying the resolved outcome. It has a real
-  begin, end, and result.
-- `assistant`, `reasoning`, `plan` — span events on the parent. They are chunks
-  of one operation, not operations.
+- `assistant`, `reasoning`, `plan`, `permission`, `metadata`, `unknown` — span
+  events on the parent. They are chunks of one operation, not operations. A
+  permission request is an event rather than a span because the controller
+  denies it and the resolution is not separately observed, so there is no second
+  timestamp to close a span with.
 - `usage` — attributes on the parent at terminal, from the same evidence
   `InvocationObservation.usage` records.
 
 Attributes use `gen_ai.*` spellings where they exist: `gen_ai.operation.name`,
-`gen_ai.request.model` from the plugin's negotiated model route,
-`gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, and
-`gen_ai.tool.name`. Fleetd identities stay Fleetd-namespaced:
-`fleetd.invocation_id`, `fleetd.agent_id`, `fleetd.binding_id`,
-`fleetd.binding_generation`, `fleetd.owner_epoch`, `fleetd.generation_id`,
-`fleetd.event_seq`, `fleetd.event_chain_digest`, and
-`fleetd.execution_certainty`.
+`gen_ai.tool.name`, `gen_ai.usage.input_tokens`, and
+`gen_ai.usage.output_tokens`. Fleetd identities stay Fleetd-namespaced:
+`fleetd.invocation_id`, `fleetd.agent_id`, `fleetd.channel_id`,
+`fleetd.source_message_id`, `fleetd.generation_id`, `fleetd.binding_id`,
+`fleetd.binding_generation`, `fleetd.owner_epoch`, `fleetd.correlation_id`,
+`fleetd.event_seq`, `fleetd.stop_reason`, and `fleetd.execution_certainty`.
+
+`gen_ai.request.model` is deliberately absent. The model route lives in
+plugin-owned opaque configuration, and a surface that read it to label a span
+would be interpreting a contract it does not own. An operator who wants it
+supplies it through `resource_attributes`.
 
 Span status is error when an invocation parks under `outcome_unknown`. That is
 the case an operator must find and the case where no result message exists to
 find it by.
 
-`fleetd.event_chain_digest` and the event count on the parent are how a reader
-ties a trace back to its durable row and detects a trace missing spans the
-counters counted.
+`fleetd.observed_event_count` on the parent is how a reader detects a trace that
+is missing spans: compared against the durable row's `event_count`, a gap is
+visible rather than silent. The durable row stays authoritative.
 
 ## Loss is bounded and counted
 

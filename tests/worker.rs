@@ -89,6 +89,7 @@ fn worker_config(agent_id: &str, mode: &str, working_directory: PathBuf) -> Cont
         restart_backoff: Duration::from_millis(10),
         pre_arm_retry_delay: Duration::ZERO,
         turn_policy: policy(),
+        trajectory_sink: None,
     }
 }
 

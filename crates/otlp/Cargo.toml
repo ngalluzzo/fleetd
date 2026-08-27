@@ -1,0 +1,40 @@
+[package]
+name = "fleetd-otlp"
+version = "0.1.0"
+edition = "2024"
+description = "OpenTelemetry egress for fleetd trajectory that the durable record does not keep"
+license = "MIT"
+
+# One mechanism, like `http` and `mcp`. This is where the OpenTelemetry crates
+# are allowed to be: traces and the OTLP trace exporter are still Beta and every
+# crate here is pre-1.0, so a breaking minor release can only reach a sink. It
+# depends on `fleetd-execution` to implement that crate's `TrajectorySink`, never
+# the other way round -- deciding what happens to durable state must not mean
+# knowing an exporter exists.
+[dependencies]
+fleetd-execution = { path = "../execution" }
+fleetd-proto = { path = "../proto" }
+futures-util = "0.3"
+opentelemetry = { version = "0.32", features = ["trace"] }
+# `default-features = false` is load-bearing: the default feature set selects
+# `reqwest-blocking-client`, whose client builds its own runtime and panics when
+# dropped inside an async context. The drain task runs on the worker's runtime,
+# so the exporter has to be the async client.
+opentelemetry-otlp = { version = "0.32", default-features = false, features = [
+    "http-proto",
+    "reqwest-client",
+    "trace",
+] }
+opentelemetry_sdk = { version = "0.32", features = ["trace"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+tracing = "0.1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

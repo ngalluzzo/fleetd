@@ -16,6 +16,7 @@ members = [
     "crates/http",
     "crates/kernel",
     "crates/mcp",
+    "crates/otlp",
     "crates/plugin-host",
     "crates/proto",
     "plugins/acp-reference",
@@ -33,6 +34,7 @@ fleetd-execution = { path = "crates/execution" }
 fleetd-fleet = { path = "crates/fleet" }
 fleetd-http = { path = "crates/http" }
 fleetd-mcp = { path = "crates/mcp" }
+fleetd-otlp = { path = "crates/otlp" }
 fleetd-kernel = { path = "crates/kernel" }
 fleetd-plugin-host = { path = "crates/plugin-host" }
 fleetd-proto = { path = "crates/proto" }

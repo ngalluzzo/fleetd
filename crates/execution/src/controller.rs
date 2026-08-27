@@ -9,6 +9,9 @@ use thiserror::Error;
 use crate::operations;
 use crate::session_binding;
 use crate::settlement;
+use crate::trajectory::{
+    TrajectoryClose, TrajectoryOutcome, TrajectorySink, TrajectoryTurn, TrajectoryUpdate,
+};
 use fleetd_kernel::{error::FleetError, store::Store};
 use fleetd_plugin_host::{
     Binding, HarnessAcpClient, HarnessAcpNotification, HarnessExecutionCertainty,
@@ -85,12 +88,72 @@ pub enum ManagedTurnError {
 /// interface. It owns settlement policy but no harness-specific semantics.
 pub struct ManagedHarnessController<'store> {
     store: &'store Store,
+    /// Optional lossy trajectory egress. A sink observes a copy of what the
+    /// durable fold is about to discard and can never fail a turn.
+    sink: Option<Arc<dyn TrajectorySink>>,
 }
 
 impl<'store> ManagedHarnessController<'store> {
     #[must_use]
     pub const fn new(store: &'store Store) -> Self {
-        Self { store }
+        Self { store, sink: None }
+    }
+
+    /// Attaches an optional trajectory sink provisioned by a surface.
+    #[must_use]
+    pub fn with_trajectory_sink(mut self, sink: Option<Arc<dyn TrajectorySink>>) -> Self {
+        self.sink = sink;
+        self
+    }
+
+    /// Offers the identity of a just-armed turn to the sink, if one is
+    /// attached.
+    fn open_trajectory(&self, invocation: &Invocation, generation_id: &str, binding: &Binding) {
+        if let Some(sink) = &self.sink {
+            sink.open(&TrajectoryTurn {
+                invocation_id: &invocation.id,
+                agent_id: &invocation.agent_id,
+                channel_id: &invocation.message.channel_id,
+                source_message_id: &invocation.message.id,
+                generation_id,
+                binding_id: &binding.binding_id,
+                binding_generation: binding.binding_generation,
+                owner_epoch: binding.owner_epoch,
+                correlation_id: invocation.message.correlation_id.as_deref(),
+                causation_id: invocation.message.causation_id.as_deref(),
+                opened_at_ms: fleetd_kernel::store::now_ms(),
+            });
+        }
+    }
+
+    /// Offers one close to the sink, if one is attached.
+    ///
+    /// Close is idempotent by contract, so every post-arm exit may call this
+    /// without tracking whether an earlier one already did.
+    fn close_trajectory(&self, invocation_id: &str, close: TrajectoryClose<'_>) {
+        if let Some(sink) = &self.sink {
+            sink.close(&TrajectoryOutcome {
+                invocation_id,
+                closed_at_ms: fleetd_kernel::store::now_ms(),
+                close,
+            });
+        }
+    }
+
+    /// Closes an open trajectory when a post-arm step fails outright.
+    ///
+    /// A failure here is not a harness outcome, so it is reported as a park:
+    /// the turn is neither known-complete nor known-unstarted.
+    fn closing_on_error<T>(
+        &self,
+        invocation_id: &str,
+        result: Result<T, ManagedTurnError>,
+    ) -> Result<T, ManagedTurnError> {
+        if let Err(error) = &result {
+            let reason = format!("managed turn failed after arming: {error}");
+            self.close_trajectory(invocation_id, TrajectoryClose::Parked { reason: &reason });
+        }
+        result
     }
 
     /// Arms, dispatches, drains, and durably settles one reserved invocation.
@@ -141,6 +204,7 @@ impl<'store> ManagedHarnessController<'store> {
             },
         )
         .await?;
+        self.open_trajectory(&invocation, &generation_id, &binding);
 
         for (activated, grant) in grants.iter().enumerate() {
             if let Err(error) = grant.activate(&invocation).await {
@@ -194,19 +258,21 @@ impl<'store> ManagedHarnessController<'store> {
             )
             .await;
         revoke_grants(&grants, &invocation.id).await;
-        let terminal = match terminal_result? {
+        let terminal = match self.closing_on_error(&invocation.id, terminal_result)? {
             TerminalDrain::Terminal(terminal) => terminal,
             TerminalDrain::Blocked(blocked) => return Ok(ManagedTurnOutcome::Blocked(blocked)),
         };
-        self.settle_terminal(
-            &invocation,
-            &binding,
-            result_kind,
-            result_capture,
-            result_context,
-            terminal,
-        )
-        .await
+        let settled = self
+            .settle_terminal(
+                &invocation,
+                &binding,
+                result_kind,
+                result_capture,
+                result_context,
+                terminal,
+            )
+            .await;
+        self.closing_on_error(&invocation.id, settled)
     }
 
     async fn await_terminal(
@@ -220,7 +286,13 @@ impl<'store> ManagedHarnessController<'store> {
     ) -> Result<TerminalDrain, ManagedTurnError> {
         match tokio::time::timeout(
             Duration::from_millis(policy.wall_timeout_ms),
-            drain_turn(self.store, generation_id, harness, fence),
+            drain_turn(
+                self.store,
+                generation_id,
+                harness,
+                fence,
+                self.sink.as_deref(),
+            ),
         )
         .await
         {
@@ -248,7 +320,13 @@ impl<'store> ManagedHarnessController<'store> {
                 }
                 match tokio::time::timeout(
                     Duration::from_millis(policy.cancel_drain_timeout_ms),
-                    drain_turn(self.store, generation_id, harness, fence),
+                    drain_turn(
+                        self.store,
+                        generation_id,
+                        harness,
+                        fence,
+                        self.sink.as_deref(),
+                    ),
                 )
                 .await
                 {
@@ -323,6 +401,16 @@ impl<'store> ManagedHarnessController<'store> {
             },
         )
         .await?;
+        self.close_trajectory(
+            &invocation.id,
+            TrajectoryClose::Terminal {
+                stop_reason: &terminal.stop_reason,
+                runtime_stop_reason: terminal.runtime_stop_reason.as_deref(),
+                certainty: terminal.execution_certainty.into(),
+                session_quiescent: terminal.session_quiescent,
+                usage: &terminal.usage,
+            },
+        );
         Ok(ManagedTurnOutcome::Completed(Box::new(completion)))
     }
 
@@ -368,10 +456,11 @@ impl<'store> ManagedHarnessController<'store> {
             &invocation.message.id,
             BlockDelivery {
                 lease_token: invocation.lease_token.clone(),
-                reason,
+                reason: reason.clone(),
             },
         )
         .await?;
+        self.close_trajectory(&invocation.id, TrajectoryClose::Parked { reason: &reason });
         Ok(blocked)
     }
 }
@@ -545,6 +634,7 @@ async fn drain_turn(
     generation_id: &str,
     harness: &mut HarnessAcpClient,
     fence: &fleetd_plugin_host::ExecutionFence,
+    sink: Option<&dyn TrajectorySink>,
 ) -> Result<fleetd_plugin_host::TurnTerminal, TurnDrainError> {
     loop {
         match harness.next_notification().await? {
@@ -559,19 +649,38 @@ async fn drain_turn(
                     &event.raw_update,
                 )
                 .await?;
+                if let Some(sink) = sink {
+                    sink.observe(&TrajectoryUpdate {
+                        invocation_id: &fence.invocation_id,
+                        event_seq: event.event_seq,
+                        observed_at_ms: event.observed_at_ms,
+                        classification: &event.classification,
+                        raw_update: &event.raw_update,
+                    });
+                }
             }
             HarnessAcpNotification::PermissionRequested(permission) => {
                 let raw = serde_json::to_value(&permission)?;
+                let observed_at_ms = fleetd_kernel::store::now_ms();
                 operations::record_invocation_event(
                     store,
                     generation_id,
                     &fence.invocation_id,
                     permission.event_seq,
-                    fleetd_kernel::store::now_ms(),
+                    observed_at_ms,
                     "permission_request",
                     &raw,
                 )
                 .await?;
+                if let Some(sink) = sink {
+                    sink.observe(&TrajectoryUpdate {
+                        invocation_id: &fence.invocation_id,
+                        event_seq: permission.event_seq,
+                        observed_at_ms,
+                        classification: "permission_request",
+                        raw_update: &raw,
+                    });
+                }
                 harness
                     .resolve_permission(&PermissionResolution {
                         fence: fence.clone(),

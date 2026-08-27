@@ -19,6 +19,7 @@ use crate::invocation;
 use crate::operations;
 use crate::session_binding;
 use crate::settlement;
+use crate::trajectory::TrajectorySink;
 use crate::{
     controller::{
         ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnGrant,
@@ -250,6 +251,9 @@ pub struct ContinuousWorkerConfig {
     pub restart_backoff: Duration,
     pub pre_arm_retry_delay: Duration,
     pub turn_policy: TurnPolicy,
+    /// Optional lossy trajectory egress, provisioned by whoever started this
+    /// seat. `None` means no exporter and no queue exist.
+    pub trajectory_sink: Option<Arc<dyn TrajectorySink>>,
 }
 
 /// Counts produced by one bounded or cancelled worker run.
@@ -462,7 +466,14 @@ impl<'store> ContinuousHarnessWorker<'store> {
             )
             .await;
         heartbeat.stop().await;
-        stop_generation(self.store, harness, &generation_id, exit).await
+        stop_generation(
+            self.store,
+            harness,
+            &generation_id,
+            self.config.trajectory_sink.as_deref(),
+            exit,
+        )
+        .await
     }
 
     async fn drive_generation(
@@ -474,7 +485,8 @@ impl<'store> ContinuousHarnessWorker<'store> {
         max_settled_turns: Option<u64>,
         report: &mut WorkerReport,
     ) -> GenerationExit {
-        let controller = ManagedHarnessController::new(self.store);
+        let controller = ManagedHarnessController::new(self.store)
+            .with_trajectory_sink(self.config.trajectory_sink.clone());
         loop {
             if cancellation.is_cancelled() || limit_reached(report, max_settled_turns) {
                 return GenerationExit::Stopped;
@@ -894,8 +906,12 @@ async fn stop_generation(
     store: &Store,
     harness: HarnessAcpClient,
     generation_id: &str,
+    sink: Option<&dyn TrajectorySink>,
     exit: GenerationExit,
 ) -> GenerationExit {
+    if let Some(sink) = sink {
+        sink.flush().await;
+    }
     let (disposition, mut reason) = generation_exit_evidence(&exit);
     let (shutdown_outcome, shutdown_exit_code) = match harness.shutdown().await {
         Ok(ShutdownOutcome::Graceful(evidence)) => (PluginShutdownOutcome::Graceful, evidence.code),

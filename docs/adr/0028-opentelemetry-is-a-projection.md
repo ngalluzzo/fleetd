@@ -1,6 +1,6 @@
 # ADR 0028: OpenTelemetry is a projection, never the evidence record
 
-- Status: proposed
+- Status: accepted for experimental dogfood
 - Date: 2026-08-27
 
 ## Context
@@ -53,9 +53,11 @@ durable half.
 
 **The durable projection runs outside the process.** An external collector
 tails the two evidence listings through their public cursors, derives a trace
-and span identity deterministically from `invocation_id`, sets explicit start
-and end timestamps from `started_at_ms` and `terminal_at_ms`, and links
-attempts that share a `binding_id` across owner epochs. Because it is a pure
+identity from the run's `correlation_id` and a span identity from
+`invocation_id`, sets explicit start and end timestamps from `started_at_ms` and
+`terminal_at_ms`, and links attempts that share a `binding_id` across owner
+epochs. The live sink derives both the same way, so the two halves land in one
+trace rather than two disconnected views of one run. Because it is a pure
 function of durable rows, it is idempotent and replayable, and a collector that
 was offline for a week emits the same spans when it returns. This needs no new
 Fleetd code, no contract change, and no privileged internal data path.
@@ -76,7 +78,7 @@ the work — tool names, statuses, plan sizes, stop reasons — and no model or 
 text; assistant text, reasoning, and tool arguments require an explicit
 per-seat level, never a consequence of enabling tracing. The seat
 configuration, span shape, attribute mapping, and bounds are the
-[trajectory egress draft](../contracts/worker-trajectory-egress-v1-draft.md).
+[trajectory egress contract](../contracts/worker-trajectory-egress-v1.md).
 
 **Fleetd adopts the vocabulary, not the schema.** `gen_ai.*` spellings are used
 where they exist; invocation, binding, owner epoch, and fence identities remain

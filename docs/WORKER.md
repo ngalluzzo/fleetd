@@ -142,36 +142,44 @@ daemon and worker replacement and verifies that composition end to end.
 
 ## Trajectory egress
 
-Status: proposed, not implemented. `fleetd worker run` refuses an `egress`
-block as an unknown field today. The decision is
-[ADR 0028](adr/0028-opentelemetry-is-a-projection.md) and the field rules are
-the [v1 draft](contracts/worker-trajectory-egress-v1-draft.md).
-
 The bounded observation a turn already records keeps counters, byte totals, and
 a chain digest, not content. Reasoning, tool arguments, and intermediate plans
 exist only while a turn is draining. Egress is the optional per-seat sink that
-would export them as OpenTelemetry spans before that evidence is folded away.
-It is absent by default: with no `egress` block there is no exporter and no
-queue. See
-[`examples/worker.acp.egress.draft.json`](../examples/worker.acp.egress.draft.json),
-which differs from the ACP reference example by exactly that block.
+exports them as OpenTelemetry spans before that evidence is folded away. It is
+absent by default: with no `egress` block there is no exporter and no queue. The
+decision is [ADR 0028](adr/0028-opentelemetry-is-a-projection.md), the field
+rules are the [v1 contract](contracts/worker-trajectory-egress-v1.md), and one
+real turn per content level against a live collector is recorded in the
+[collector qualification](qualification/trajectory-egress-collector-2026-08-27.md).
+
+```sh
+cp examples/worker.acp.egress.example.json .fleetd/worker.json
+```
+
+That example differs from the ACP reference one by exactly the `egress` block,
+and points at a loopback OTLP collector on the default `4318`.
 
 `content` decides what may leave the process. `none` exports timing and
-ordering only; `metadata`, the default, adds tool names, statuses, plan sizes,
-and stop reasons but never model or user text; `full` adds assistant text,
-reasoning, and tool arguments, each bounded by `max_attribute_bytes`. A
-non-loopback `endpoint` must be `https`, and a collector requiring
-authorization reads it from an owner-only `headers_file` rather than an inline
-value. As everywhere else in this file, no credential belongs in the
-desired-state document.
+ordering only; `metadata`, the default, adds the tool kind, call id, status,
+plan size, and stop reason but never model or user text and never a tool's
+agent-authored title; `full` adds assistant text, reasoning, the title, and
+tool arguments, each bounded by `max_attribute_bytes`. `classifications`
+selects whole event classes by the names `fleetd trace` already reports, so
+`reasoning` can be dropped rather than merely redacted. A non-loopback
+`endpoint` must be `https`, and a collector requiring authorization reads it
+from a `headers_file` whose mode is verified owner-only before it is read. As
+everywhere else in this file, no credential belongs in the desired-state
+document.
 
 The sink is lossy deliberately. A full queue drops the event and counts it, an
-unreachable collector cannot delay a settlement or influence a fence, and drops
-surface in the log stream rather than in the final JSON report. Nothing an
-operator is promised depends on it, and neither `fleetd status` nor
-`fleetd trace` consults it. For a lossless reader, tail
-`/v1/invocation-observations` and `/v1/plugin-generations` through their
-cursors instead; that path needs no collector and no egress block.
+unreachable collector cannot delay a settlement or influence a fence, and the
+counters surface in the log stream rather than in the final JSON report: one
+warning on a generation's first drop, and one summary of accepted, exported, and
+dropped totals when that generation retires. Nothing an operator is promised
+depends on it, and neither `fleetd status` nor `fleetd trace` consults it. For a
+lossless reader, tail `/v1/invocation-observations` and
+`/v1/plugin-generations` through their cursors instead; that path needs no
+collector and no egress block.
 
 Enabling egress does not rotate a binding generation. Unlike inbound
 acceptance, it changes nothing the harness sees, so it must not discard native

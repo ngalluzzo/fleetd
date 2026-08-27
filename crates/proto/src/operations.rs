@@ -217,6 +217,75 @@ pub struct AgentSeat {
     pub unresolved_block_id: Option<i64>,
 }
 
+/// Which counter one observed harness update advances.
+///
+/// The wire carries finer classifications than the counters keep -- `tool_call`
+/// and `tool_call_update` are two updates and one counter -- so the reduction
+/// has to live somewhere. It lives here, beside the counters it names, because
+/// two readers need it: the durable fold that increments a row, and a
+/// trajectory sink that groups spans by the same vocabulary an operator already
+/// reads in [`InvocationEventCounts`].
+///
+/// An unrecognized classification is [`EventClass::Unknown`] rather than an
+/// error. A harness may emit an update this build has never seen, and losing
+/// the count would be worse than counting it as unknown.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EventClass {
+    Assistant,
+    Reasoning,
+    Tool,
+    Plan,
+    Usage,
+    Metadata,
+    Permission,
+    Unknown,
+}
+
+impl EventClass {
+    /// Every variant, so a caller can enumerate the vocabulary without
+    /// repeating it.
+    pub const ALL: [Self; 8] = [
+        Self::Assistant,
+        Self::Reasoning,
+        Self::Tool,
+        Self::Plan,
+        Self::Usage,
+        Self::Metadata,
+        Self::Permission,
+        Self::Unknown,
+    ];
+
+    /// Reduces one wire classification to the counter it advances.
+    #[must_use]
+    pub fn parse(classification: &str) -> Self {
+        match classification {
+            "agent_message_content" => Self::Assistant,
+            "reasoning_content" => Self::Reasoning,
+            "tool_call" | "tool_call_update" => Self::Tool,
+            "plan_update" => Self::Plan,
+            "usage" => Self::Usage,
+            "metadata" => Self::Metadata,
+            "permission_request" => Self::Permission,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// The counter's own name, which is also how an operator selects it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Assistant => "assistant",
+            Self::Reasoning => "reasoning",
+            Self::Tool => "tool",
+            Self::Plan => "plan",
+            Self::Usage => "usage",
+            Self::Metadata => "metadata",
+            Self::Permission => "permission",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// Fixed-size event counters retained for one managed invocation.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 pub struct InvocationEventCounts {
@@ -345,7 +414,39 @@ pub struct InvocationTrace {
 mod tests {
     use serde_json::Value;
 
-    use super::{PluginGenerationDisposition, PluginShutdownOutcome};
+    use super::{
+        EventClass, InvocationEventCounts, PluginGenerationDisposition, PluginShutdownOutcome,
+    };
+
+    #[test]
+    fn every_event_class_names_a_counter_field() {
+        let counts =
+            serde_json::to_value(InvocationEventCounts::default()).expect("serialize counters");
+        let fields = counts.as_object().expect("counters are an object");
+        assert_eq!(fields.len(), EventClass::ALL.len());
+        for class in EventClass::ALL {
+            assert!(
+                fields.contains_key(class.as_str()),
+                "EventClass::{class:?} spells `{}`, which is not a counter field. The \
+                 vocabulary an operator selects by is the one the read model reports.",
+                class.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn an_unrecognized_classification_counts_as_unknown() {
+        assert_eq!(
+            EventClass::parse("reasoning_content"),
+            EventClass::Reasoning
+        );
+        assert_eq!(EventClass::parse("tool_call"), EventClass::Tool);
+        assert_eq!(EventClass::parse("tool_call_update"), EventClass::Tool);
+        assert_eq!(
+            EventClass::parse("a_kind_this_build_has_never_seen"),
+            EventClass::Unknown
+        );
+    }
 
     #[test]
     fn stored_spelling_matches_the_wire_spelling() {

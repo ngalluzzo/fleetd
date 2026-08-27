@@ -20,6 +20,7 @@ use fleetd_plugin_host::{
     Binding, DescribeResult, PluginIdentity, PluginInterface, SessionPersistence, TurnTerminal,
 };
 use fleetd_proto::model::{DeliveryState, ExecutionCertainty, InvocationState};
+use fleetd_proto::operations::EventClass;
 use fleetd_proto::session::SessionBindingState;
 
 const MAX_EVIDENCE_PAGE: u32 = 500;
@@ -1196,15 +1197,15 @@ struct EventIncrements {
 
 fn event_increments(classification: &str) -> EventIncrements {
     let mut counts = EventIncrements::default();
-    match classification {
-        "agent_message_content" => counts.assistant = 1,
-        "reasoning_content" => counts.reasoning = 1,
-        "tool_call" | "tool_call_update" => counts.tool = 1,
-        "plan_update" => counts.plan = 1,
-        "usage" => counts.usage = 1,
-        "metadata" => counts.metadata = 1,
-        "permission_request" => counts.permission = 1,
-        _ => counts.unknown = 1,
+    match EventClass::parse(classification) {
+        EventClass::Assistant => counts.assistant = 1,
+        EventClass::Reasoning => counts.reasoning = 1,
+        EventClass::Tool => counts.tool = 1,
+        EventClass::Plan => counts.plan = 1,
+        EventClass::Usage => counts.usage = 1,
+        EventClass::Metadata => counts.metadata = 1,
+        EventClass::Permission => counts.permission = 1,
+        EventClass::Unknown => counts.unknown = 1,
     }
     counts
 }
