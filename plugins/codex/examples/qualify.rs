@@ -114,6 +114,12 @@ async fn run_prompt(
         .await?;
     loop {
         match harness.next_notification().await? {
+            // Qualification drives turns; a transcript replay is a separate
+            // request this harness never makes.
+            HarnessAcpNotification::TranscriptEntry(_)
+            | HarnessAcpNotification::TranscriptComplete(_) => {
+                return Err("harness replayed a transcript during a qualification turn".into());
+            }
             HarnessAcpNotification::TurnEvent(event) => {
                 println!("event {} {}", event.event_seq, event.classification);
             }

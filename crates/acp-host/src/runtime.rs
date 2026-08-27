@@ -21,7 +21,8 @@ use fleetd_proto::harness_acp::{
     DescribeResult, DriverIdentity, EffectiveEnforcement, ExecutionFence,
     HarnessExecutionCertainty, HarnessLimits, OpenSession, OpenSessionMode, OpenSessionResult,
     PermissionOutcome, PermissionResolution, ResolvedMcpEndpoint, RuntimeIdentity,
-    SessionPersistence, StartTurn, StartTurnResult, TurnEvent, TurnTerminal,
+    SessionPersistence, StartTranscript, StartTranscriptResult, StartTurn, StartTurnResult,
+    TranscriptComplete, TranscriptEntry, TurnEvent, TurnTerminal,
 };
 use http::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,12 @@ use uuid::Uuid;
 
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
 const MAX_CAPTURE_BYTES: usize = 512 * 1024;
+/// The most entries one replay forwards before it reports truncation.
+const MAX_TRANSCRIPT_ENTRIES: u64 = 10_000;
+
+/// The most encoded bytes one replay forwards before it reports truncation.
+const MAX_TRANSCRIPT_BYTES: u64 = 8 * 1024 * 1024;
+
 const ACP_SDK_VERSION: &str = "2.0.0";
 
 #[derive(Clone, Debug, Deserialize)]
@@ -157,6 +164,13 @@ impl DriverRuntime {
                     .await?;
                 Ok(serde_json::to_value(result)?)
             }
+            "harness.acp.session.transcript.start" => {
+                let request: StartTranscript = serde_json::from_value(params)?;
+                let result = self
+                    .command(|reply| Command::Transcript { request, reply })
+                    .await?;
+                Ok(serde_json::to_value(result)?)
+            }
             "harness.acp.turn.start" => {
                 let request: StartTurn = serde_json::from_value(params)?;
                 let result = self
@@ -254,6 +268,10 @@ fn validate_file(kind: &str, path: &Path) -> Result<(), DriverError> {
 }
 
 enum Command {
+    Transcript {
+        request: StartTranscript,
+        reply: oneshot::Sender<Result<StartTranscriptResult, DriverError>>,
+    },
     Open {
         request: OpenSession,
         reply: oneshot::Sender<Result<OpenSessionResult, DriverError>>,
@@ -287,6 +305,18 @@ struct SessionState {
     additional_directories: Vec<String>,
     mcp_grants: Vec<String>,
     active: Option<ActiveTurn>,
+    /// Set only while a transcript replay is in flight. A replayed entry has no
+    /// invocation, so it must never be folded into one; this is what tells
+    /// `handle_session_update` to forward it as an entry instead of ignoring it.
+    capturing: Option<TranscriptCapture>,
+}
+
+/// Bounds and running totals for one transcript replay.
+struct TranscriptCapture {
+    next_entry_seq: u64,
+    entry_count: u64,
+    observed_payload_bytes: u64,
+    truncated: bool,
 }
 
 struct ActiveTurn {
@@ -539,6 +569,11 @@ async fn serve_commands(
                 let result = open_session(connection, shared, request, adoption).await;
                 let _unused = reply.send(result);
             }
+            Command::Transcript { request, reply } => {
+                let result =
+                    start_transcript(connection, shared, notifications, request, adoption).await;
+                let _unused = reply.send(result);
+            }
             Command::Start { request, reply } => {
                 let result = start_turn(connection, shared, notifications, *request).await;
                 let _unused = reply.send(result);
@@ -559,6 +594,123 @@ async fn serve_commands(
         }
     }
     Ok(())
+}
+
+/// Starts one transcript replay and answers immediately.
+///
+/// `session/load` is the only ACP method obliged to replay a conversation, so
+/// retrieval uses it even though adoption no longer does. The request returns as
+/// soon as the replay is under way: entries arrive as notifications and a
+/// terminal notification closes it, because a plugin drains notifications only
+/// between requests and awaiting the whole replay here would deadlock once it
+/// outgrew the channel.
+async fn start_transcript(
+    connection: &ConnectionTo<Agent>,
+    shared: &Arc<Mutex<SharedState>>,
+    notifications: &mpsc::Sender<DriverNotification>,
+    request: StartTranscript,
+    adoption: AdoptionMethods,
+) -> Result<StartTranscriptResult, DriverError> {
+    if !adoption.load {
+        return Err(DriverError::Protocol(
+            "inner ACP runtime does not support session/load, so it cannot replay a transcript"
+                .to_owned(),
+        ));
+    }
+    let (cwd, directories) = {
+        let mut state = shared.lock().await;
+        let session = state
+            .sessions
+            .get_mut(&request.session_ref)
+            .ok_or_else(|| {
+                DriverError::Protocol("transcript requested for an unopened session".to_owned())
+            })?;
+        // Retrieval must not be able to read a lane the caller does not own.
+        if session.binding.binding_id != request.binding_id
+            || session.binding.binding_generation != request.binding_generation
+            || session.binding.owner_epoch != request.owner_epoch
+        {
+            return Err(DriverError::Protocol(
+                "transcript requested under a binding that does not own this session".to_owned(),
+            ));
+        }
+        // A replay while a turn is draining would interleave entries with that
+        // turn's events, and both would be wrong.
+        if session.active.is_some() {
+            return Err(DriverError::Protocol(
+                "transcript cannot be replayed while a turn is active on this session".to_owned(),
+            ));
+        }
+        if session.capturing.is_some() {
+            return Err(DriverError::Protocol(
+                "a transcript replay is already in flight for this session".to_owned(),
+            ));
+        }
+        session.capturing = Some(TranscriptCapture {
+            next_entry_seq: 1,
+            entry_count: 0,
+            observed_payload_bytes: 0,
+            truncated: false,
+        });
+        (session.cwd.clone(), session.additional_directories.clone())
+    };
+
+    let sent = connection.send_request(RawLoadSessionRequest(json!({
+        "sessionId": request.session_ref,
+        "cwd": cwd,
+        "additionalDirectories": directories,
+        "mcpServers": []
+    })));
+    let capture_shared = Arc::clone(shared);
+    let capture_notifications = notifications.clone();
+    let session_ref = request.session_ref.clone();
+    tokio::spawn(async move {
+        let failure = sent.block_task().await.err().map(|error| error.to_string());
+        let (entry_count, observed_payload_bytes, truncated) = {
+            let mut state = capture_shared.lock().await;
+            state
+                .sessions
+                .get_mut(&session_ref)
+                .and_then(|session| session.capturing.take())
+                .map_or((0, 0, false), |capture| {
+                    (
+                        capture.entry_count,
+                        capture.observed_payload_bytes,
+                        capture.truncated,
+                    )
+                })
+        };
+        let complete = TranscriptComplete {
+            session_ref,
+            entry_count,
+            observed_payload_bytes,
+            truncated,
+            failure: failure.map(|reason| bounded_reason(&reason)),
+        };
+        if let Ok(params) = serde_json::to_value(&complete) {
+            let _closed = capture_notifications
+                .send(DriverNotification {
+                    method: "harness.acp.session.transcript.complete".to_owned(),
+                    params,
+                })
+                .await;
+        }
+    });
+
+    Ok(StartTranscriptResult { accepted: true })
+}
+
+/// Bounds a runtime diagnostic before it is forwarded as evidence.
+fn bounded_reason(reason: &str) -> String {
+    const LIMIT: usize = 1_024;
+    if reason.len() <= LIMIT {
+        return reason.to_owned();
+    }
+    let mut end = LIMIT;
+    while end > 0 && !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    reason[..end].to_owned()
 }
 
 async fn open_session(
@@ -642,6 +794,7 @@ async fn open_session(
             additional_directories: request.additional_directories,
             mcp_grants: request.mcp_grants,
             active: None,
+            capturing: None,
         },
     );
     Ok(OpenSessionResult {
@@ -1045,6 +1198,52 @@ async fn emit_terminal(
         .map_err(|_| DriverError::Runtime("host notification channel closed".to_owned()))
 }
 
+/// Folds one replayed update into the capture, or refuses it past a bound.
+///
+/// Returning `None` marks the capture truncated and stops forwarding, so a
+/// consumer learns a bound was reached instead of inferring completeness from a
+/// replay that simply stopped.
+fn capture_transcript_entry(
+    capture: &mut TranscriptCapture,
+    session_ref: &str,
+    update: &Value,
+) -> Option<TranscriptEntry> {
+    if capture.truncated {
+        return None;
+    }
+    let encoded = u64::try_from(update.to_string().len()).unwrap_or(u64::MAX);
+    if capture.entry_count >= MAX_TRANSCRIPT_ENTRIES
+        || capture.observed_payload_bytes.saturating_add(encoded) > MAX_TRANSCRIPT_BYTES
+    {
+        capture.truncated = true;
+        return None;
+    }
+    let entry_seq = capture.next_entry_seq;
+    capture.next_entry_seq = capture.next_entry_seq.saturating_add(1);
+    capture.entry_count = capture.entry_count.saturating_add(1);
+    capture.observed_payload_bytes = capture.observed_payload_bytes.saturating_add(encoded);
+    Some(TranscriptEntry {
+        session_ref: session_ref.to_owned(),
+        entry_seq,
+        observed_at_ms: now_ms_i64(),
+        classification: classify_update(update).to_owned(),
+        raw_update: update.clone(),
+    })
+}
+
+async fn forward_transcript_entry(
+    notifications: &mpsc::Sender<DriverNotification>,
+    entry: TranscriptEntry,
+) -> Result<(), DriverError> {
+    notifications
+        .send(DriverNotification {
+            method: "harness.acp.session.transcript.entry".to_owned(),
+            params: serde_json::to_value(entry)?,
+        })
+        .await
+        .map_err(|_| DriverError::Runtime("host notification channel closed".to_owned()))
+}
+
 async fn handle_session_update(
     shared: &Arc<Mutex<SharedState>>,
     notifications: &mpsc::Sender<DriverNotification>,
@@ -1063,12 +1262,24 @@ async fn handle_session_update(
         let Some(session) = state.sessions.get_mut(session_ref) else {
             return Ok(());
         };
-        // An update outside any active turn belongs to no invocation, and
-        // attributing it to the next one would corrupt that invocation's event
-        // count and chain digest. Adoption no longer produces these: it sends
-        // `session/resume`, which must not replay. What reaches here now is a
-        // runtime volunteering activity Fleetd never fenced, which is exactly
-        // what there is no honest place to put.
+        // A replay in flight claims these updates as transcript entries. It is
+        // the one case where an update outside a turn has an honest home,
+        // because it is answering a question a caller asked rather than
+        // reporting work.
+        if let Some(capture) = session.capturing.as_mut() {
+            let entry = capture_transcript_entry(capture, session_ref, &update);
+            drop(state);
+            return match entry {
+                Some(entry) => forward_transcript_entry(notifications, entry).await,
+                None => Ok(()),
+            };
+        }
+        // Otherwise an update outside any active turn belongs to no invocation,
+        // and attributing it to the next one would corrupt that invocation's
+        // event count and chain digest. Adoption no longer produces these: it
+        // sends `session/resume`, which must not replay. What reaches here now
+        // is a runtime volunteering activity Fleetd never fenced, which is
+        // exactly what there is no honest place to put.
         let Some(active) = session.active.as_mut() else {
             return Ok(());
         };

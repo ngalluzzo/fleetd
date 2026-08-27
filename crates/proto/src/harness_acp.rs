@@ -15,9 +15,34 @@ use crate::{model::ExecutionCertainty, plugin::PluginInterface};
 pub const HARNESS_ACP_INTERFACE_ID: &str = "fleetd.harness-acp";
 
 /// The exact operational interface implemented by an ACP harness plugin.
+///
+/// Interface identity is matched by equality rather than by `SemVer` range, so a
+/// generation is a distinct name rather than a compatible upgrade. This is the
+/// generation every host requires today.
 #[must_use]
 pub fn interface() -> PluginInterface {
     PluginInterface::new(HARNESS_ACP_INTERFACE_ID, semver::Version::new(0, 1, 0))
+}
+
+/// The generation that adds transcript retrieval.
+///
+/// A plugin declares this only once it answers
+/// `harness.acp.session.transcript.start`, because an interface version is a
+/// promise about methods and negotiating one a plugin cannot serve would trade
+/// a clear refusal for a later "method not found".
+#[must_use]
+pub fn interface_v2() -> PluginInterface {
+    PluginInterface::new(HARNESS_ACP_INTERFACE_ID, semver::Version::new(0, 2, 0))
+}
+
+/// Every generation an ACP harness plugin currently implements.
+///
+/// Both are declared so a host requiring either negotiates successfully; per
+/// this repository's rule, `0.2.0` stays unstable until two independent
+/// integrations have qualified against it.
+#[must_use]
+pub fn declared_interfaces() -> Vec<PluginInterface> {
+    vec![interface(), interface_v2()]
 }
 
 /// Fleet-owned identity for one logical session lane.
@@ -353,6 +378,58 @@ pub enum HarnessAcpNotification {
     TurnEvent(TurnEvent),
     PermissionRequested(PermissionRequested),
     TurnTerminal(TurnTerminal),
+    TranscriptEntry(TranscriptEntry),
+    TranscriptComplete(TranscriptComplete),
+}
+
+/// A request to replay one native session's stored conversation.
+///
+/// This is retrieval, not adoption. It carries the owning binding so a caller
+/// cannot read a session lane it does not own, and it is answered immediately:
+/// the entries arrive as notifications and a terminal notification closes the
+/// replay, the same shape a turn already uses. Awaiting the whole replay inside
+/// the request would deadlock, because a plugin drains notifications only
+/// between requests.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StartTranscript {
+    pub binding_id: String,
+    pub binding_generation: u64,
+    pub owner_epoch: u64,
+    pub session_ref: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StartTranscriptResult {
+    pub accepted: bool,
+}
+
+/// One stored conversation entry, as the runtime replayed it.
+///
+/// `entry_seq` orders the replay and is unrelated to a turn's `event_seq`: a
+/// replay is each entry's final state, so these are entries rather than the
+/// streamed updates that produced them.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TranscriptEntry {
+    pub session_ref: String,
+    pub entry_seq: u64,
+    pub observed_at_ms: i64,
+    pub classification: String,
+    pub raw_update: Value,
+}
+
+/// The end of one replay, whether or not it was complete.
+///
+/// `truncated` is set when a bound stopped the replay, so a consumer can tell a
+/// short conversation from a capped one instead of inferring completeness from
+/// silence. `failure` carries a bounded diagnostic when the runtime refused.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TranscriptComplete {
+    pub session_ref: String,
+    pub entry_count: u64,
+    pub observed_payload_bytes: u64,
+    pub truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
 }
 
 #[cfg(test)]

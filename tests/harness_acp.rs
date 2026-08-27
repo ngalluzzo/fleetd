@@ -4,8 +4,8 @@ use std::{path::PathBuf, time::Duration};
 
 use fleetd::plugin::{
     Binding, CloseSession, ExecutionFence, HarnessAcpNotification, OpenSession, OpenSessionMode,
-    PluginError, PluginProcess, PluginSpec, PromptBlock, StartTurn, ToolBudget, TurnPolicy,
-    TurnSource, harness_acp_interface,
+    PluginError, PluginProcess, PluginSpec, PromptBlock, StartTranscript, StartTurn, ToolBudget,
+    TurnPolicy, TurnSource, harness_acp_interface,
 };
 
 fn fixture_spec(mode: &str) -> PluginSpec {
@@ -182,4 +182,93 @@ async fn typed_harness_client_rejects_weaker_effective_enforcement() {
         .expect_err("weaker enforcement must fail closed");
     assert!(matches!(error, PluginError::Protocol(_)));
     harness.shutdown().await.expect("shutdown harness");
+}
+
+/// A replay reaches the caller as ordered entries closed by exactly one
+/// completion, and carries no fence because it starts no work.
+#[tokio::test]
+async fn a_transcript_replay_streams_entries_and_one_completion() {
+    let process = PluginProcess::start(fixture_spec("healthy"))
+        .await
+        .expect("start mock harness");
+    let mut harness = process.into_harness_acp().expect("typed harness client");
+    harness
+        .open_session(&OpenSession {
+            binding: binding(),
+            mode: OpenSessionMode::Create,
+            working_directory: env!("CARGO_MANIFEST_DIR").to_owned(),
+            additional_directories: Vec::new(),
+            mcp_grants: Vec::new(),
+            resolved_mcp_grants: Vec::new(),
+            profile_digest: "mock-profile".to_owned(),
+        })
+        .await
+        .expect("open a session");
+
+    let accepted = harness
+        .start_transcript(&StartTranscript {
+            binding_id: binding().binding_id,
+            binding_generation: binding().binding_generation,
+            owner_epoch: binding().owner_epoch,
+            session_ref: "mock-session".to_owned(),
+        })
+        .await
+        .expect("start a replay");
+    assert!(accepted.accepted);
+
+    let mut classifications = Vec::new();
+    let complete = loop {
+        match harness
+            .next_notification()
+            .await
+            .expect("a transcript notification")
+        {
+            HarnessAcpNotification::TranscriptEntry(entry) => {
+                assert_eq!(
+                    entry.entry_seq,
+                    u64::try_from(classifications.len()).expect("fits") + 1,
+                    "entries must arrive in order"
+                );
+                classifications.push(entry.classification);
+            }
+            HarnessAcpNotification::TranscriptComplete(complete) => break complete,
+            other => panic!("unexpected notification during a replay: {other:?}"),
+        }
+    };
+
+    assert_eq!(
+        classifications,
+        vec![
+            "reasoning_content".to_owned(),
+            "tool_call".to_owned(),
+            "agent_message_content".to_owned(),
+        ],
+        "a replay carries reasoning and tool calls, not only messages"
+    );
+    assert_eq!(complete.entry_count, 3);
+    assert!(!complete.truncated);
+    assert!(complete.failure.is_none());
+}
+
+/// A runtime that cannot replay must say so, rather than reporting an empty
+/// transcript that reads like an agent which did nothing.
+#[tokio::test]
+async fn a_runtime_that_cannot_replay_reports_a_failure() {
+    let process = PluginProcess::start(fixture_spec("no-transcript"))
+        .await
+        .expect("start mock harness");
+    let harness = process.into_harness_acp().expect("typed harness client");
+    let error = harness
+        .start_transcript(&StartTranscript {
+            binding_id: binding().binding_id,
+            binding_generation: binding().binding_generation,
+            owner_epoch: binding().owner_epoch,
+            session_ref: "mock-session".to_owned(),
+        })
+        .await
+        .expect_err("a refusal reaches the caller");
+    assert!(
+        format!("{error}").contains("cannot replay"),
+        "unexpected error: {error}"
+    );
 }

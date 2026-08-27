@@ -27,7 +27,10 @@ result(
             "name": "Mock ACP harness",
             "version": "0.1.0",
         },
-        "interfaces": [{"id": "fleetd.harness-acp", "version": "0.1.0"}],
+        "interfaces": [
+            {"id": "fleetd.harness-acp", "version": "0.1.0"},
+            {"id": "fleetd.harness-acp", "version": "0.2.0"},
+        ],
     },
 )
 
@@ -180,6 +183,53 @@ for line in sys.stdin:
                     },
                 }
             )
+    elif method == "harness.acp.session.transcript.start":
+        if mode == "no-transcript":
+            send({
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "error": {"code": -32602, "message": "runtime cannot replay a transcript"},
+            })
+        else:
+            result(request, {"accepted": True})
+            # A replay is each entry's final state, closed by exactly one
+            # completion, and it carries no fence because it starts no work.
+            for index, entry in enumerate(
+                [
+                    {"sessionUpdate": "agent_thought_chunk",
+                     "content": {"type": "text", "text": "stored reasoning"}},
+                    {"sessionUpdate": "tool_call", "toolCallId": "call-1",
+                     "kind": "read", "status": "completed"},
+                    {"sessionUpdate": "agent_message_chunk",
+                     "content": {"type": "text", "text": "stored answer"}},
+                ],
+                start=1,
+            ):
+                send({
+                    "jsonrpc": "2.0",
+                    "method": "harness.acp.session.transcript.entry",
+                    "params": {
+                        "session_ref": params["session_ref"],
+                        "entry_seq": index,
+                        "observed_at_ms": 1_700_000_000_000 + index,
+                        "classification": {
+                            "agent_thought_chunk": "reasoning_content",
+                            "tool_call": "tool_call",
+                            "agent_message_chunk": "agent_message_content",
+                        }[entry["sessionUpdate"]],
+                        "raw_update": entry,
+                    },
+                })
+            send({
+                "jsonrpc": "2.0",
+                "method": "harness.acp.session.transcript.complete",
+                "params": {
+                    "session_ref": params["session_ref"],
+                    "entry_count": 3,
+                    "observed_payload_bytes": 240,
+                    "truncated": False,
+                },
+            })
     elif method == "harness.acp.permission.resolve":
         result(request, {"accepted": True})
     elif method == "harness.acp.session.close":

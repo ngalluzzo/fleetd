@@ -689,6 +689,19 @@ async fn drain_turn(
                     })
                     .await?;
             }
+            // A transcript replay answers a question a caller asked; it cannot
+            // belong to a turn. Folding one into this invocation's evidence
+            // would attribute a stored conversation to work that never
+            // produced it, so an arriving entry fails the drain rather than
+            // being silently ignored.
+            HarnessAcpNotification::TranscriptEntry(_) => {
+                return Err(TurnDrainError::UnexpectedNotification("a transcript entry"));
+            }
+            HarnessAcpNotification::TranscriptComplete(_) => {
+                return Err(TurnDrainError::UnexpectedNotification(
+                    "a transcript completion",
+                ));
+            }
             HarnessAcpNotification::TurnTerminal(terminal) => {
                 operations::record_invocation_terminal(store, generation_id, &terminal).await?;
                 return Ok(terminal);
@@ -699,6 +712,8 @@ async fn drain_turn(
 
 #[derive(Debug, Error)]
 enum TurnDrainError {
+    #[error("harness sent {0} while a turn was draining")]
+    UnexpectedNotification(&'static str),
     #[error("harness protocol failed: {0}")]
     Plugin(#[from] fleetd_plugin_host::PluginError),
     #[error("durable invocation evidence failed: {0}")]

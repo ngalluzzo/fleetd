@@ -10,8 +10,9 @@ pub use fleetd_proto::harness_acp::{
     DescribeResult, DriverIdentity, EffectiveEnforcement, ExecutionFence, HarnessAcpNotification,
     HarnessExecutionCertainty, HarnessLimits, OpenSession, OpenSessionMode, OpenSessionResult,
     PermissionOutcome, PermissionRequested, PermissionResolution, PromptBlock, ResolvedMcpEndpoint,
-    ResolvedMcpGrant, ResolvedMcpHttpHeader, RuntimeIdentity, SessionPersistence, StartTurn,
-    StartTurnResult, ToolBudget, TurnEvent, TurnPolicy, TurnSource, TurnTerminal, interface,
+    ResolvedMcpGrant, ResolvedMcpHttpHeader, RuntimeIdentity, SessionPersistence, StartTranscript,
+    StartTranscriptResult, StartTurn, StartTurnResult, ToolBudget, TranscriptComplete,
+    TranscriptEntry, TurnEvent, TurnPolicy, TurnSource, TurnTerminal, interface,
 };
 
 use crate::{PluginError, PluginManifest, PluginProcess};
@@ -256,6 +257,15 @@ impl HarnessAcpClient {
                 self.admit_event(&request.fence, request.event_seq, &raw)?;
                 Ok(HarnessAcpNotification::PermissionRequested(request))
             }
+            "harness.acp.session.transcript.entry" => {
+                let entry: TranscriptEntry = serde_json::from_value(notification.params)?;
+                validate_id("entry classification", &entry.classification)?;
+                Ok(HarnessAcpNotification::TranscriptEntry(entry))
+            }
+            "harness.acp.session.transcript.complete" => {
+                let complete: TranscriptComplete = serde_json::from_value(notification.params)?;
+                Ok(HarnessAcpNotification::TranscriptComplete(complete))
+            }
             "harness.acp.turn.terminal" => {
                 let terminal: TurnTerminal = serde_json::from_value(notification.params)?;
                 self.validate_terminal(&terminal)?;
@@ -266,6 +276,49 @@ impl HarnessAcpClient {
                 "unexpected notification for harness client: {method}"
             ))),
         }
+    }
+
+    /// Retires a quiescent native session binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a turn is active, the close fence is invalid, or
+    /// the driver rejects the request.
+    /// Starts one transcript replay for an already-open session.
+    ///
+    /// Answers as soon as the replay is under way. Entries then arrive through
+    /// [`Self::next_notification`] as `TranscriptEntry`, closed by exactly one
+    /// `TranscriptComplete`. A replay carries no fence because it starts no
+    /// work: it reads a conversation the runtime already stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session is unknown, the binding does not own
+    /// it, a turn is active on it, a replay is already in flight, or the
+    /// runtime cannot replay at all.
+    pub async fn start_transcript(
+        &self,
+        request: &StartTranscript,
+    ) -> Result<StartTranscriptResult, PluginError> {
+        if self.active_turn.is_some() {
+            return Err(protocol(
+                "cannot replay a transcript while a turn is active",
+            ));
+        }
+        validate_id("binding_id", &request.binding_id)?;
+        validate_positive("binding_generation", request.binding_generation)?;
+        validate_positive("owner_epoch", request.owner_epoch)?;
+        validate_session_ref(&request.session_ref)?;
+        let result: StartTranscriptResult = self
+            .process
+            .protocol_call("harness.acp.session.transcript.start", request)
+            .await?;
+        if !result.accepted {
+            return Err(protocol(
+                "harness refused a transcript replay without an error".to_owned(),
+            ));
+        }
+        Ok(result)
     }
 
     /// Retires a quiescent native session binding.

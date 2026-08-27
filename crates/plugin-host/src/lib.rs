@@ -16,7 +16,8 @@ pub use harness_acp::{
     HarnessAcpNotification, HarnessExecutionCertainty, HarnessLimits, OpenSession, OpenSessionMode,
     OpenSessionResult, PermissionOutcome, PermissionRequested, PermissionResolution, PromptBlock,
     ResolvedMcpEndpoint, ResolvedMcpGrant, ResolvedMcpHttpHeader, RuntimeIdentity,
-    SessionPersistence, StartTurn, StartTurnResult, ToolBudget, TurnEvent, TurnPolicy, TurnSource,
+    SessionPersistence, StartTranscript, StartTranscriptResult, StartTurn, StartTurnResult,
+    ToolBudget, TranscriptComplete, TranscriptEntry, TurnEvent, TurnPolicy, TurnSource,
     TurnTerminal, interface as harness_acp_interface,
 };
 pub use protocol::{PluginIdentity, PluginInterface, PluginManifest, PluginNotification};
