@@ -329,6 +329,15 @@ export type ErrorResponse = {
 };
 
 /**
+ * Which way a cursor-addressed evidence listing walks the change clock.
+ *
+ * An operator reads `Newest` first. A collector archiving every row walks
+ * `Oldest` from its last position, so rows appended or changed while it was
+ * away arrive ahead of it rather than behind it.
+ */
+export type EvidenceOrder = 'newest' | 'oldest';
+
+/**
  * What fleetd can prove about an invocation's external execution.
  */
 export type ExecutionCertainty = 'not_started' | 'outcome_known' | 'outcome_unknown';
@@ -1904,11 +1913,35 @@ export type ListInvocationObservationsData = {
          * Limit results to one agent ID.
          */
         agent?: string;
+        /**
+         * Exclusive change-clock cursor. Must be supplied with `after_id`.
+         */
+        after_ms?: number;
+        /**
+         * Exclusive row-ID tiebreak. Must be supplied with `after_ms`.
+         */
+        after_id?: string;
+        /**
+         * Requested page size. Values above 500 are clamped to 500.
+         */
+        limit?: number;
+        /**
+         * Report only rows whose evidence can never change again.
+         */
+        settled?: boolean;
+        /**
+         * Direction the change clock is walked. Walk `oldest` to archive.
+         */
+        order?: EvidenceOrder;
     };
     url: '/v1/invocation-observations';
 };
 
 export type ListInvocationObservationsErrors = {
+    /**
+     * Invalid cursor or page bounds
+     */
+    400: ErrorResponse;
     /**
      * Missing or invalid credential
      */
@@ -1927,7 +1960,7 @@ export type ListInvocationObservationsError = ListInvocationObservationsErrors[k
 
 export type ListInvocationObservationsResponses = {
     /**
-     * Bounded invocation observations
+     * One page of bounded invocation observations
      */
     200: Array<InvocationObservation>;
 };
@@ -2022,11 +2055,35 @@ export type ListPluginGenerationsData = {
          * Limit results to one agent ID.
          */
         agent?: string;
+        /**
+         * Exclusive change-clock cursor. Must be supplied with `after_id`.
+         */
+        after_ms?: number;
+        /**
+         * Exclusive row-ID tiebreak. Must be supplied with `after_ms`.
+         */
+        after_id?: string;
+        /**
+         * Requested page size. Values above 500 are clamped to 500.
+         */
+        limit?: number;
+        /**
+         * Report only rows whose evidence can never change again.
+         */
+        settled?: boolean;
+        /**
+         * Direction the change clock is walked. Walk `oldest` to archive.
+         */
+        order?: EvidenceOrder;
     };
     url: '/v1/plugin-generations';
 };
 
 export type ListPluginGenerationsErrors = {
+    /**
+     * Invalid cursor or page bounds
+     */
+    400: ErrorResponse;
     /**
      * Missing or invalid credential
      */
@@ -2045,7 +2102,7 @@ export type ListPluginGenerationsError = ListPluginGenerationsErrors[keyof ListP
 
 export type ListPluginGenerationsResponses = {
     /**
-     * Plugin generation evidence
+     * One page of plugin generation evidence
      */
     200: Array<PluginGeneration>;
 };

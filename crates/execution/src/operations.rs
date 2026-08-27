@@ -6,10 +6,10 @@ use sha2::{Digest, Sha256};
 use sqlx::Row;
 
 pub use fleetd_proto::operations::{
-    AgentSeat, AgentSeatReason, AgentSeatState, DeliveryCensus, FleetHealth, InvocationEventCounts,
-    InvocationObservation, InvocationTrace, ObservedPluginInterface, PluginGeneration,
-    PluginGenerationDisposition, PluginGenerationHealth, PluginGenerationState,
-    PluginShutdownOutcome,
+    AgentSeat, AgentSeatReason, AgentSeatState, DeliveryCensus, EvidenceCursor, EvidenceOrder,
+    FleetHealth, InvocationEventCounts, InvocationObservation, InvocationTrace,
+    ObservedPluginInterface, PluginGeneration, PluginGenerationDisposition, PluginGenerationHealth,
+    PluginGenerationState, PluginShutdownOutcome,
 };
 
 use fleetd_kernel::{
@@ -21,6 +21,124 @@ use fleetd_plugin_host::{
 };
 use fleetd_proto::model::{DeliveryState, ExecutionCertainty, InvocationState};
 use fleetd_proto::session::SessionBindingState;
+
+const MAX_EVIDENCE_PAGE: u32 = 500;
+
+/// Which page of one evidence listing to read, and which way to walk.
+///
+/// The two evidence listings are the same question asked of two tables, so
+/// they take the same request rather than growing parallel argument lists.
+#[derive(Clone, Copy, Debug)]
+pub struct EvidencePage<'a> {
+    pub agent_id: Option<&'a str>,
+    pub after: Option<&'a EvidenceCursor>,
+    pub limit: u32,
+    pub settled: bool,
+    pub order: EvidenceOrder,
+}
+
+impl<'a> EvidencePage<'a> {
+    /// The whole newest page, which is what every operator surface asks for.
+    #[must_use]
+    pub const fn newest(agent_id: Option<&'a str>) -> Self {
+        Self {
+            agent_id,
+            after: None,
+            limit: MAX_EVIDENCE_PAGE,
+            settled: false,
+            order: EvidenceOrder::Newest,
+        }
+    }
+
+    /// Checks the cursor and returns the page size actually readable.
+    ///
+    /// A negative cursor is rejected rather than clamped: it can only come
+    /// from a caller that computed a position wrongly, and silently reading
+    /// from the beginning would hide that. An oversized limit is clamped
+    /// because asking for more than the bound is a request to be bounded.
+    fn validate(&self) -> Result<u32, FleetError> {
+        if let Some(after) = self.after
+            && after.changed_at_ms < 0
+        {
+            return Err(FleetError::Invalid(
+                "evidence cursor must not be negative".to_owned(),
+            ));
+        }
+        Ok(self.limit.clamp(1, MAX_EVIDENCE_PAGE))
+    }
+}
+
+/// Where one evidence table keeps the columns a page is addressed by.
+struct EvidenceColumns {
+    agent: &'static str,
+    changed: &'static str,
+    id: &'static str,
+    settled: &'static str,
+}
+
+const GENERATION_COLUMNS: EvidenceColumns = EvidenceColumns {
+    agent: "agent_id",
+    changed: "last_heartbeat_at_ms",
+    id: "id",
+    settled: "state = 'stopped'",
+};
+
+const OBSERVATION_COLUMNS: EvidenceColumns = EvidenceColumns {
+    agent: "i.agent_id",
+    changed: "o.updated_at_ms",
+    id: "o.invocation_id",
+    settled: "o.terminal_at_ms IS NOT NULL",
+};
+
+/// Builds the filter, keyset comparison, and ordering for one evidence page.
+///
+/// The comparison and the ordering are derived from the same direction, so a
+/// page cannot be ordered one way and walked the other.
+fn evidence_sql(select: &str, columns: &EvidenceColumns, page: &EvidencePage<'_>) -> String {
+    use std::fmt::Write as _;
+
+    let (comparison, direction) = match page.order {
+        EvidenceOrder::Newest => ("<", "DESC"),
+        EvidenceOrder::Oldest => (">", "ASC"),
+    };
+    let EvidenceColumns {
+        agent,
+        changed,
+        id,
+        settled,
+    } = columns;
+    let mut sql = format!("{select} WHERE 1 = 1");
+    if page.agent_id.is_some() {
+        let _ = write!(sql, " AND {agent} = ?");
+    }
+    if page.settled {
+        let _ = write!(sql, " AND {settled}");
+    }
+    if page.after.is_some() {
+        let _ = write!(sql, " AND ({changed}, {id}) {comparison} (?, ?)");
+    }
+    let _ = write!(
+        sql,
+        " ORDER BY {changed} {direction}, {id} {direction} LIMIT ?"
+    );
+    sql
+}
+
+/// Binds an evidence page in the order `evidence_sql` wrote its placeholders.
+fn bind_evidence_page<'q>(
+    query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
+    page: &EvidencePage<'q>,
+    limit: u32,
+) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
+    let mut query = query;
+    if let Some(agent_id) = page.agent_id {
+        query = query.bind(agent_id);
+    }
+    if let Some(after) = page.after {
+        query = query.bind(after.changed_at_ms).bind(after.id.as_str());
+    }
+    query.bind(i64::from(limit))
+}
 
 const MAX_EVIDENCE_JSON_BYTES: usize = 1024 * 1024;
 const MAX_REASON_BYTES: usize = 4_096;
@@ -204,34 +322,28 @@ pub async fn stop_plugin_generation(
     plugin_generation(store, generation_id).await
 }
 
-/// Lists the newest durable generation records, optionally for one agent.
+/// Reads one cursor-addressed page of durable generation records.
+///
+/// Generations are ordered by their heartbeat clock, which every durable
+/// change advances: the row is inserted with it, a heartbeat moves it, and
+/// retirement moves it a final time. That makes it the change clock a
+/// collector needs, and it freezes on a stopped generation, so a settled page
+/// is stable evidence rather than a moving target. A caller resumes from the
+/// last row's `last_heartbeat_at_ms` and `id`.
 ///
 /// # Errors
 ///
-/// Returns an error when persisted evidence is invalid or cannot be read.
+/// Returns an error for a negative cursor, or when persisted evidence is
+/// invalid or cannot be read.
 pub async fn list_plugin_generations(
     store: &Store,
-    agent_id: Option<&str>,
+    page: &EvidencePage<'_>,
 ) -> Result<Vec<PluginGeneration>, FleetError> {
-    let rows = match agent_id {
-        Some(agent_id) => {
-            sqlx::query(&format!(
-                "{} WHERE agent_id = ? ORDER BY started_at_ms DESC, id LIMIT 500",
-                generation_select()
-            ))
-            .bind(agent_id)
-            .fetch_all(store.pool())
-            .await?
-        }
-        None => {
-            sqlx::query(&format!(
-                "{} ORDER BY started_at_ms DESC, id LIMIT 500",
-                generation_select()
-            ))
-            .fetch_all(store.pool())
-            .await?
-        }
-    };
+    let limit = page.validate()?;
+    let sql = evidence_sql(generation_select(), &GENERATION_COLUMNS, page);
+    let rows = bind_evidence_page(sqlx::query(&sql), page, limit)
+        .fetch_all(store.pool())
+        .await?;
     rows.iter().map(generation_from_row).collect()
 }
 
@@ -483,33 +595,26 @@ pub async fn record_invocation_terminal(
     Ok(())
 }
 
-/// Lists bounded invocation observations, optionally for one agent.
+/// Reads one cursor-addressed page of bounded invocation observations.
+///
+/// Observations are ordered by `updated_at_ms`, which the arming insert, every
+/// folded event, and the terminal response each advance. A terminal row is
+/// never written again, so its position stops moving once it settles. A caller
+/// resumes from the last row's `updated_at_ms` and `invocation_id`.
 ///
 /// # Errors
 ///
-/// Returns an error when persisted evidence is invalid or cannot be read.
+/// Returns an error for a negative cursor, or when persisted evidence is
+/// invalid or cannot be read.
 pub async fn list_invocation_observations(
     store: &Store,
-    agent_id: Option<&str>,
+    page: &EvidencePage<'_>,
 ) -> Result<Vec<InvocationObservation>, FleetError> {
-    let rows =
-        match agent_id {
-            Some(agent_id) => sqlx::query(&format!(
-                "{} WHERE i.agent_id = ? ORDER BY o.updated_at_ms DESC, o.invocation_id LIMIT 500",
-                observation_select()
-            ))
-            .bind(agent_id)
-            .fetch_all(store.pool())
-            .await?,
-            None => {
-                sqlx::query(&format!(
-                    "{} ORDER BY o.updated_at_ms DESC, o.invocation_id LIMIT 500",
-                    observation_select()
-                ))
-                .fetch_all(store.pool())
-                .await?
-            }
-        };
+    let limit = page.validate()?;
+    let sql = evidence_sql(observation_select(), &OBSERVATION_COLUMNS, page);
+    let rows = bind_evidence_page(sqlx::query(&sql), page, limit)
+        .fetch_all(store.pool())
+        .await?;
     rows.iter().map(observation_from_row).collect()
 }
 

@@ -278,11 +278,14 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
         completion.result.payload["assistant_messages"][0]["content"][0]["text"],
         "done"
     );
-    let observation = operations::list_invocation_observations(&store, Some(&agent_id))
-        .await
-        .expect("list durable invocation evidence")
-        .pop()
-        .expect("one invocation observation");
+    let observation = operations::list_invocation_observations(
+        &store,
+        &operations::EvidencePage::newest(Some(&agent_id)),
+    )
+    .await
+    .expect("list durable invocation evidence")
+    .pop()
+    .expect("one invocation observation");
     assert_eq!(observation.invocation_id, invocation_id.as_str());
     assert_eq!(observation.source_message_id, source_message_id);
     assert_eq!(

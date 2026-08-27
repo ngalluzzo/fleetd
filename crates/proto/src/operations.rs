@@ -263,6 +263,37 @@ pub struct InvocationObservation {
     pub usage: Option<Value>,
 }
 
+/// Exclusive keyset position in a cursor-addressed evidence listing.
+///
+/// `changed_at_ms` is the last time durable evidence for a row changed, and
+/// `id` breaks ties between rows that changed in the same millisecond. Both
+/// halves are required: a millisecond alone cannot address a page boundary
+/// that falls between two rows sharing it.
+///
+/// This is the paired form of two query parameters rather than a wire type of
+/// its own. A listing stays a plain array, so a caller reads its next position
+/// off the last row it received: `PluginGeneration::last_heartbeat_at_ms` with
+/// `PluginGeneration::id`, or `InvocationObservation::updated_at_ms` with
+/// `InvocationObservation::invocation_id`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EvidenceCursor {
+    pub changed_at_ms: i64,
+    pub id: String,
+}
+
+/// Which way a cursor-addressed evidence listing walks the change clock.
+///
+/// An operator reads `Newest` first. A collector archiving every row walks
+/// `Oldest` from its last position, so rows appended or changed while it was
+/// away arrive ahead of it rather than behind it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceOrder {
+    #[default]
+    Newest,
+    Oldest,
+}
+
 /// A census of durable delivery rows by state, plus the leases among them
 /// whose window has already closed.
 ///

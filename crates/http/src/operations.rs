@@ -5,10 +5,11 @@ use axum::{
     extract::{Path, Query, State},
 };
 use serde::Deserialize;
-use utoipa::IntoParams;
+use utoipa::{IntoParams, OpenApi};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use fleetd_kernel::{auth::Principal, error::ErrorResponse};
+use fleetd_execution::operations::{EvidenceCursor, EvidencePage};
+use fleetd_kernel::{auth::Principal, error::ErrorResponse, error::FleetError};
 
 use super::{AppState, error::ApiError, guard::require_operator};
 
@@ -19,14 +20,75 @@ struct AgentQuery {
     agent: Option<String>,
 }
 
+/// The schema the evidence page query contributes to the contract.
+///
+/// `EvidenceOrder` is only ever a query parameter, so no route body mentions
+/// it and nothing registers it implicitly. It is declared here, beside the
+/// routes that accept it, rather than in the module that composes the
+/// contract.
+#[derive(OpenApi)]
+#[openapi(components(schemas(fleetd_execution::operations::EvidenceOrder)))]
+struct Schemas;
+
 pub(super) fn routes() -> OpenApiRouter<AppState> {
-    OpenApiRouter::default()
+    OpenApiRouter::with_openapi(Schemas::openapi())
         .routes(routes!(list_agent_seats))
         .routes(routes!(list_plugin_generations))
         .routes(routes!(list_invocation_observations))
         .routes(routes!(list_session_bindings))
         .routes(routes!(trace_invocation))
         .routes(routes!(read_fleet_health))
+}
+
+#[derive(Deserialize, IntoParams)]
+#[into_params(parameter_in = Query)]
+struct EvidencePageQuery {
+    /// Limit results to one agent ID.
+    agent: Option<String>,
+    /// Exclusive change-clock cursor. Must be supplied with `after_id`.
+    #[param(minimum = 0)]
+    after_ms: Option<i64>,
+    /// Exclusive row-ID tiebreak. Must be supplied with `after_ms`.
+    after_id: Option<String>,
+    /// Requested page size. Values above 500 are clamped to 500.
+    #[param(default = 500, minimum = 1, maximum = 500)]
+    #[serde(default = "default_evidence_limit")]
+    limit: u32,
+    /// Report only rows whose evidence can never change again.
+    #[param(default = false)]
+    #[serde(default)]
+    settled: bool,
+    /// Direction the change clock is walked. Walk `oldest` to archive.
+    #[param(default = "newest")]
+    #[serde(default)]
+    order: fleetd_execution::operations::EvidenceOrder,
+}
+
+const fn default_evidence_limit() -> u32 {
+    500
+}
+
+impl EvidencePageQuery {
+    /// Resolves the request into one exact page, rejecting a half cursor.
+    ///
+    /// A cursor is two halves and addresses nothing without both. Reading a
+    /// half cursor as "start from the beginning" would silently rewind a
+    /// collector that dropped one parameter, so it fails instead.
+    fn page(&self) -> Result<(Option<EvidenceCursor>, Option<String>), ApiError> {
+        let cursor = match (self.after_ms, self.after_id.as_deref()) {
+            (Some(changed_at_ms), Some(id)) => Some(EvidenceCursor {
+                changed_at_ms,
+                id: id.to_owned(),
+            }),
+            (None, None) => None,
+            _ => {
+                return Err(ApiError::from(FleetError::Invalid(
+                    "after_ms and after_id must be supplied together".to_owned(),
+                )));
+            }
+        };
+        Ok((cursor, self.agent.clone()))
+    }
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -111,11 +173,12 @@ async fn read_fleet_health(
     operation_id = "listPluginGenerations",
     tag = "operations",
     summary = "List durable plugin generation evidence",
-    description = "Operator-only. Reports exact ready-generation identity, liveness, profile, runtime, and shutdown evidence.",
+    description = "Operator-only. Reports exact ready-generation identity, liveness, profile, runtime, and shutdown evidence. Ordered by `last_heartbeat_at_ms`, the clock every durable change to a generation advances and which freezes once one is stopped. A collector walks `order=oldest` and resumes from the last row's `last_heartbeat_at_ms` and `id`.",
     security(("bearerAuth" = [])),
-    params(AgentQuery),
+    params(EvidencePageQuery),
     responses(
-        (status = 200, description = "Plugin generation evidence", body = [fleetd_execution::operations::PluginGeneration]),
+        (status = 200, description = "One page of plugin generation evidence", body = [fleetd_execution::operations::PluginGeneration]),
+        (status = 400, description = "Invalid cursor or page bounds", body = ErrorResponse),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
         (status = 500, description = "Internal failure", body = ErrorResponse)
@@ -124,12 +187,22 @@ async fn read_fleet_health(
 async fn list_plugin_generations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-    Query(query): Query<AgentQuery>,
+    Query(query): Query<EvidencePageQuery>,
 ) -> Result<Json<Vec<fleetd_execution::operations::PluginGeneration>>, ApiError> {
     require_operator(&principal)?;
+    let (cursor, agent) = query.page()?;
     Ok(Json(
-        fleetd_execution::operations::list_plugin_generations(&state.store, query.agent.as_deref())
-            .await?,
+        fleetd_execution::operations::list_plugin_generations(
+            &state.store,
+            &EvidencePage {
+                agent_id: agent.as_deref(),
+                after: cursor.as_ref(),
+                limit: query.limit,
+                settled: query.settled,
+                order: query.order,
+            },
+        )
+        .await?,
     ))
 }
 
@@ -139,11 +212,12 @@ async fn list_plugin_generations(
     operation_id = "listInvocationObservations",
     tag = "operations",
     summary = "List bounded managed-turn observations",
-    description = "Operator-only. Reports event counts, chain digests, terminal state, and usage without duplicating raw transcripts.",
+    description = "Operator-only. Reports event counts, chain digests, terminal state, and usage without duplicating raw transcripts. Ordered by `updated_at_ms`, the clock every folded event advances and which freezes once an invocation is terminal. A collector walks `order=oldest` and resumes from the last row's `updated_at_ms` and `invocation_id`; `settled=true` reports only terminal rows, whose evidence never changes again.",
     security(("bearerAuth" = [])),
-    params(AgentQuery),
+    params(EvidencePageQuery),
     responses(
-        (status = 200, description = "Bounded invocation observations", body = [fleetd_execution::operations::InvocationObservation]),
+        (status = 200, description = "One page of bounded invocation observations", body = [fleetd_execution::operations::InvocationObservation]),
+        (status = 400, description = "Invalid cursor or page bounds", body = ErrorResponse),
         (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
         (status = 403, description = "Operator credential required", body = ErrorResponse),
         (status = 500, description = "Internal failure", body = ErrorResponse)
@@ -152,13 +226,20 @@ async fn list_plugin_generations(
 async fn list_invocation_observations(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
-    Query(query): Query<AgentQuery>,
+    Query(query): Query<EvidencePageQuery>,
 ) -> Result<Json<Vec<fleetd_execution::operations::InvocationObservation>>, ApiError> {
     require_operator(&principal)?;
+    let (cursor, agent) = query.page()?;
     Ok(Json(
         fleetd_execution::operations::list_invocation_observations(
             &state.store,
-            query.agent.as_deref(),
+            &EvidencePage {
+                agent_id: agent.as_deref(),
+                after: cursor.as_ref(),
+                limit: query.limit,
+                settled: query.settled,
+                order: query.order,
+            },
         )
         .await?,
     ))

@@ -180,6 +180,53 @@ async fn append_direct_kind(
 ///
 /// Every arm is populated, and each names the same evidence the individual read
 /// models reported, so the join cannot drift from its sources.
+/// Walks the settled observations one row per request and proves the walk
+/// archives every executed turn.
+///
+/// Both turns reached a terminal response, so both are evidence a collector
+/// can archive and never has to revisit. A page size of one puts a page
+/// boundary between them, which is where a keyset walk would skip or repeat a
+/// row if the cursor addressed a millisecond rather than a position.
+async fn assert_settled_walk_archives_every_turn(
+    store: &Store,
+    agent_id: &str,
+    observations: &[fleetd::execution::operations::InvocationObservation],
+) {
+    let mut archived = Vec::new();
+    let mut after = None;
+    while let Some(observation) = operations::list_invocation_observations(
+        store,
+        &operations::EvidencePage {
+            agent_id: Some(agent_id),
+            after: after.as_ref(),
+            limit: 1,
+            settled: true,
+            order: operations::EvidenceOrder::Oldest,
+        },
+    )
+    .await
+    .expect("walk settled invocation evidence")
+    .pop()
+    {
+        after = Some(operations::EvidenceCursor {
+            changed_at_ms: observation.updated_at_ms,
+            id: observation.invocation_id.clone(),
+        });
+        archived.push(observation.invocation_id);
+        assert!(
+            archived.len() <= observations.len(),
+            "the walk repeated a turn"
+        );
+    }
+    archived.sort();
+    let mut expected: Vec<_> = observations
+        .iter()
+        .map(|observation| observation.invocation_id.clone())
+        .collect();
+    expected.sort();
+    assert_eq!(archived, expected);
+}
+
 async fn assert_trace_joins_the_executed_turn(
     store: &Store,
     observation: &operations::InvocationObservation,
@@ -248,10 +295,12 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
     assert_eq!(report.blocked, 0);
     assert_eq!(report.plugin_generations, 1);
     assert_eq!(report.reservations, 2);
-    let generations =
-        operations::list_plugin_generations(&fixture.store, Some(&fixture.receiver_id))
-            .await
-            .expect("list durable plugin generations");
+    let generations = operations::list_plugin_generations(
+        &fixture.store,
+        &operations::EvidencePage::newest(Some(&fixture.receiver_id)),
+    )
+    .await
+    .expect("list durable plugin generations");
     assert_eq!(generations.len(), 1);
     assert_eq!(generations[0].state, PluginGenerationState::Stopped);
     assert_eq!(generations[0].health, PluginGenerationHealth::Stopped);
@@ -263,10 +312,12 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
         generations[0].shutdown_outcome,
         Some(PluginShutdownOutcome::Graceful)
     );
-    let observations =
-        operations::list_invocation_observations(&fixture.store, Some(&fixture.receiver_id))
-            .await
-            .expect("list bounded invocation observations");
+    let observations = operations::list_invocation_observations(
+        &fixture.store,
+        &operations::EvidencePage::newest(Some(&fixture.receiver_id)),
+    )
+    .await
+    .expect("list bounded invocation observations");
     assert_eq!(observations.len(), 2);
     assert!(observations.iter().all(|observation| {
         observation.generation_id == generations[0].id
@@ -277,6 +328,9 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
             && observation.session_quiescent == Some(true)
             && observation.usage == Some(json!({}))
     }));
+
+    assert_settled_walk_archives_every_turn(&fixture.store, &fixture.receiver_id, &observations)
+        .await;
 
     assert_trace_joins_the_executed_turn(&fixture.store, &observations[0], &generations[0]).await;
 
