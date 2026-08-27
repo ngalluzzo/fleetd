@@ -54,7 +54,10 @@ labelled as such rather than implied.
   ([ADR 0020](docs/adr/0020-bounded-operational-observations.md)), read through
   `fleetd trace` and three operator endpoints, tailable losslessly by an
   external collector, and exportable as OpenTelemetry spans
-  ([ADR 0028](docs/adr/0028-opentelemetry-is-a-projection.md)).
+  ([ADR 0028](docs/adr/0028-opentelemetry-is-a-projection.md)). What an agent
+  reasoned and which tools it called stays the harness's own record, retrievable
+  with `fleetd transcript` rather than copied into Fleetd
+  ([ADR 0029](docs/adr/0029-harness-transcript-retrieval.md)).
 - **The operator stays sovereign.** One person runs a useful fleet on one
   machine with ordinary files and SQLite. Cloud services are optional adapters.
   *Demonstrated:* `fleetd init` through
