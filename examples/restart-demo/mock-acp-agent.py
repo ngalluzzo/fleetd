@@ -48,8 +48,29 @@ for line in sys.stdin:
                 "result": {"sessionId": "restart-demo-native-session"},
             }
         )
-    elif method in ("session/load", "session/resume"):
+    elif method == "session/resume":
         record(method)
+        send({"jsonrpc": "2.0", "id": request_id, "result": {}})
+    elif method == "session/load":
+        record(method)
+        # ACP obliges a load to replay every stored entry before it answers.
+        for entry in (
+            {
+                "sessionUpdate": "agent_thought_chunk",
+                "content": {"type": "text", "text": "stored reasoning"},
+            },
+            {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "stored answer"},
+            },
+        ):
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "session/update",
+                    "params": {"sessionId": params["sessionId"], "update": entry},
+                }
+            )
         send({"jsonrpc": "2.0", "id": request_id, "result": {}})
     elif method == "session/prompt":
         send(

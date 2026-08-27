@@ -23,7 +23,10 @@ use fleetd::{
         MembershipDeliveryMode, MessagePage, RegisteredAgent, ResolveDeliveryBlock, RetryDelivery,
         SendMessage,
     },
-    plugin::{PluginSpec, ToolBudget, TurnPolicy, harness_acp_interface},
+    plugin::{
+        HarnessAcpNotification, OpenSession, OpenSessionMode, PluginProcess, PluginSpec,
+        StartTranscript, ToolBudget, TurnPolicy, harness_acp_interface,
+    },
     store::Store,
 };
 use futures_util::StreamExt;
@@ -99,6 +102,11 @@ enum Command {
     Deliveries(DeliveriesArgs),
     /// Join one invocation to its session, plugin, and result evidence.
     Trace(TraceArgs),
+    /// Replay one native harness session's stored conversation.
+    ///
+    /// Reads through a short-lived second plugin process, so a running worker
+    /// keeps its own session untouched.
+    Transcript(TranscriptArgs),
     /// Create one local fleet: its directory, database, and operator credential.
     Init(InitArgs),
 }
@@ -367,6 +375,19 @@ struct WorkerRunArgs {
     once: bool,
 }
 
+#[derive(Args)]
+struct TranscriptArgs {
+    /// Worker desired-state file naming the harness plugin for this seat.
+    #[arg(long)]
+    config: PathBuf,
+    /// Native session reference to replay, as `fleetd status` reports it.
+    #[arg(long)]
+    session: String,
+    /// Database path. Defaults to the resolved fleet database.
+    #[arg(long)]
+    db: Option<PathBuf>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WorkerFileConfig {
@@ -533,6 +554,7 @@ pub async fn run() -> MainResult<()> {
         Command::Deliveries(args) => {
             deliveries_command(&ApiClient::load(&server, token_file.as_deref())?, args).await
         }
+        Command::Transcript(args) => transcript_command(args, &fleet).await,
         Command::Trace(args) => {
             trace_command(&ApiClient::load(&server, token_file.as_deref())?, args).await
         }
@@ -582,25 +604,108 @@ async fn deliveries_command(api: &ApiClient, args: DeliveriesArgs) -> MainResult
     .await
 }
 
-async fn worker_command(
-    command: WorkerCommand,
+/// Replays one stored native session through a short-lived plugin process.
+///
+/// This is retrieval, not work. It resumes the session to attach and then loads
+/// it to read, which is the split ACP defines: only `session/load` replays. It
+/// never closes the session, because a running worker owns that lane and
+/// closing would retire its ownership.
+async fn transcript_command(
+    args: TranscriptArgs,
     fleet: &fleetd_fleet::ResolvedFleet,
 ) -> MainResult<()> {
-    match command {
-        WorkerCommand::Run(args) => run_worker(args, fleet).await,
-    }
+    let db = args.db.clone().unwrap_or_else(|| fleet.database.clone());
+    let desired = load_worker_config(&args.config)?;
+    let store = Store::open_with_message_commit_hints(&db).await?;
+
+    // The binding comes from Fleetd's own durable record rather than being
+    // invented here, so this can only read a session Fleetd actually owns and
+    // an unknown reference fails with somewhere to look.
+    let owner = fleetd::execution::session_binding::list_session_bindings(
+        &store,
+        Some(&desired.agent_id),
+    )
+    .await?
+    .into_iter()
+    .find(|binding| binding.session_ref.as_deref() == Some(args.session.as_str()))
+    .ok_or_else(|| {
+        format!(
+            "agent {} owns no session {}; `fleetd status --agent {}` names its current session",
+            desired.agent_id, args.session, desired.agent_id
+        )
+    })?;
+
+    let spec = desired
+        .plugin
+        .into_spec()
+        .require_interface(fleetd_proto::harness_acp::interface_v2());
+    let process = PluginProcess::start(spec).await?;
+    let mut harness = process.into_harness_acp()?;
+    // The plugin's own profile digest, not the stored one: a replay performs no
+    // turn, so a profile that drifted since the session was opened is not a
+    // reason to refuse reading what it already said.
+    let description = harness.describe().await?;
+    harness
+        .open_session(&OpenSession {
+            binding: owner.binding.clone(),
+            mode: OpenSessionMode::Resume {
+                session_ref: args.session.clone(),
+            },
+            working_directory: owner.working_directory.clone(),
+            additional_directories: owner.additional_directories.clone(),
+            mcp_grants: Vec::new(),
+            resolved_mcp_grants: Vec::new(),
+            profile_digest: description.profile_digest.clone(),
+        })
+        .await?;
+    harness
+        .start_transcript(&StartTranscript {
+            binding_id: owner.binding.binding_id.clone(),
+            binding_generation: owner.binding.binding_generation,
+            owner_epoch: owner.binding.owner_epoch,
+            session_ref: args.session.clone(),
+        })
+        .await?;
+
+    let mut entries = Vec::new();
+    let complete = loop {
+        match harness.next_notification().await? {
+            HarnessAcpNotification::TranscriptEntry(entry) => entries.push(entry),
+            HarnessAcpNotification::TranscriptComplete(complete) => break complete,
+            other => {
+                return Err(format!(
+                    "harness sent an unexpected notification during a replay: {other:?}"
+                )
+                .into());
+            }
+        }
+    };
+    let _shutdown = harness.shutdown().await?;
+
+    print_json(&json!({
+        "session_ref": args.session,
+        "agent_id": desired.agent_id,
+        "binding": owner.binding,
+        "session_state": owner.state,
+        // A replay is the conversation through the last settled entry: a turn
+        // still in flight has stored no output yet, so this is stale rather
+        // than torn, and per-invocation attribution is a time-window
+        // projection rather than a boundary the runtime reports.
+        "entries": entries,
+        "complete": complete,
+    }))
 }
 
-async fn run_worker(args: WorkerRunArgs, fleet: &fleetd_fleet::ResolvedFleet) -> MainResult<()> {
-    // The worker writes to the same authoritative database the daemon serves,
-    // so it reads the same fleet configuration rather than defaulting to a
-    // relative path in whatever directory it was launched from.
-    let db = args.db.clone().unwrap_or_else(|| fleet.database.clone());
-    let raw = fs::read(&args.config)?;
+/// Reads and validates one worker desired-state file.
+///
+/// Shared by every command that takes one, so the schema version is refused in
+/// exactly one place rather than once per caller.
+fn load_worker_config(path: &std::path::Path) -> MainResult<WorkerFileConfig> {
+    let raw = fs::read(path)?;
     let value: Value = serde_json::from_slice(&raw).map_err(|error| {
         format!(
             "worker configuration {} is invalid: {error}",
-            args.config.display()
+            path.display()
         )
     })?;
     let schema_version = value.get("schema_version").and_then(Value::as_u64);
@@ -615,10 +720,28 @@ async fn run_worker(args: WorkerRunArgs, fleet: &fleetd_fleet::ResolvedFleet) ->
     let desired: WorkerFileConfig = serde_json::from_value(value).map_err(|error| {
         format!(
             "worker configuration {} is invalid: {error}",
-            args.config.display()
+            path.display()
         )
     })?;
     debug_assert_eq!(desired.schema_version, 2);
+    Ok(desired)
+}
+
+async fn worker_command(
+    command: WorkerCommand,
+    fleet: &fleetd_fleet::ResolvedFleet,
+) -> MainResult<()> {
+    match command {
+        WorkerCommand::Run(args) => run_worker(args, fleet).await,
+    }
+}
+
+async fn run_worker(args: WorkerRunArgs, fleet: &fleetd_fleet::ResolvedFleet) -> MainResult<()> {
+    // The worker writes to the same authoritative database the daemon serves,
+    // so it reads the same fleet configuration rather than defaulting to a
+    // relative path in whatever directory it was launched from.
+    let db = args.db.clone().unwrap_or_else(|| fleet.database.clone());
+    let desired = load_worker_config(&args.config)?;
     if let Some(parent) = db.parent()
         && !parent.as_os_str().is_empty()
     {

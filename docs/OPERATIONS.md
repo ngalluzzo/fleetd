@@ -46,6 +46,46 @@ creates a new generation and, when compatible, adopts the native-session lane
 under a higher owner epoch. `fleetd trace --invocation ID` joins the exact
 invocation to the generation and binding that executed it.
 
+## Reading what an agent actually did
+
+`fleetd trace` reports counters, digests, and outcomes. It does not report
+content, because Fleetd stores none: reasoning, tool arguments, and intermediate
+plans belong to the native harness. `fleetd transcript` asks the harness for
+them.
+
+```sh
+fleetd transcript --config .fleetd/worker.json --session NATIVE_SESSION_REF
+```
+
+The session reference is what `fleetd status --agent AGENT_ID` reports for the
+seat. The command reads through a short-lived second plugin process, so a
+running worker keeps its own session: it resumes the session to attach and then
+loads it to read, which is the split ACP defines, and it never closes the
+session because the seat still owns that lane.
+
+What comes back is every stored entry — reasoning, tool calls with their exact
+arguments and output, and assistant messages — plus a completion reporting the
+entry count, the bytes observed, and whether a bound truncated the replay. A
+replay carries each entry's final state rather than the stream that produced it,
+so chunk boundaries and intermediate tool states are gone while content is
+whole.
+
+Three limits are worth knowing before relying on it:
+
+- **It is the harness's memory, not Fleetd's.** A session the harness has pruned
+  cannot be replayed, and Fleetd's own evidence rows outlive it. A trace that
+  resolves against an invocation whose transcript is gone is expected.
+- **A read during an active turn is stale, not torn.** The turn in flight has
+  stored nothing yet, so the reply is complete through the last settled entry.
+- **One session serves a whole channel.** A replay covers every invocation on
+  that lane, and attributing a span of entries to one invocation means matching
+  it against that invocation's observation window — a projection, not a
+  boundary the harness reports.
+
+A runtime that cannot replay says so rather than returning an empty transcript,
+and an unknown session names the agent whose bindings to check. See
+[ADR 0029](adr/0029-harness-transcript-retrieval.md).
+
 ## Delivery inspection and controls
 
 Read-only delivery views never expose lease tokens:

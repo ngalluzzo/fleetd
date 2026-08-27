@@ -19,8 +19,10 @@
   session adoption.
 - [x] Durable unknown-outcome parking with operator-only resolution.
 - [ ] Qualify two independently versioned vendor harness plugins against the
-  complete `fleetd.harness-acp@0.1.0` matrix. OpenCode is the first
+  complete `fleetd.harness-acp@0.1.0` and `@0.2.0` matrix. OpenCode is the first
   production-shaped integration; Codex still needs real-runtime qualification.
+  `0.2.0` adds transcript retrieval and has so far only been exercised against a
+  mock ACP runtime, so it raises this bar rather than clearing any of it.
 - [x] Persist plugin-generation and bounded invocation-event evidence rather
   than keeping it only in controller memory and harness transcripts.
 
@@ -66,9 +68,19 @@
   input, exact rendered envelopes, and credential-free ephemeral storage.
 - [ ] A separately versioned live operator-event subscription for bounded
   invocation activity; do not encode activity as synthetic channel messages.
-- [ ] Fleet health, blocked work, message traces, session ownership, and model
-  throughput.
 - [x] Productized local initialization, worker/plugin status, delivery views,
   exact invocation/session traces, explicit recovery controls, tagged native
   binaries, offline backup/restore, and a repeatable hard-restart proof.
+- [x] Optional OpenTelemetry egress of in-flight trajectory, absent by default,
+  lossy by contract, and leaving the durable record unchanged.
+- [x] Harness transcript retrieval through a short-lived second plugin process,
+  so an operator can read the reasoning and tool calls Fleetd deliberately does
+  not store, without disturbing the seat that owns the session.
+- [ ] Per-model throughput. Fleet health, blocked work, invocation traces, and
+  session ownership already ship through the productized commands above; this is
+  the one part of that set still missing.
+- [ ] Qualify transcript retrieval against a real vendor harness, and against a
+  session holding a night of invocations. Per-invocation attribution is a
+  time-window projection over the observation record rather than a boundary any
+  harness reports, and every session exercised so far held one or two turns.
 - Remote workers only after authenticated encrypted transport and enrollment.

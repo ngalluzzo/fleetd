@@ -203,7 +203,7 @@ adoption_log = f"{sys.argv[3]}/adoption.log"
 with open(adoption_log, encoding="utf-8") as source:
     adoption = [line.strip() for line in source if line.strip()]
 assert adoption, "the replacement worker never adopted the native session"
-assert adoption == ["session/resume"] * len(adoption), (
+assert all(method == "session/resume" for method in adoption), (
     f"adoption replayed a transcript it cannot attribute: {adoption}"
 )
 print("fleetd crash/restart demonstration passed")
@@ -214,3 +214,47 @@ print(f"  latest invocation certainty: {trace['invocation']['execution_certainty
 print(f"  current plugin health: {generation['health']}")
 print(f"  durable evidence: {sys.argv[3]}")
 PY
+
+# A transcript read goes through a second, short-lived plugin process while the
+# seat still owns the session. It must use `session/load`, the only ACP method
+# that replays, where adoption used `session/resume`, and it must leave the
+# seat's ownership of that session intact.
+session_ref=$("${python_bin}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["session"]["session_ref"])' "${demo_dir}/trace.json")
+"${fleetd_bin}" --fleet-config "${config_path}" transcript \
+    --config "${demo_dir}/worker.json" --session "${session_ref}" > "${demo_dir}/transcript.json"
+"${fleetd_bin}" --fleet-config "${config_path}" status --agent "${worker_id}" \
+    > "${demo_dir}/status-after-read.json"
+
+"${python_bin}" - "${demo_dir}/transcript.json" "${demo_dir}/adoption.log" \
+    "${session_ref}" "${demo_dir}/status-after-read.json" <<'CHECK'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    transcript = json.load(source)
+with open(sys.argv[2], encoding="utf-8") as source:
+    adoption = [line.strip() for line in source if line.strip()]
+with open(sys.argv[4], encoding="utf-8") as source:
+    status = json.load(source)
+
+assert transcript["session_ref"] == sys.argv[3], transcript["session_ref"]
+classifications = [entry["classification"] for entry in transcript["entries"]]
+assert classifications == ["reasoning_content", "agent_message_content"], classifications
+assert transcript["complete"]["entry_count"] == 2, transcript["complete"]
+assert transcript["complete"]["truncated"] is False, transcript["complete"]
+
+# Adoption resumed; only the retrieval loaded. One log, two purposes.
+assert adoption.count("session/load") == 1, adoption
+assert adoption[-1] == "session/load", adoption
+assert all(method == "session/resume" for method in adoption[:-1]), adoption
+
+# Reading must not retire the ownership the seat still holds.
+binding = status["current_session_bindings"][0]
+assert binding["session_ref"] == sys.argv[3], binding
+assert binding["state"] == "ready", binding
+
+print(f"  transcript read: {transcript['complete']['entry_count']} entries "
+      "through a second plugin process")
+print(f"  adoption then retrieval: {', '.join(adoption)}")
+print(f"  seat after being read: {binding['state']}, session retained")
+CHECK

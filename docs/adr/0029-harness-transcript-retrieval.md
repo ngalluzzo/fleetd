@@ -185,7 +185,15 @@ decision because it reopens retention and redaction, which is exactly the cost
 
 Presenting a transcript. This ADR adds an address, not an operator surface. Who
 renders one, at what granularity, and with what redaction is downstream of the
-segmentation limit above, and it has an unresolved question of its own: the
-harness process is owned by a running worker, so an operator path either goes
-through that worker or starts a second plugin process against a session the
-first one holds. Whether a runtime tolerates that is unmeasured.
+segmentation limit above.
+
+The concurrency question behind it is now answered. A second `opencode acp`
+process loaded a session a first one was still holding, including while that
+holder was mid-turn, without disturbing it; the replay carried the conversation
+through the last settled entry and nothing of the turn in flight, so a
+concurrent read is stale rather than torn and needs no coordination with the
+worker. An operator path can therefore be a short-lived second plugin process
+rather than a worker control channel. See the
+[concurrent session read qualification](../qualification/acp-concurrent-session-read-2026-08-27.md).
+What remains unmeasured is writing from a second process, which a retrieval path
+has no reason to do, and every harness other than OpenCode.
