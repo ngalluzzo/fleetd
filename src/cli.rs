@@ -682,16 +682,25 @@ async fn transcript_command(
     };
     let _shutdown = harness.shutdown().await?;
 
+    // One session serves a whole channel, so a replay covers every invocation on
+    // the lane. Splitting it is a rule any surface would need, so it lives in
+    // the wire crate rather than here.
+    let turns = fleetd_proto::harness_acp::segment_transcript(entries);
+    let attributed = turns
+        .iter()
+        .filter(|turn| turn.invocation_id.is_some())
+        .count();
     print_json(&json!({
         "session_ref": args.session,
         "agent_id": desired.agent_id,
         "binding": owner.binding,
         "session_state": owner.state,
         // A replay is the conversation through the last settled entry: a turn
-        // still in flight has stored no output yet, so this is stale rather
-        // than torn, and per-invocation attribution is a time-window
-        // projection rather than a boundary the runtime reports.
-        "entries": entries,
+        // still in flight has stored no output yet, so this is stale rather than
+        // torn. A turn with no `invocation_id` is one Fleetd did not dispatch,
+        // or the session setup that precedes the first prompt.
+        "turns": turns,
+        "attributed_turns": attributed,
         "complete": complete,
     }))
 }

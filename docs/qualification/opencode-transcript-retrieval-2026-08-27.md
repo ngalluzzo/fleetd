@@ -49,6 +49,27 @@ the invocation count exactly.
 So per-invocation attribution is exact. It is not a projection, and it needs no
 cooperation from the harness beyond replaying prompt text verbatim.
 
+## The product now does the splitting
+
+A second run of the same shape, after `segment_transcript` and the `prompt`
+event class landed, confirmed the command does this itself. Session
+`ses_fbad07470ffenvqt4NSeFTa4Om`, two dispatched invocations:
+
+```
+turns: 3  attributed: 2  of 2 dispatched invocations
+  seq  1  None                                  unattributed  [metadata]
+  seq  2  3defc1c8-547d-4ce6-bd73-d9e257cbfc81  known
+              [user_message_content, reasoning_content, agent_message_content]
+  seq  5  8144601d-680b-4b0f-b4b6-b6d08d286f7e  known
+              [user_message_content, reasoning_content, agent_message_content, usage]
+```
+
+The set of attributed invocation ids equalled the set Fleetd dispatched, each
+appeared in exactly one turn, and the session setup that precedes the first
+prompt stayed in its own unattributed group rather than being folded into the
+first real turn. The prompts now classify as `user_message_content` rather than
+falling through to `unknown`.
+
 ## Two mistakes this run corrected
 
 ADR 0029 originally proposed attributing entries to invocations **by time

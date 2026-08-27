@@ -63,12 +63,19 @@ running worker keeps its own session: it resumes the session to attach and then
 loads it to read, which is the split ACP defines, and it never closes the
 session because the seat still owns that lane.
 
-What comes back is every stored entry — reasoning, tool calls with their exact
-arguments and output, and assistant messages — plus a completion reporting the
-entry count, the bytes observed, and whether a bound truncated the replay. A
-replay carries each entry's final state rather than the stream that produced it,
-so chunk boundaries and intermediate tool states are gone while content is
-whole.
+What comes back is grouped into `turns`, one per invocation, each carrying the
+prompt that opened it and the reasoning, tool calls with their exact arguments
+and output, and assistant messages that followed. A turn's `invocation_id` names
+the invocation it belongs to; `attributed_turns` counts how many were
+identified. A replay carries each entry's final state rather than the stream that
+produced it, so chunk boundaries and intermediate tool states are gone while
+content is whole.
+
+A turn with `invocation_id: null` is one Fleetd did not dispatch — the session
+setup that precedes the first prompt, or work something else started against the
+same session. Those keep their own group rather than being folded into the turn
+before them, because attributing a stranger's conversation to a Fleetd
+invocation would be worse than admitting the gap.
 
 Three limits are worth knowing before relying on it:
 

@@ -190,18 +190,9 @@ mechanism is tested rather than reasoned, but a session accumulating a night of
 invocations is where the key could fail: compaction, pruning, or a rewritten
 prompt would take the invocation id with them, and none of those is measured.
 
-Grouping in the product. Fleetd knows the key and does not use it: `fleetd
-transcript` returns a flat lane and leaves splitting to the reader. Presenting a
-transcript per invocation is now a small change rather than an open question,
-which makes it a decision about the command's output rather than about whether
-attribution works.
-
-Naming the prompt. ACP's `user_message_chunk` has no case in
-`classify_update`, so the entries carrying the segmentation key are labelled
-`unknown`, and every live OpenCode turn has been adding one to
-`InvocationEventCounts.unknown` for a recognised kind. That erodes the signal
-ADR 0020 kept the counter for. Fixing it needs an `EventClass` variant, a
-counter field, and a forward migration.
+A live operator-event subscription. Retrieval answers what a session already
+holds; watching a turn as it happens is the separate M4 item, and the egress sink
+is not it.
 
 Transcript lifetime. How long a harness keeps a session before pruning is
 unmeasured, and `session/list` and `session/delete` — the ACP methods that would

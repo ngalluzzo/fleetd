@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::{model::ExecutionCertainty, plugin::PluginInterface};
+use crate::{model::ExecutionCertainty, operations::EventClass, plugin::PluginInterface};
 
 pub const HARNESS_ACP_INTERFACE_ID: &str = "fleetd.harness-acp";
 
@@ -430,6 +430,182 @@ pub struct TranscriptComplete {
     pub truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
+}
+
+/// One contiguous run of replayed entries belonging to a single dispatched turn.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TranscriptTurn {
+    /// The invocation whose prompt opened this run, or `None` for entries that
+    /// belong to no turn Fleetd dispatched: session setup before the first
+    /// prompt, or a turn something else started against the same session.
+    pub invocation_id: Option<String>,
+    pub first_entry_seq: u64,
+    pub entry_count: u64,
+    pub entries: Vec<TranscriptEntry>,
+}
+
+/// Splits one replay into the turns that produced it.
+///
+/// A replay carries no original timestamps and no turn boundary, so the split
+/// cannot come from the harness. It comes from Fleetd: an adapter names its
+/// invocation inside the prompt it sends, a replay carries prompt text verbatim,
+/// and so each dispatched turn opens with a prompt entry that identifies itself.
+/// Entries follow their prompt until the next one.
+///
+/// A run whose prompt names no invocation keeps `invocation_id: None` rather
+/// than being attached to the turn before it. Guessing there would silently
+/// attribute someone else's conversation to Fleetd's work.
+#[must_use]
+pub fn segment_transcript(entries: Vec<TranscriptEntry>) -> Vec<TranscriptTurn> {
+    let mut turns: Vec<TranscriptTurn> = Vec::new();
+    for entry in entries {
+        let opens_turn = EventClass::parse(&entry.classification) == EventClass::Prompt;
+        if opens_turn || turns.is_empty() {
+            let invocation_id = if opens_turn {
+                prompt_invocation_id(&entry)
+            } else {
+                None
+            };
+            turns.push(TranscriptTurn {
+                invocation_id,
+                first_entry_seq: entry.entry_seq,
+                entry_count: 1,
+                entries: vec![entry],
+            });
+            continue;
+        }
+        if let Some(turn) = turns.last_mut() {
+            turn.entry_count = turn.entry_count.saturating_add(1);
+            turn.entries.push(entry);
+        }
+    }
+    turns
+}
+
+/// Reads the invocation identity an adapter named inside a prompt.
+///
+/// The envelope adapter prepends an instruction preamble to its JSON, so the
+/// document starts at the first brace rather than at the first character. An
+/// adapter that names nothing returns `None`, which is information rather than
+/// an error: it marks a turn Fleetd did not dispatch.
+fn prompt_invocation_id(entry: &TranscriptEntry) -> Option<String> {
+    let text = entry.raw_update.get("content")?.get("text")?.as_str()?;
+    let document = &text[text.find('{')?..];
+    let envelope: Value = serde_json::from_str(document).ok()?;
+    envelope
+        .get("invocation")?
+        .get("id")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod transcript_tests {
+    use serde_json::json;
+
+    use super::{TranscriptEntry, segment_transcript};
+
+    fn entry(seq: u64, classification: &str, raw: serde_json::Value) -> TranscriptEntry {
+        TranscriptEntry {
+            session_ref: "session-1".to_owned(),
+            entry_seq: seq,
+            observed_at_ms: 1_700_000_000_000,
+            classification: classification.to_owned(),
+            raw_update: raw,
+        }
+    }
+
+    fn prompt(seq: u64, invocation_id: &str) -> TranscriptEntry {
+        // The adapter prepends an instruction preamble, so the envelope does not
+        // start at the first character.
+        let text = format!(
+            "You received the following durable fleetd message.\n\n{}",
+            json!({"invocation": {"id": invocation_id, "delivery_attempt": 1},
+                   "message": {"seq": 1}})
+        );
+        entry(
+            seq,
+            "user_message_content",
+            json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": text},
+            }),
+        )
+    }
+
+    #[test]
+    fn a_session_of_many_turns_splits_at_each_prompt() {
+        let turns = segment_transcript(vec![
+            entry(
+                1,
+                "metadata",
+                json!({"sessionUpdate": "session_info_update"}),
+            ),
+            prompt(2, "invocation-a"),
+            entry(3, "reasoning_content", json!({})),
+            entry(4, "agent_message_content", json!({})),
+            prompt(5, "invocation-b"),
+            entry(6, "tool_call", json!({"toolCallId": "call-1"})),
+        ]);
+
+        assert_eq!(turns.len(), 3, "setup, then one run per prompt");
+        assert_eq!(turns[0].invocation_id, None, "setup belongs to no turn");
+        assert_eq!(turns[0].entry_count, 1);
+        assert_eq!(turns[1].invocation_id.as_deref(), Some("invocation-a"));
+        assert_eq!(turns[1].first_entry_seq, 2);
+        assert_eq!(turns[1].entry_count, 3, "the prompt and what followed it");
+        assert_eq!(turns[2].invocation_id.as_deref(), Some("invocation-b"));
+        assert_eq!(turns[2].entry_count, 2);
+    }
+
+    /// A turn something else started must not be folded into Fleetd's work.
+    #[test]
+    fn a_prompt_naming_no_invocation_opens_an_unattributed_turn() {
+        let turns = segment_transcript(vec![
+            prompt(1, "invocation-a"),
+            entry(2, "agent_message_content", json!({})),
+            entry(
+                3,
+                "user_message_content",
+                json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": {"type": "text", "text": "someone typed this by hand"},
+                }),
+            ),
+            entry(4, "agent_message_content", json!({})),
+        ]);
+
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].invocation_id.as_deref(), Some("invocation-a"));
+        assert_eq!(turns[1].invocation_id, None);
+        assert_eq!(
+            turns[1].entry_count, 2,
+            "a foreign turn keeps its own entries rather than joining the one before it"
+        );
+    }
+
+    #[test]
+    fn an_empty_replay_has_no_turns() {
+        assert!(segment_transcript(Vec::new()).is_empty());
+    }
+
+    /// Every entry lands in exactly one turn, so nothing is dropped by grouping.
+    #[test]
+    fn grouping_preserves_every_entry() {
+        let entries = vec![
+            entry(1, "metadata", json!({})),
+            prompt(2, "invocation-a"),
+            entry(3, "reasoning_content", json!({})),
+            prompt(4, "invocation-b"),
+            entry(5, "usage", json!({})),
+        ];
+        let total = entries.len();
+        let turns = segment_transcript(entries);
+        let grouped: usize = turns.iter().map(|turn| turn.entries.len()).sum();
+        assert_eq!(grouped, total);
+        let counted: u64 = turns.iter().map(|turn| turn.entry_count).sum();
+        assert_eq!(counted, u64::try_from(total).expect("fits"));
+    }
 }
 
 #[cfg(test)]

@@ -238,10 +238,17 @@ with open(sys.argv[4], encoding="utf-8") as source:
     status = json.load(source)
 
 assert transcript["session_ref"] == sys.argv[3], transcript["session_ref"]
-classifications = [entry["classification"] for entry in transcript["entries"]]
+turns = transcript["turns"]
+classifications = [e["classification"] for turn in turns for e in turn["entries"]]
 assert classifications == ["reasoning_content", "agent_message_content"], classifications
 assert transcript["complete"]["entry_count"] == 2, transcript["complete"]
 assert transcript["complete"]["truncated"] is False, transcript["complete"]
+
+# The demo's mock replays no prompt, so its entries belong to no dispatched
+# turn. Grouping must say so rather than inventing an attribution.
+assert len(turns) == 1, turns
+assert turns[0]["invocation_id"] is None, turns[0]
+assert transcript["attributed_turns"] == 0, transcript["attributed_turns"]
 
 # Adoption resumed; only the retrieval loaded. One log, two purposes.
 assert adoption.count("session/load") == 1, adoption
@@ -253,8 +260,8 @@ binding = status["current_session_bindings"][0]
 assert binding["session_ref"] == sys.argv[3], binding
 assert binding["state"] == "ready", binding
 
-print(f"  transcript read: {transcript['complete']['entry_count']} entries "
-      "through a second plugin process")
+print(f"  transcript read: {transcript['complete']['entry_count']} entries in "
+      f"{len(turns)} turn(s), {transcript['attributed_turns']} attributed")
 print(f"  adoption then retrieval: {', '.join(adoption)}")
 print(f"  seat after being read: {binding['state']}, session retained")
 CHECK
