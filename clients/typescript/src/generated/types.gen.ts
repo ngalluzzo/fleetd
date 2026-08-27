@@ -405,6 +405,11 @@ export type InvocationEventCounts = {
     metadata: number;
     permission: number;
     plan: number;
+    /**
+     * The prompt Fleetd sent, echoed back by the harness. It is also where the
+     * envelope adapter's invocation id appears in a replayed transcript.
+     */
+    prompt: number;
     reasoning: number;
     tool: number;
     unknown: number;

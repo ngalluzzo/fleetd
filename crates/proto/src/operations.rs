@@ -231,6 +231,7 @@ pub struct AgentSeat {
 /// the count would be worse than counting it as unknown.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EventClass {
+    Prompt,
     Assistant,
     Reasoning,
     Tool,
@@ -244,7 +245,8 @@ pub enum EventClass {
 impl EventClass {
     /// Every variant, so a caller can enumerate the vocabulary without
     /// repeating it.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
+        Self::Prompt,
         Self::Assistant,
         Self::Reasoning,
         Self::Tool,
@@ -259,6 +261,7 @@ impl EventClass {
     #[must_use]
     pub fn parse(classification: &str) -> Self {
         match classification {
+            "user_message_content" => Self::Prompt,
             "agent_message_content" => Self::Assistant,
             "reasoning_content" => Self::Reasoning,
             "tool_call" | "tool_call_update" => Self::Tool,
@@ -274,6 +277,7 @@ impl EventClass {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Prompt => "prompt",
             Self::Assistant => "assistant",
             Self::Reasoning => "reasoning",
             Self::Tool => "tool",
@@ -289,6 +293,9 @@ impl EventClass {
 /// Fixed-size event counters retained for one managed invocation.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 pub struct InvocationEventCounts {
+    /// The prompt Fleetd sent, echoed back by the harness. It is also where the
+    /// envelope adapter's invocation id appears in a replayed transcript.
+    pub prompt: u64,
     pub assistant: u64,
     pub reasoning: u64,
     pub tool: u64,
@@ -436,6 +443,10 @@ mod tests {
 
     #[test]
     fn an_unrecognized_classification_counts_as_unknown() {
+        assert_eq!(
+            EventClass::parse("user_message_content"),
+            EventClass::Prompt
+        );
         assert_eq!(
             EventClass::parse("reasoning_content"),
             EventClass::Reasoning

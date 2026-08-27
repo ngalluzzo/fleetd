@@ -168,6 +168,7 @@ async fn invocation_observations(headers: HeaderMap) -> Response {
         "last_event_seq": 1,
         "event_chain_digest": "sha256:event",
         "counts": {
+            "prompt": 0,
             "assistant": 1,
             "reasoning": 0,
             "tool": 0,

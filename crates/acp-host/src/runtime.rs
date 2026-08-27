@@ -1416,6 +1416,7 @@ fn capture_update(
 
 fn classify_update(update: &Value) -> &'static str {
     match update.get("sessionUpdate").and_then(Value::as_str) {
+        Some("user_message_chunk") => "user_message_content",
         Some("agent_message_chunk") => "agent_message_content",
         Some("agent_thought_chunk") => "reasoning_content",
         Some("tool_call") => "tool_call",
@@ -1649,6 +1650,36 @@ mod tests {
     use fleetd_proto::harness_acp::{ResolvedMcpGrant, ResolvedMcpHttpHeader};
 
     use super::*;
+
+    /// A prompt echoed back by the runtime is a recognised ACP kind, so it must
+    /// not land in `unknown`. That counter exists to mean "an update this build
+    /// has never seen", and a real harness emits one prompt per turn, so leaving
+    /// it unnamed put a constant offset on the one signal worth watching.
+    #[test]
+    fn every_acp_update_this_build_understands_is_named() {
+        for (update, expected) in [
+            ("user_message_chunk", "user_message_content"),
+            ("agent_message_chunk", "agent_message_content"),
+            ("agent_thought_chunk", "reasoning_content"),
+            ("tool_call", "tool_call"),
+            ("tool_call_update", "tool_call_update"),
+            ("plan", "plan_update"),
+            ("usage_update", "usage"),
+            ("session_info_update", "metadata"),
+        ] {
+            let classification = classify_update(&json!({"sessionUpdate": update}));
+            assert_eq!(classification, expected, "{update} was misclassified");
+            assert_ne!(
+                fleetd_proto::operations::EventClass::parse(classification),
+                fleetd_proto::operations::EventClass::Unknown,
+                "{update} is a kind this build understands and must not count as unknown"
+            );
+        }
+        assert_eq!(
+            classify_update(&json!({"sessionUpdate": "a_kind_acp_adds_later"})),
+            "unknown"
+        );
+    }
 
     /// Adoption wants the session back, not its transcript. ACP obliges
     /// `session/load` to replay the entire conversation before it answers and

@@ -354,6 +354,8 @@ fn bounded_u64(
 mod tests {
     use std::collections::BTreeMap;
 
+    use fleetd_proto::operations::EventClass;
+
     use super::{ContentLevel, EgressRequest, validate_endpoint};
 
     fn request() -> EgressRequest {
@@ -379,7 +381,12 @@ mod tests {
         assert_eq!(config.content, ContentLevel::Metadata);
         assert_eq!(config.max_attribute_bytes, 4_096);
         assert_eq!(config.queue_capacity, 1_024);
-        assert_eq!(config.classifications.len(), 8);
+        assert_eq!(
+            config.classifications.len(),
+            EventClass::ALL.len(),
+            "the default allowlist is every class, so a new one is exported \
+             unless an operator narrows it"
+        );
     }
 
     #[test]

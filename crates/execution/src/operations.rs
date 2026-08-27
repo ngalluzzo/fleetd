@@ -644,6 +644,7 @@ async fn apply_event_fold(
             last_event_at_ms = ?, event_count = event_count + 1,
             observed_payload_bytes = observed_payload_bytes + ?,
             last_event_seq = ?, last_event_digest = ?, event_chain_digest = ?,
+            prompt_event_count = prompt_event_count + ?,
             assistant_event_count = assistant_event_count + ?,
             reasoning_event_count = reasoning_event_count + ?,
             tool_event_count = tool_event_count + ?,
@@ -662,6 +663,7 @@ async fn apply_event_fold(
     .bind(event.event_seq)
     .bind(event.event_digest)
     .bind(event.chain_digest)
+    .bind(event.counts.prompt)
     .bind(event.counts.assistant)
     .bind(event.counts.reasoning)
     .bind(event.counts.tool)
@@ -858,6 +860,7 @@ fn observation_select() -> &'static str {
            o.binding_generation, o.owner_epoch, o.started_at_ms, o.updated_at_ms,
            o.first_event_at_ms, o.last_event_at_ms, o.event_count,
            o.observed_payload_bytes, o.last_event_seq, o.event_chain_digest,
+           o.prompt_event_count,
            o.assistant_event_count, o.reasoning_event_count, o.tool_event_count,
            o.plan_event_count, o.usage_event_count, o.metadata_event_count,
            o.permission_event_count, o.unknown_event_count, o.terminal_at_ms,
@@ -894,6 +897,7 @@ fn observation_from_row(
         last_event_seq: to_u64(row.try_get("last_event_seq")?, "last event sequence")?,
         event_chain_digest: row.try_get("event_chain_digest")?,
         counts: InvocationEventCounts {
+            prompt: to_u64(row.try_get("prompt_event_count")?, "prompt events")?,
             assistant: to_u64(row.try_get("assistant_event_count")?, "assistant events")?,
             reasoning: to_u64(row.try_get("reasoning_event_count")?, "reasoning events")?,
             tool: to_u64(row.try_get("tool_event_count")?, "tool events")?,
@@ -1185,6 +1189,7 @@ fn chain_digest(previous: Option<&str>, event: &str) -> String {
 
 #[derive(Default)]
 struct EventIncrements {
+    prompt: i64,
     assistant: i64,
     reasoning: i64,
     tool: i64,
@@ -1198,6 +1203,7 @@ struct EventIncrements {
 fn event_increments(classification: &str) -> EventIncrements {
     let mut counts = EventIncrements::default();
     match EventClass::parse(classification) {
+        EventClass::Prompt => counts.prompt = 1,
         EventClass::Assistant => counts.assistant = 1,
         EventClass::Reasoning => counts.reasoning = 1,
         EventClass::Tool => counts.tool = 1,

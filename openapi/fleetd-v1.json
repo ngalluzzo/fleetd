@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "1.7.0"
+    "version": "1.8.0"
   },
   "paths": {
     "/health": {
@@ -4256,6 +4256,7 @@
         "type": "object",
         "description": "Fixed-size event counters retained for one managed invocation.",
         "required": [
+          "prompt",
           "assistant",
           "reasoning",
           "tool",
@@ -4284,6 +4285,12 @@
           "plan": {
             "type": "integer",
             "format": "int64",
+            "minimum": 0
+          },
+          "prompt": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The prompt Fleetd sent, echoed back by the harness. It is also where the\nenvelope adapter's invocation id appears in a replayed transcript.",
             "minimum": 0
           },
           "reasoning": {

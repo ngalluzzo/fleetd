@@ -43,6 +43,15 @@ backward-compatible operations or optional fields increment the OpenAPI info
 minor version. A required-field change, removal, semantic reinterpretation, or
 incompatible response change requires a new major contract and URL prefix.
 
+"Required-field change" means an existing field's requiredness changing, or a
+new required field on a *request*, which a caller would then have to supply.
+A new required field on a *response* is a minor version: a consumer generated
+against the older contract ignores it, and a consumer generated against the
+newer one is versioned to the contract it came from — `verify:generated` fails
+the build when the client's version and the contract's disagree, so the pairing
+that would break, a newer client against an older daemon, is one this repository
+already does not ship.
+
 Cursor-addressed listings stay plain arrays. A page wrapper would be an
 incompatible response change under the rule above, and every evidence row
 already carries both halves of its own cursor, so the position a caller
