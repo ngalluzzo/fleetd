@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-28
+- Supersedes nothing; paired with [ADR 0034](0034-os-level-harness-sandboxing.md)
 
 ## Context
 
@@ -36,25 +37,47 @@ credential *and* gave it a narrow grant to do the real thing. Permissions have
 only the refusal. A seat that needs to do something outside its worktree has no
 route at all, however narrow and however legitimate.
 
-Two tempting answers are both wrong, and it is worth saying why before
-committing to a third.
+The obvious answer is a permission policy: let worker desired state declare
+which tool calls are auto-approved. ACP sanctions it — *"Clients MAY
+automatically allow or reject permission requests according to the user
+settings"* — and offers `allow_once`, `allow_always`, `reject_once`, and
+`reject_always` for exactly that. The spec says nothing at all about unattended
+clients, so this is undefined territory rather than forbidden territory. It is
+the extension point ACP left open, and this ADR does not take it. The reason is
+not that allowlists are unsound in principle. It is what they need underneath
+them.
 
-**A permission policy that can allow.** Let worker desired state declare which
-tool calls are auto-approved. This is the obvious shape and it is a trap. The
-thing being matched — a shell command, a tool name, a raw input blob — is
-chosen by the agent whose authority is in question, and shell is not a language
-that can be pattern-matched safely: `$(…)`, `;`, an alias, a script on the
-allowed path. An allowlist over agent-authored strings is a decision surface
-that looks bounded and is not. ACP's `allow_always` option is worse again — a
-standing grant nobody registered, which is the third authority category
-[ADR 0031](0031-inbound-triggers.md) exists to guard.
+**An allowlist over agent-authored strings leaks, and the field knows it.**
+Claude Code's rules are string-prefix matches rather than parsed semantics:
+`Bash(git push --force:*)` is bypassed by `git push -f`, and `Bash(git:*)` does
+not match `/usr/bin/git status`. CVE-2026-24053 is a path-restriction bypass via
+ZSH clobber syntax that wrote outside the working directory with no prompt at
+all. The matched surface is chosen by the agent whose authority is in question,
+and shell is not a language that pattern-matching bounds.
 
-**Handing the reviewer a transcript in its request payload.** An operator
-retrieves the transcript out of band and puts it in the message. This appears to
-need no daemon change, and it violates ADR 0029 outright: messages are
-immutable and permanent, so a transcript in a payload is retained reasoning,
-which is exactly what fleetd refuses to hold. It also moves the choice of what
-to look at from the reviewer to the dispatcher, which defeats the point.
+**What makes an allowlist usable anyway is an OS sandbox beneath it, and fleetd
+has none.** Claude Code now runs two independent layers: permission rules
+evaluated before a tool runs, and `sandbox-runtime` enforcing filesystem and
+network limits through `sandbox-exec` and `bubblewrap`, deny by default. Codex
+CLI is the same shape — Seatbelt, Landlock and seccomp, restricted tokens —
+expressed as declared modes rather than per-call consent. The rules carry
+intent; the sandbox is the boundary. Unattended cloud agents drop the prompts
+entirely and lean on ephemeral isolation.
+
+Fleetd has the refusal and nothing else. So an allow policy adopted today would
+be *strictly weaker* than the denial it replaced: the same leaky matching, with
+nothing to catch what leaks. **The sandbox is a prerequisite for the policy, not
+an alternative to it**, and that ordering is the reason this ADR is a grant
+rather than a policy. [ADR 0034](0034-os-level-harness-sandboxing.md) takes the
+sandbox; a permission policy becomes arguable after it lands, and not before.
+
+**Handing the reviewer a transcript in its request payload** is the other
+tempting answer, and it is simply not available. An operator retrieves the
+transcript out of band and puts it in the message; this appears to need no
+daemon change, and it violates ADR 0029 outright. Messages are immutable and
+permanent, so a transcript in a payload is retained reasoning, which is exactly
+what fleetd refuses to hold. It also moves the choice of what to look at from
+the reviewer to the dispatcher, which defeats the point.
 
 ## Decision
 
@@ -152,11 +175,13 @@ the tool rather than the command.
 
 ## Deliberately not here
 
-A permission policy of any shape. The refusal above is the whole of it: the
-matched surface is agent-authored, shell is not safely matchable, and
-`allow_always` is a standing grant nobody registered. If some future need
-genuinely requires arbitrary local execution under consent, it wants its own
-decision and a human in it — not a pattern list in desired state.
+A permission policy, for now and on stated grounds rather than on principle.
+ACP sanctions one and the field runs one; what the field also runs is an OS
+sandbox underneath it, which ADR 0034 owes and fleetd does not have. Revisit
+this once that lands. `allow_always` should stay refused even then: it is a
+standing grant nobody registered, which is the third authority category
+[ADR 0031](0031-inbound-triggers.md) exists to guard, and `allow_once` under a
+sandbox is the same capability without the durability.
 
 A seat serving reads of its own session. It is the more elegant answer to the
 launch-profile problem, since the owner already holds the profile: the reviewer

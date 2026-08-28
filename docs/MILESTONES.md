@@ -102,4 +102,13 @@
 - [ ] Qualify the same attribution across a session holding a night of
   invocations, where compaction, pruning, or a rewritten prompt could break the
   key that makes it exact.
+- [ ] Bound a harness at the OS level rather than by its own good behaviour
+  ([ADR 0034](adr/0034-os-level-harness-sandboxing.md)). Fleetd is careful about
+  what it hands a harness and enforces nothing about what the harness then
+  reaches; the permission refusal holds only as far as a harness chooses to ask.
+- [ ] A turn-scoped transcript read grant
+  ([ADR 0033](adr/0033-turn-scoped-transcript-read.md)), so a reviewer can read
+  the reasoning behind the work it was assigned. The first author/reviewer loop
+  proved this is currently impossible: every permission request is refused, and
+  a reviewer that needs one returns nothing.
 - Remote workers only after authenticated encrypted transport and enrollment.

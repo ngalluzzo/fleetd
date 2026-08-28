@@ -54,7 +54,7 @@ Each item below is exercised by a reproducible record, not a design note.
 - **Architecture held by tests.** `tests/crate_boundaries.rs` fails the build if
   the kernel names a layer above it or `execution` acquires a transport.
 
-Twenty-seven [ADRs](docs/adr/) record what was decided and what it cost; twenty
+Twenty-nine [ADRs](docs/adr/) record what was decided and what it cost; twenty
 [qualification records](docs/qualification/) carry exact message identifiers,
 real model routes, and content hashes. What is deliberately *not* built yet —
 remote workers, the full-night soak, a second qualified harness — is listed in
