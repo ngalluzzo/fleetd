@@ -1,10 +1,10 @@
 //! The durable store: one connection pool, and one module per concept.
 //!
 //! This module owns the pool, the migration set, and the few helpers every
-//! concept needs. Each concept -- agents, channels, membership, messages, and
-//! the conversation projection over them -- owns its own file and adds its own
-//! `impl Store` block, so two concepts can change without touching the same
-//! file.
+//! concept needs. Each concept -- agents, channels, membership, messages,
+//! triggers, and the conversation projection over them -- owns its own file
+//! and adds its own `impl Store` block, so two concepts can change without
+//! touching the same file.
 //!
 //! Those blocks reach `Store`'s fields directly because they are descendants of
 //! this module, which is why the split costs no call site anything: every
@@ -14,6 +14,7 @@ pub mod agent;
 pub mod channel;
 pub mod membership;
 pub mod message;
+pub mod trigger;
 
 use std::{path::Path, time::Duration, time::SystemTime};
 

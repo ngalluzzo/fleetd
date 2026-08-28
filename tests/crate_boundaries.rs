@@ -367,7 +367,7 @@ const ABOVE_SUBSTRATE_CRATES: [&str; 6] = [
 /// that shared transaction impossible.
 #[test]
 fn only_the_kernel_writes_kernel_tables() {
-    const KERNEL_TABLES: [&str; 7] = [
+    const KERNEL_TABLES: [&str; 8] = [
         "agents",
         "auth_credentials",
         "agent_deliveries",
@@ -375,6 +375,7 @@ fn only_the_kernel_writes_kernel_tables() {
         "channels",
         "delivery_blocks",
         "messages",
+        "triggers",
     ];
     let mut sources: Vec<(String, PathBuf)> = Vec::new();
     for crate_root in ABOVE_SUBSTRATE_CRATES {
