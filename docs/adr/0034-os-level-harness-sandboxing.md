@@ -18,9 +18,10 @@ All of that is care about *what fleetd hands the process*. None of it bounds
 what the process then does. A harness that receives an allowlisted environment
 and an absolute executable can still read any file the daemon's user can read,
 write any file it can write, and reach any network it can reach. The only thing
-standing between a turn and the filesystem is the harness asking politely, which
-[ADR 0033](0033-turn-scoped-transcript-read.md) documents fleetd answering with
-an unconditional refusal.
+standing between a turn and the filesystem is the harness asking politely --
+and when it does ask, `controller.rs` answers every `PermissionRequested` with
+`PermissionOutcome::Cancelled`, because `permission_policy` accepts exactly one
+value and that value means refuse.
 
 That refusal is doing more work than it should. It is not a boundary; it is a
 harness's own conscience, mediated. It holds exactly as far as the harness
@@ -54,9 +55,16 @@ prompt at all. Fleetd's refusal is not vulnerable in those particular ways
 because it permits nothing, but it inherits the same structural weakness: it
 depends on the harness routing a decision to fleetd, and nothing makes it.
 
-This decision is the prerequisite ADR 0033 named. It is worth taking on its own
-terms regardless, because it is the only one of the two that bounds a harness
-that never asks.
+This decision was first written as a prerequisite for something else --
+[ADR 0033](0033-turn-scoped-transcript-read.md), now withdrawn because its
+premise was false. It stands on its own and always did: it is the only thing
+here that bounds a harness which never asks, and every seat this repository has
+run so far has been unbounded in exactly that way.
+
+It is also not urgent, and this ADR should say so. Nothing runs on fleetd but
+its own dogfood, the seats are on an operator's own machine, and the reduction
+this buys is real but speculative until something outside that machine feeds a
+seat. Accepted as the decision; not the next thing to build.
 
 ## Decision
 
@@ -96,7 +104,8 @@ that explicitly, in desired state, under a name that reads like what it is.
 change it.** The two layers are independent on purpose, which is the whole
 lesson: consent that the harness routes to fleetd, and a boundary that holds
 whether it routes anything or not. Whether an allow policy becomes arguable once
-this lands is ADR 0033's question to reopen, not this one's to answer.
+this lands is a later question, and it should be reopened by a seat that needs
+one rather than by the availability of the mechanism.
 
 **Fleetd does not write its own sandbox.** `sandbox-exec`, `bubblewrap`,
 Landlock, and seccomp are the primitives; a maintained wrapper over them is
@@ -130,10 +139,12 @@ credential-file permission split is the existing precedent and it is small; this
 is larger, and the honest expectation is that Linux and macOS are supported
 first and Windows is a stated gap rather than a silent one.
 
-Transcript retrieval, ADR 0033's grant, and any future capability all get
-simpler to reason about, because "what can this seat reach" becomes answerable
-from desired state instead of from a harness's implementation. That is also the
-condition under which a permission policy could ever be safe.
+"What can this seat reach" becomes answerable from desired state instead of from
+a harness's own implementation, which is worth having on its own and is also the
+condition under which a permission policy could ever be safe. It is what would
+have made the withdrawn ADR 0033 unnecessary to even consider: a seat's reach
+would have been a declared fact rather than something discovered by watching a
+turn fail.
 
 ## Deliberately not here
 
@@ -155,8 +166,8 @@ strictly stronger; it also assumes a deployment fleetd does not have, since a
 local-first daemon runs beside an operator's own checkout. Revisit if fleetd
 ever runs seats somewhere it does not own.
 
-A permission policy of any shape. ADR 0033 refused one on the grounds that this
-ADR was missing. It becoming arguable is not the same as it being decided, and
+A permission policy of any shape. ACP sanctions one and the field runs one, over
+a sandbox. Becoming arguable is not the same as being decided, and
 `allow_always` should stay refused regardless: a standing grant nobody
 registered is the category [ADR 0031](0031-inbound-triggers.md) exists to guard.
 

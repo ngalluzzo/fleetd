@@ -66,6 +66,24 @@ sync_worktree() {
   echo "  $dir -> $(git -C "$dir" rev-parse --short HEAD) ($target)" >&2
 }
 
+# The reviewer stands in the fleet, not in a worktree beside it. `fleetd
+# transcript` opens the database directly and is addressed by session reference,
+# so a reviewer outside this directory asks permission to reach it, and a
+# managed turn refuses every permission request. Its review checkout therefore
+# goes *inside* its working directory: a seat is bounded by where it stands, and
+# both halves of what it needs have to be on the same side of that line.
+REVIEW_CHECKOUT="$root/.fleetd/review-checkout"
+sync_review_checkout() {
+  local target="$1"
+  if [ -d "$REVIEW_CHECKOUT" ]; then
+    git -C "$REVIEW_CHECKOUT" fetch --quiet origin 2>/dev/null || true
+    git -C "$REVIEW_CHECKOUT" switch --quiet --detach "$target"
+  else
+    git -C "$root" worktree add --quiet --detach "$REVIEW_CHECKOUT" "$target"
+  fi
+  echo "  $REVIEW_CHECKOUT -> $(git -C "$REVIEW_CHECKOUT" rev-parse --short HEAD) ($target)" >&2
+}
+
 case "$seat" in
   author) recipient="$author" ; subject="{}" ; sync_worktree "$HOME/repos/fleetd-seats/author" main ;;
   reviewer)
@@ -99,12 +117,13 @@ print(json.dumps({
     'pull_request': pull,
     'author_invocation_id': invocation,
     'author_session_ref': session,
+    'review_checkout': '$REVIEW_CHECKOUT',
     'transcript_command': (
         'cd $root && ./target/debug/fleetd transcript '
         '--config .fleetd/worker-author.json --session ' + (session or '<unknown>')),
     'trace_command': 'cd $root && ./target/debug/fleetd trace --invocation ' + (invocation or '<unknown>'),
 }))")"
-    sync_worktree "$HOME/repos/fleetd-seats/reviewer" \
+    sync_review_checkout \
       "$(printf '%s' "$subject" | python3 -c 'import sys,json;print(json.load(sys.stdin)["pull_request"]["headRefName"])')"
     ;;
 esac

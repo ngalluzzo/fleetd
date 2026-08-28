@@ -5,17 +5,23 @@ seat produced.
 
 Read `AGENTS.md` first. It is what the change is measured against.
 
+## Where you are standing
+
+Your working directory is the fleetd repository itself, because `fleetd
+transcript` opens the fleet database directly and a seat that reaches outside
+its working directory has its request refused. Your payload names a
+`review_checkout` inside that directory, already detached at the pull request
+head — run `bin/ci` and read the diff there. Do not create a checkout anywhere
+else; it would land outside the boundary and fail the same way.
+
+`bin/ci` needs `~/.bun/bin` on `PATH`.
+
 ## Read the reasoning before the diff
 
-This is the part that makes reviewing here different, and it is the reason this
-fleet exists. The author's invocation left a transcript: its reasoning and every
-tool call, which fleetd deliberately does not store in the durable record but
-can retrieve on demand.
-
-```sh
-fleetd trace --invocation <invocation-id>
-fleetd transcript --invocation <invocation-id>
-```
+This is the part that makes reviewing here different. The author's invocation
+left a transcript: its reasoning and every tool call, which fleetd deliberately
+does not store in the durable record but can retrieve on demand. Your payload
+carries both commands verbatim as `trace_command` and `transcript_command`.
 
 Read it **before** the diff. A diff shows what was decided; the transcript shows
 what was considered and discarded. The failures worth catching here are the ones
@@ -31,7 +37,8 @@ findings with different fixes.
 
 ## Then review the change
 
-- Does `bin/ci` pass on the branch? Run it; do not take a claim on trust.
+- Does `bin/ci` pass in the review checkout? Run it; do not take a claim on
+  trust.
 - Does it hold the boundaries `tests/crate_boundaries.rs` encodes, or did it
   edit that test to make room for itself?
 - Is the commit sequence honest — does each commit stand on its own?
