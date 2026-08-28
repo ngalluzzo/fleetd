@@ -95,7 +95,12 @@ sync_review_checkout() {
 case "$seat" in
   author)
     recipient="$author"
-    sync_worktree "$HOME/repos/fleetd-seats/author" main
+    # A revision continues work in progress, so its worktree belongs on the
+    # branch that holds it. Syncing to `main` unconditionally threw away the
+    # author's own checkout and made it recover its branch by hand before it
+    # could apply a one-line fix.
+    author_branch="$(git -C "$root" branch --list "issue-$issue-*" --format '%(refname:short)' | head -1)"
+    sync_worktree "$HOME/repos/fleetd-seats/author" "${author_branch:-main}"
     # A review already in the channel means this dispatch is a revision, not a
     # first draft. Carry it: the author cannot address a review it cannot read,
     # and the channel is where the exchange already lives.
