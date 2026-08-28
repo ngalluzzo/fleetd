@@ -156,20 +156,29 @@ print(json.dumps({
     ;;
 esac
 
-payload="$(printf '%s' "$issue_json" | python3 -c "
-import sys, json
-issue = json.load(sys.stdin)
+# Both values travel through the environment rather than being interpolated
+# into a Python literal. A review is full of newlines, and a triple-quoted
+# literal unescapes the JSON's \n back into real line breaks, which then
+# breaks the JSON it came from.
+payload="$(
+  FLEETD_ISSUE_JSON="$issue_json" \
+  FLEETD_SUBJECT_JSON="$subject" \
+  FLEETD_REPO="$repo" \
+  FLEETD_INSTRUCTIONS="$instructions" \
+  python3 -c '
+import json, os
+issue = json.loads(os.environ["FLEETD_ISSUE_JSON"])
 print(json.dumps({
-    'repository': '$repo',
-    'issue': issue['number'],
-    'url': issue['url'],
-    'title': issue['title'],
-    'body': issue['body'] or '',
-    'labels': [l['name'] for l in issue['labels']],
-    'instructions': '$instructions',
-    'base_branch': 'main',
-    **json.loads('''$subject'''),
-}))")"
+    "repository": os.environ["FLEETD_REPO"],
+    "issue": issue["number"],
+    "url": issue["url"],
+    "title": issue["title"],
+    "body": issue["body"] or "",
+    "labels": [label["name"] for label in issue["labels"]],
+    "instructions": os.environ["FLEETD_INSTRUCTIONS"],
+    "base_branch": "main",
+    **json.loads(os.environ["FLEETD_SUBJECT_JSON"]),
+}))')"
 
 "$fleetd" --token-file .fleetd/planner.token message send \
   --channel "$channel" \
