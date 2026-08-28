@@ -13,10 +13,18 @@
 #
 #   bin/assign 42                 # dispatch issue 42 to the author seat
 #   bin/assign 42 reviewer        # hand the same issue to the reviewer
+#   bin/assign 42 reviewer 2      # dispatch it again, deliberately
+#
+# The idempotency key is the issue, the seat, and the attempt. Repeating a
+# dispatch by accident hands the seat one piece of work; repeating it with
+# changed content is a 409, because fleetd's idempotency is content-bound. A
+# genuine second attempt -- after fixing the seat, not after changing your mind
+# about the work -- is a new attempt number and says so.
 set -euo pipefail
 
-issue="${1:?usage: bin/assign <issue-number> [seat]}"
+issue="${1:?usage: bin/assign <issue-number> [seat] [attempt]}"
 seat="${2:-author}"
+attempt="${3:-1}"
 
 case "$seat" in
   author)   kind="work.request/v1"   ; instructions="docs/seats/author.md"   ;;
@@ -143,13 +151,11 @@ print(json.dumps({
     **json.loads('''$subject'''),
 }))")"
 
-# The idempotency key is the issue and the seat, so dispatching twice by
-# accident hands the seat one piece of work rather than two.
 "$fleetd" --token-file .fleetd/planner.token message send \
   --channel "$channel" \
   --to "$recipient" \
   --kind "$kind" \
-  --idempotency-key "assign/$issue/$seat" \
+  --idempotency-key "assign/$issue/$seat/$attempt" \
   --payload "$payload" > /dev/null
 
-echo "issue $issue -> $seat  channel=$channel" >&2
+echo "issue $issue -> $seat (attempt $attempt)  channel=$channel" >&2
