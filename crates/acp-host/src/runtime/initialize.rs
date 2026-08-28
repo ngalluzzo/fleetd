@@ -13,17 +13,23 @@ use super::{DriverError, MAX_FRAME_BYTES, RawInitializeRequest, RuntimeConfig, b
 
 pub(super) const ACP_SDK_VERSION: &str = "2.0.0";
 
-/// Which session-adoption methods the inner runtime advertised.
+/// What the inner runtime advertised that fleetd acts on.
 ///
-/// ACP requires `session/load` to replay the entire conversation as
-/// `session/update` notifications before it answers, and requires
-/// `session/resume` not to. Adoption wants the session back rather than its
-/// transcript, so it prefers `resume`; `load` remains the fallback for a
-/// runtime that predates it.
+/// Only the capabilities fleetd actually reads belong here. A capability fleetd
+/// records for an operator to look at is part of the identity it publishes;
+/// this is the narrower set the driver branches on, so anything in it has to be
+/// honoured or refused rather than hoped for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct AdoptionMethods {
     pub(super) load: bool,
     pub(super) resume: bool,
+    /// Whether the runtime accepts workspace roots beyond `cwd`.
+    ///
+    /// ACP makes `additionalDirectories` capability-gated: omitted and `null`
+    /// both mean unsupported. A runtime that does not advertise it drops the
+    /// field, so sending one anyway silently narrows a session an operator
+    /// declared wider.
+    pub(super) additional_directories: bool,
 }
 
 impl AdoptionMethods {
@@ -31,6 +37,10 @@ impl AdoptionMethods {
         Self {
             load: capabilities.load_session,
             resume: capabilities.session_capabilities.resume.is_some(),
+            additional_directories: capabilities
+                .session_capabilities
+                .additional_directories
+                .is_some(),
         }
     }
 
@@ -113,7 +123,8 @@ mod tests {
         assert_eq!(
             AdoptionMethods {
                 load: true,
-                resume: true
+                resume: true,
+                additional_directories: false,
             }
             .method(),
             Some("session/resume")
@@ -121,7 +132,8 @@ mod tests {
         assert_eq!(
             AdoptionMethods {
                 load: true,
-                resume: false
+                resume: false,
+                additional_directories: false,
             }
             .method(),
             Some("session/load")
@@ -129,7 +141,8 @@ mod tests {
         assert_eq!(
             AdoptionMethods {
                 load: false,
-                resume: true
+                resume: true,
+                additional_directories: false,
             }
             .method(),
             Some("session/resume")
@@ -137,7 +150,8 @@ mod tests {
         assert_eq!(
             AdoptionMethods {
                 load: false,
-                resume: false
+                resume: false,
+                additional_directories: false,
             }
             .method(),
             None,
@@ -173,5 +187,33 @@ mod tests {
             AdoptionMethods::from_capabilities(&fresh_only).method(),
             None
         );
+    }
+
+    /// ACP makes `additionalDirectories` capability-gated, and omitted and
+    /// `null` both mean unsupported. Reading either as support would send a
+    /// field the runtime drops, leaving an operator's declared workspace roots
+    /// silently absent from the session.
+    #[test]
+    fn additional_directories_support_is_advertised_or_absent() {
+        for (label, value) in [
+            ("omitted", json!({"sessionCapabilities": {}})),
+            (
+                "null",
+                json!({"sessionCapabilities": {"additionalDirectories": null}}),
+            ),
+            ("no session capabilities", json!({})),
+        ] {
+            let capabilities: AgentCapabilities =
+                serde_json::from_value(value).expect("capabilities parse");
+            assert!(
+                !AdoptionMethods::from_capabilities(&capabilities).additional_directories,
+                "{label} was read as support"
+            );
+        }
+
+        let supported: AgentCapabilities =
+            serde_json::from_value(json!({"sessionCapabilities": {"additionalDirectories": {}}}))
+                .expect("capabilities parse");
+        assert!(AdoptionMethods::from_capabilities(&supported).additional_directories);
     }
 }

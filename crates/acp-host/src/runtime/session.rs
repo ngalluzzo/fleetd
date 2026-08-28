@@ -28,6 +28,7 @@ pub(super) async fn open_session(
     adoption: AdoptionMethods,
 ) -> Result<OpenSessionResult, DriverError> {
     let mcp_servers = resolve_mcp_servers(&request)?;
+    require_supported_directories(&request, adoption)?;
     let directories = request
         .additional_directories
         .iter()
@@ -247,6 +248,29 @@ pub(super) async fn close_session(
     })
 }
 
+/// Refuses a session whose declared workspace roots the runtime cannot honour.
+///
+/// ACP gates `additionalDirectories` on a capability, and omitted and `null`
+/// both mean unsupported. A runtime that has not advertised it drops the field,
+/// so sending one anyway narrows a session an operator declared wider -- and it
+/// fails late and illegibly: reads and commands outside `cwd` request
+/// permission, the controller refuses every request, and the turn ends with
+/// nothing in the record naming the cause. Refuse while the operator is still
+/// looking at the seat they just configured.
+fn require_supported_directories(
+    request: &OpenSession,
+    adoption: AdoptionMethods,
+) -> Result<(), DriverError> {
+    if request.additional_directories.is_empty() || adoption.additional_directories {
+        return Ok(());
+    }
+    Err(DriverError::Protocol(format!(
+        "runtime does not advertise sessionCapabilities.additionalDirectories, so it cannot \
+         honour the {} additional workspace root(s) this seat declares",
+        request.additional_directories.len()
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use fleetd_proto::harness_acp::{
@@ -254,7 +278,35 @@ mod tests {
         ResolvedMcpHttpHeader,
     };
 
-    use super::resolve_mcp_servers;
+    use super::{AdoptionMethods, require_supported_directories, resolve_mcp_servers};
+
+    fn adoption(additional_directories: bool) -> AdoptionMethods {
+        AdoptionMethods {
+            load: true,
+            resume: true,
+            additional_directories,
+        }
+    }
+
+    /// A seat that declares workspace roots a runtime cannot honour must fail at
+    /// session open. Silently dropping them defers the failure to a permission
+    /// refusal mid-turn, which the durable record cannot explain.
+    #[test]
+    fn declared_workspace_roots_a_runtime_cannot_honour_are_refused() {
+        let mut request = open_request();
+        request.additional_directories = vec!["/srv/other".to_owned()];
+        assert!(require_supported_directories(&request, adoption(false)).is_err());
+        assert!(require_supported_directories(&request, adoption(true)).is_ok());
+    }
+
+    /// Declaring none is not a request for the capability, so a runtime without
+    /// it stays usable for every seat that never asked.
+    #[test]
+    fn a_seat_declaring_no_extra_roots_needs_no_capability() {
+        let request = open_request();
+        assert!(request.additional_directories.is_empty());
+        assert!(require_supported_directories(&request, adoption(false)).is_ok());
+    }
 
     #[test]
     fn mcp_resolution_requires_an_exact_requested_loopback_endpoint() {
