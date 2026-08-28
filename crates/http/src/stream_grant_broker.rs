@@ -415,6 +415,7 @@ mod tests {
 
     fn authorization(principal: &Principal, channel: &str, after: i64) -> AuthorizedChannelStream {
         AuthorizedChannelStream::from_principal(channel.to_owned(), after, principal)
+            .expect("an agent or operator principal authorizes a stream")
     }
 
     fn limits(

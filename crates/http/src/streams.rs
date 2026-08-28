@@ -76,7 +76,7 @@ async fn issue_browser_stream_grant(
         .list_messages(&channel_id, input.after.get(), 1)
         .await?;
     let authorization =
-        AuthorizedChannelStream::from_principal(channel_id, input.after.get(), &principal);
+        AuthorizedChannelStream::from_principal(channel_id, input.after.get(), &principal)?;
     let issued = state
         .stream_grants
         .issue(authorization, input.protocol.as_str())
@@ -166,7 +166,7 @@ async fn stream(
         .await?;
     let receiver = state.messages.subscribe();
     let authorization =
-        AuthorizedChannelStream::from_principal(channel_id, query.after, &principal);
+        AuthorizedChannelStream::from_principal(channel_id, query.after, &principal)?;
     debug_assert_eq!(authorization.credential_id(), principal.credential_id());
     Ok(upgrade
         .on_upgrade(move |socket| {

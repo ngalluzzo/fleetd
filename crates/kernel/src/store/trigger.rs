@@ -2,8 +2,11 @@
 //!
 //! What a trigger may do is stored here rather than supplied when it fires, so
 //! "narrow" is a property of the row instead of a promise the caller keeps.
-//! Composition that turns a firing into a message lives above the kernel: this
-//! module owns the row and its transitions, and nothing else.
+//!
+//! Reads are `Store` methods. Writes are transaction-scoped functions instead,
+//! because registering a trigger and issuing the credential that lets it fire
+//! are one act: `auth::trigger` composes them, the same way it composes an agent
+//! with its first credential.
 
 use sqlx::Row;
 use uuid::Uuid;
@@ -11,7 +14,7 @@ use uuid::Uuid;
 use crate::error::FleetError;
 use fleetd_proto::trigger::{RegisterTrigger, Trigger, TriggerState};
 
-use super::{Store, map_unique_conflict, now_ms, validate_name};
+use super::{Store, map_unique_conflict, validate_name};
 
 /// A trigger declaring nothing could create nothing, and one declaring the world
 /// is not narrow. Both are configuration mistakes worth refusing at the door.
@@ -19,51 +22,6 @@ const MAX_ACCEPTED_KINDS: usize = 32;
 const MAX_KIND_BYTES: usize = 256;
 
 impl Store {
-    /// Registers a trigger against an existing channel and sender.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an empty or duplicate name, an empty, oversized, or
-    /// duplicated kind set, an unknown channel or sender, or a persistence
-    /// failure.
-    pub async fn register_trigger(&self, input: RegisterTrigger) -> Result<Trigger, FleetError> {
-        validate_name("trigger", &input.name)?;
-        let accepted_kinds = normalize_kinds(input.accepted_kinds)?;
-        let now = now_ms();
-        let trigger = Trigger {
-            id: Uuid::new_v4().to_string(),
-            name: input.name,
-            channel_id: input.channel_id,
-            sender_id: input.sender_id,
-            accepted_kinds,
-            state: TriggerState::Active,
-            created_at_ms: now,
-            updated_at_ms: now,
-            last_occurrence_id: None,
-            last_fired_at_ms: None,
-            accepted_occurrences: 0,
-            retired_at_ms: None,
-            retired_reason: None,
-        };
-        let kinds_json = serde_json::to_string(&trigger.accepted_kinds)?;
-        let result = sqlx::query(
-            "INSERT INTO triggers (id, name, channel_id, sender_id, accepted_kinds_json, \
-             state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&trigger.id)
-        .bind(&trigger.name)
-        .bind(&trigger.channel_id)
-        .bind(&trigger.sender_id)
-        .bind(kinds_json)
-        .bind(trigger.state.as_str())
-        .bind(trigger.created_at_ms)
-        .bind(trigger.updated_at_ms)
-        .execute(&self.pool)
-        .await;
-        map_unique_conflict(result, "trigger name")?;
-        Ok(trigger)
-    }
-
     /// Reads one registration by id.
     ///
     /// # Errors
@@ -114,40 +72,81 @@ impl Store {
         };
         rows.iter().map(trigger_from_row).collect()
     }
-
-    /// Retires a trigger so it may no longer create work.
-    ///
-    /// Retiring is idempotent: a second retirement of the same trigger reports
-    /// the row already at rest rather than failing, because an operator
-    /// stopping something twice has not made a mistake.
-    ///
-    /// # Errors
-    ///
-    /// Returns not found for an unknown trigger, or a persistence failure.
-    pub async fn retire_trigger(
-        &self,
-        trigger_id: &str,
-        reason: &str,
-    ) -> Result<Trigger, FleetError> {
-        let now = now_ms();
-        sqlx::query(
-            "UPDATE triggers SET state = ?, updated_at_ms = ?, retired_at_ms = ?, \
-             retired_reason = ? WHERE id = ? AND state = ?",
-        )
-        .bind(TriggerState::Retired.as_str())
-        .bind(now)
-        .bind(now)
-        .bind(reason)
-        .bind(trigger_id)
-        .bind(TriggerState::Active.as_str())
-        .execute(&self.pool)
-        .await?;
-        self.get_trigger(trigger_id).await
-    }
 }
 
-/// Sorts and deduplicates the declared set, and refuses the shapes that would
+/// Builds the registration a caller asked for, refusing the shapes that would
 /// make "narrow" meaningless.
+///
+/// Separate from persisting it so the whole declaration is checked before a
+/// transaction is opened around it.
+pub(crate) fn new_trigger(input: RegisterTrigger, now_ms: i64) -> Result<Trigger, FleetError> {
+    validate_name("trigger", &input.name)?;
+    Ok(Trigger {
+        id: Uuid::new_v4().to_string(),
+        name: input.name,
+        channel_id: input.channel_id,
+        sender_id: input.sender_id,
+        accepted_kinds: normalize_kinds(input.accepted_kinds)?,
+        state: TriggerState::Active,
+        created_at_ms: now_ms,
+        updated_at_ms: now_ms,
+        last_occurrence_id: None,
+        last_fired_at_ms: None,
+        accepted_occurrences: 0,
+        retired_at_ms: None,
+        retired_reason: None,
+    })
+}
+
+pub(crate) async fn insert_trigger(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    trigger: &Trigger,
+) -> Result<(), FleetError> {
+    let kinds_json = serde_json::to_string(&trigger.accepted_kinds)?;
+    let result = sqlx::query(
+        "INSERT INTO triggers (id, name, channel_id, sender_id, accepted_kinds_json, \
+         state, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&trigger.id)
+    .bind(&trigger.name)
+    .bind(&trigger.channel_id)
+    .bind(&trigger.sender_id)
+    .bind(kinds_json)
+    .bind(trigger.state.as_str())
+    .bind(trigger.created_at_ms)
+    .bind(trigger.updated_at_ms)
+    .execute(&mut **transaction)
+    .await;
+    map_unique_conflict(result, "trigger name")
+}
+
+/// Moves an active registration to retired, and reports whether it moved.
+///
+/// A registration already at rest is left exactly as it was, reason included:
+/// the recorded reason is the one that describes why it stopped, and a second
+/// operator stopping it again has not made a mistake.
+pub(crate) async fn retire_trigger_row(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    trigger_id: &str,
+    reason: &str,
+    now_ms: i64,
+) -> Result<bool, FleetError> {
+    let result = sqlx::query(
+        "UPDATE triggers SET state = ?, updated_at_ms = ?, retired_at_ms = ?, \
+         retired_reason = ? WHERE id = ? AND state = ?",
+    )
+    .bind(TriggerState::Retired.as_str())
+    .bind(now_ms)
+    .bind(now_ms)
+    .bind(reason)
+    .bind(trigger_id)
+    .bind(TriggerState::Active.as_str())
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Sorts and deduplicates the declared set.
 fn normalize_kinds(kinds: Vec<String>) -> Result<Vec<String>, FleetError> {
     if kinds.is_empty() {
         return Err(FleetError::Invalid(

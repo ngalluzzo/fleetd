@@ -14,6 +14,7 @@ use fleetd_proto::model::IssuedCredential;
 
 pub(super) const OPERATOR_TOKEN_PREFIX: &str = "fl_op_";
 pub(super) const AGENT_TOKEN_PREFIX: &str = "fl_ag_";
+pub(super) const TRIGGER_TOKEN_PREFIX: &str = "fl_tr_";
 pub(super) const TOKEN_BYTES: usize = 32;
 pub(super) const MAX_TOKEN_LENGTH: usize = 128;
 

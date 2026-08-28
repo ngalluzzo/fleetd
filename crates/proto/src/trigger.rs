@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
+use crate::model::IssuedCredential;
+
 /// Whether a trigger may still create work.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -87,6 +89,17 @@ pub struct Trigger {
     pub accepted_occurrences: u64,
     pub retired_at_ms: Option<i64>,
     pub retired_reason: Option<String>,
+}
+
+/// A trigger registration and its one-time credential response.
+///
+/// Registering and being able to fire are one act. A trigger holding no
+/// credential is inert, and a credential naming a trigger that does not exist is
+/// authority over nothing, so neither is a state fleetd will hand back.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct RegisteredTrigger {
+    pub trigger: Trigger,
+    pub credential: IssuedCredential,
 }
 
 /// What a trigger supplies when it fires.

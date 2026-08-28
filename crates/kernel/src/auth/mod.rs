@@ -14,6 +14,7 @@ mod agent;
 mod operator;
 mod principal;
 mod token;
+mod trigger;
 
 use std::fmt;
 
@@ -60,7 +61,7 @@ impl AuthService {
         let digest = token_digest(token);
         let row = sqlx::query(
             r"
-            SELECT id, principal_kind, agent_id
+            SELECT id, principal_kind, agent_id, trigger_id
             FROM auth_credentials
             WHERE token_digest = ? AND revoked_at_ms IS NULL
             ",
@@ -70,9 +71,7 @@ impl AuthService {
         .await?
         .ok_or(FleetError::Unauthorized)?;
         let credential_id: String = row.try_get("id")?;
-        let principal_kind: String = row.try_get("principal_kind")?;
-        let agent_id: Option<String> = row.try_get("agent_id")?;
-        principal_from_row(&credential_id, &principal_kind, agent_id)
+        principal_from_row(&credential_id, &row)
     }
 
     /// Revalidates an exact credential-bound principal without accepting or
@@ -84,7 +83,7 @@ impl AuthService {
     pub async fn revalidate_principal(&self, expected: &Principal) -> Result<bool, FleetError> {
         let row = sqlx::query(
             r"
-            SELECT principal_kind, agent_id
+            SELECT principal_kind, agent_id, trigger_id
             FROM auth_credentials
             WHERE id = ? AND revoked_at_ms IS NULL
             ",
@@ -95,9 +94,7 @@ impl AuthService {
         let Some(row) = row else {
             return Ok(false);
         };
-        let principal_kind: String = row.try_get("principal_kind")?;
-        let agent_id: Option<String> = row.try_get("agent_id")?;
-        let actual = principal_from_row(expected.credential_id(), &principal_kind, agent_id)?;
+        let actual = principal_from_row(expected.credential_id(), &row)?;
         Ok(&actual == expected)
     }
 }
@@ -110,16 +107,22 @@ impl AuthService {
 /// of the two.
 fn principal_from_row(
     credential_id: &str,
-    principal_kind: &str,
-    agent_id: Option<String>,
+    row: &sqlx::sqlite::SqliteRow,
 ) -> Result<Principal, FleetError> {
-    match (principal_kind, agent_id) {
-        ("operator", None) => Ok(Principal::Operator {
+    let principal_kind: String = row.try_get("principal_kind")?;
+    let agent_id: Option<String> = row.try_get("agent_id")?;
+    let trigger_id: Option<String> = row.try_get("trigger_id")?;
+    match (principal_kind.as_str(), agent_id, trigger_id) {
+        ("operator", None, None) => Ok(Principal::Operator {
             credential_id: credential_id.to_owned(),
         }),
-        ("agent", Some(agent_id)) => Ok(Principal::Agent {
+        ("agent", Some(agent_id), None) => Ok(Principal::Agent {
             credential_id: credential_id.to_owned(),
             agent_id,
+        }),
+        ("trigger", None, Some(trigger_id)) => Ok(Principal::Trigger {
+            credential_id: credential_id.to_owned(),
+            trigger_id,
         }),
         _ => Err(FleetError::Credential(
             "credential principal invariant is invalid".to_owned(),

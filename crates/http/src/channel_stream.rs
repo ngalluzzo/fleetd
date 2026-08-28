@@ -15,6 +15,7 @@ use crate::{
 };
 use fleetd_kernel::{
     auth::{AuthService, Principal},
+    error::FleetError,
     message_commit_hint::MessageCommitWake,
     store::Store,
 };
@@ -42,19 +43,34 @@ pub(crate) struct AuthorizedChannelStream {
 }
 
 impl AuthorizedChannelStream {
-    pub(crate) fn from_principal(channel_id: String, after: i64, principal: &Principal) -> Self {
+    /// Narrows an authenticated principal to one that may read a stream.
+    ///
+    /// A trigger creates work and never observes it, so it has no stream to be
+    /// authorized for. `require_channel_access` already refuses one; this
+    /// refuses it again at the type that would carry the authority, so the rule
+    /// does not depend on every future caller remembering to check first.
+    pub(crate) fn from_principal(
+        channel_id: String,
+        after: i64,
+        principal: &Principal,
+    ) -> Result<Self, FleetError> {
         let stream_principal = match principal {
             Principal::Operator { .. } => AuthorizedStreamPrincipal::Operator,
             Principal::Agent { agent_id, .. } => AuthorizedStreamPrincipal::Agent {
                 agent_id: agent_id.clone(),
             },
+            Principal::Trigger { .. } => {
+                return Err(FleetError::Forbidden(
+                    "a trigger credential cannot read a channel stream".to_owned(),
+                ));
+            }
         };
-        Self {
+        Ok(Self {
             channel_id,
             after,
             credential_id: principal.credential_id().to_owned(),
             principal: stream_principal,
-        }
+        })
     }
 
     pub(crate) fn channel_id(&self) -> &str {
