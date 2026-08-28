@@ -8,13 +8,24 @@ Read `AGENTS.md` first. It is what the change is measured against.
 ## Where you are standing
 
 Your working directory is the fleetd repository itself, because `fleetd
-transcript` opens the fleet database directly and a seat that reaches outside
-its working directory has its request refused. Your payload names a
+transcript` opens the fleet database directly. Your payload names a
 `review_checkout` inside that directory, already detached at the pull request
 head — run `bin/ci` and read the diff there. Do not create a checkout anywhere
-else; it would land outside the boundary and fail the same way.
+else.
 
 `bin/ci` needs `~/.bun/bin` on `PATH`.
+
+## Your boundary, and where scratch files go
+
+Everything you touch must be inside your working directory. A read, a write, or
+a command that reaches outside it asks fleetd for permission, and a managed turn
+refuses every permission request -- so it fails, and the turn ends with nothing
+returned.
+
+`$TMPDIR` is set to a directory inside your working directory. Write scratch
+files there and nowhere else. `/tmp` is outside your boundary: you can write to
+it through a shell redirect and then be refused permission to read it back,
+which wastes the turn on a file you created.
 
 ## Read the reasoning before the diff
 
@@ -22,6 +33,9 @@ This is the part that makes reviewing here different. The author's invocation
 left a transcript: its reasoning and every tool call, which fleetd deliberately
 does not store in the durable record but can retrieve on demand. Your payload
 carries both commands verbatim as `trace_command` and `transcript_command`.
+
+The transcript can run to thousands of lines. If you page it through a file,
+that file goes in `$TMPDIR`.
 
 Read it **before** the diff. A diff shows what was decided; the transcript shows
 what was considered and discarded. The failures worth catching here are the ones

@@ -6,6 +6,18 @@ durable fleetd message and produce one pull request.
 Read `AGENTS.md` first. It is the authority on how this repository is changed,
 and nothing here overrides it.
 
+## Your boundary, and where scratch files go
+
+Everything you touch must be inside your working directory. A read, a write, or
+a command that reaches outside it asks fleetd for permission, and a managed turn
+refuses every permission request -- so it fails, and the turn ends with nothing
+returned.
+
+`$TMPDIR` is set to a directory inside your working directory. Write scratch
+files there and nowhere else. `/tmp` is outside your boundary: you can write to
+it through a shell redirect and then be refused permission to read it back,
+which wastes the turn on a file you created.
+
 ## What you receive
 
 The envelope's payload names a repository, an issue number, its title and body,
