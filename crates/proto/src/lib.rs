@@ -13,3 +13,4 @@ pub mod model;
 pub mod operations;
 pub mod plugin;
 pub mod session;
+pub mod trigger;
