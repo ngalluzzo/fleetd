@@ -6,17 +6,32 @@
 //! work. A profile that named only the adapter would call two different Claude
 //! Code versions the same profile and resume a native session across them.
 //!
-//! Unqualified: no turn has run through this plugin against real Claude Code.
-//! The adapter advertises an ACP auth method of `claude-login`, and Anthropic
-//! documents third-party apps authenticating through a Claude subscription, so
-//! the operator's own `claude` login is expected to be what authorises a turn.
-//! That could not be confirmed here, because Claude Code refuses to launch
-//! inside another Claude Code session and the qualification attempt ran inside
-//! one. An operator supplying `ANTHROPIC_API_KEY` is the adapter's other
-//! documented path, and this plugin deliberately does not carry it: a provider
-//! credential in worker desired state is what every other harness plugin here
-//! refuses, and opening that is a decision about the plugin contract rather
-//! than about this integration.
+//! Still unqualified -- no turn has run through the ACP adapter -- but the two
+//! things previously believed to block that were measured and are not what they
+//! were thought to be.
+//!
+//! Claude Code's refusal to run inside another Claude Code session is driven by
+//! `CLAUDECODE` in the environment. This plugin inherits nothing, so the
+//! variable is already absent and the refusal never fires. Measured directly:
+//! a `claude -p` run with the full environment minus `CLAUDECODE` succeeds,
+//! and the earlier conclusion that this integration could not be exercised from
+//! inside a session was wrong.
+//!
+//! What actually blocked authentication was this plugin's own environment.
+//! Claude Code stores its subscription credential in the macOS Keychain and
+//! needs `USER` and `LOGNAME` to reach it; without them it reports
+//! "Not logged in" however complete the rest of the environment is. And setting
+//! `CLAUDE_CONFIG_DIR` moves credential lookup to that directory, so pointing it
+//! at the operator's ordinary config directory -- which holds no credential
+//! file, because the credential is in the Keychain -- breaks a login that works
+//! when the variable is simply absent. It is therefore optional, and supplying
+//! it means choosing file-based credentials in that directory on purpose.
+//!
+//! An operator supplying `ANTHROPIC_API_KEY` is the adapter's other documented
+//! path, and this plugin deliberately does not carry it: a provider credential
+//! in worker desired state is what every other harness plugin here refuses, and
+//! opening that is a decision about the plugin contract rather than about this
+//! integration.
 
 use std::path::{Path, PathBuf};
 
@@ -43,15 +58,24 @@ const ADAPTER_AGENT_NAME: &str = "@zed-industries/claude-code-acp";
 /// `CLAUDE_CODE_EXECUTABLE` is what makes the underlying binary exact instead of
 /// whatever `PATH` happens to resolve. `IS_SANDBOX` is deliberately absent: it
 /// changes the harness's own safety behaviour, which is not this plugin's to
-/// weaken.
+/// weaken. `CLAUDECODE` is absent for a different reason -- it is what makes
+/// Claude Code refuse to run inside another Claude Code session, and inheriting
+/// nothing is what keeps a seat launchable from an operator's own session.
+///
+/// `USER` and `LOGNAME` are here because Claude Code cannot reach its Keychain
+/// credential without them. That is the narrowest addition that authenticates,
+/// and it is identity rather than authority: neither carries a secret, and the
+/// credential itself never passes through fleetd.
 const ALLOWED_ENVIRONMENT: &[&str] = &[
     "CLAUDE_CODE_EXECUTABLE",
     "CLAUDE_CONFIG_DIR",
     "HOME",
+    "LOGNAME",
     "MAX_THINKING_TOKENS",
     "PATH",
     "TERM",
     "TMPDIR",
+    "USER",
 ];
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -63,9 +87,18 @@ struct ClaudeConfig {
     expected_version: String,
     /// The Claude Code binary the adapter drives.
     claude_executable: PathBuf,
-    /// Claude Code's own configuration directory, holding its credentials.
-    /// Fleetd never reads it and never places anything in it.
-    config_dir: PathBuf,
+    /// The account Claude Code authenticates as. Supplied rather than inherited,
+    /// like every other value here, and required because Claude Code cannot read
+    /// its Keychain credential without it.
+    user: String,
+    /// Claude Code's own configuration directory. Optional, and omitting it is
+    /// the normal case: setting it moves credential lookup into that directory,
+    /// so naming the operator's ordinary config directory breaks a Keychain
+    /// login that works when the variable is absent. Supply it only to choose
+    /// file-based credentials on purpose. Fleetd never reads it and never places
+    /// anything in it.
+    #[serde(default)]
+    config_dir: Option<PathBuf>,
     home: PathBuf,
     path: String,
     #[serde(default)]
@@ -107,10 +140,14 @@ fn prepare_config(value: Value) -> Result<DriverConfig, DriverError> {
         "CLAUDE_CODE_EXECUTABLE".to_owned(),
         claude.to_string_lossy().into_owned(),
     );
-    environment.insert(
-        "CLAUDE_CONFIG_DIR".to_owned(),
-        config.config_dir.to_string_lossy().into_owned(),
-    );
+    environment.insert("USER".to_owned(), config.user.clone());
+    environment.insert("LOGNAME".to_owned(), config.user);
+    if let Some(config_dir) = &config.config_dir {
+        environment.insert(
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            config_dir.to_string_lossy().into_owned(),
+        );
+    }
     if let Some(budget) = config.max_thinking_tokens {
         environment.insert("MAX_THINKING_TOKENS".to_owned(), budget.to_string());
     }
@@ -131,8 +168,10 @@ fn validate_config(config: &ClaudeConfig) -> Result<(), DriverError> {
     CHECKS.absolute("adapter executable", &config.executable)?;
     CHECKS.absolute("claude_executable", &config.claude_executable)?;
     CHECKS.non_empty("expected_version", &config.expected_version)?;
-    for (label, directory) in [("home", &config.home), ("config_dir", &config.config_dir)] {
-        CHECKS.directory(label, directory)?;
+    CHECKS.non_empty("user", &config.user)?;
+    CHECKS.directory("home", &config.home)?;
+    if let Some(config_dir) = &config.config_dir {
+        CHECKS.directory("config_dir", config_dir)?;
     }
     CHECKS.non_empty("PATH", &config.path)?;
     if let Some(tmpdir) = &config.tmpdir {
@@ -160,6 +199,7 @@ fn profile_digest(
         "expected_version": config.expected_version,
         "claude_executable": claude,
         "claude_executable_digest": executable_digest(claude)?,
+        "user": config.user,
         "config_dir": config.config_dir,
         "home": config.home,
         "path": config.path,
@@ -182,7 +222,7 @@ mod tests {
             "executable": env::current_exe().expect("test executable"),
             "expected_version": "0.16.2",
             "claude_executable": env::current_exe().expect("test executable"),
-            "config_dir": env::current_dir().expect("current directory"),
+            "user": "operator",
             "home": env::current_dir().expect("current directory"),
             "path": "/usr/bin:/bin",
             "term": "xterm-256color",
@@ -204,8 +244,15 @@ mod tests {
                 .expect("test executable")
                 .to_string_lossy()
         );
+        // Claude Code cannot reach its Keychain credential without these, and
+        // reports "Not logged in" however complete the rest of the environment
+        // is. Measured, not assumed.
+        assert_eq!(prepared.runtime.environment["USER"], "operator");
+        assert_eq!(prepared.runtime.environment["LOGNAME"], "operator");
+        // Absent unless an operator asked for it. Setting it moves credential
+        // lookup into that directory and breaks a working Keychain login.
         assert!(
-            prepared
+            !prepared
                 .runtime
                 .environment
                 .contains_key("CLAUDE_CONFIG_DIR")
@@ -215,6 +262,40 @@ mod tests {
                 .runtime
                 .environment
                 .contains_key("MAX_THINKING_TOKENS")
+        );
+        // Inheriting this is what makes Claude Code refuse to run inside
+        // another Claude Code session.
+        assert!(!prepared.runtime.environment.contains_key("CLAUDECODE"));
+    }
+
+    /// A config directory is a deliberate choice of file-based credentials, so
+    /// it reaches the harness when supplied and rotates the profile.
+    #[test]
+    fn a_supplied_config_directory_is_passed_and_rotates_the_profile() {
+        let baseline = prepare_config(value()).expect("prepare").profile_digest;
+        let mut with_dir = value();
+        with_dir["config_dir"] = json!(env::current_dir().expect("current directory"));
+        let prepared = prepare_config(with_dir).expect("prepare");
+        assert!(
+            prepared
+                .runtime
+                .environment
+                .contains_key("CLAUDE_CONFIG_DIR")
+        );
+        assert_ne!(prepared.profile_digest, baseline);
+    }
+
+    /// The account is part of what makes a launch profile distinct: two seats
+    /// authenticating as different accounts are not the same profile, and a
+    /// native session must not resume across them.
+    #[test]
+    fn the_account_participates_in_the_profile() {
+        let baseline = prepare_config(value()).expect("prepare").profile_digest;
+        let mut other = value();
+        other["user"] = json!("someone-else");
+        assert_ne!(
+            prepare_config(other).expect("prepare").profile_digest,
+            baseline
         );
     }
 
