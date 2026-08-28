@@ -74,9 +74,13 @@ out of order produces artifacts that disagree.
 ## One file per concept
 
 `crates/kernel/src/store/` is a directory. Each concept the substrate owns —
-agents, channels, membership, messages — has its own source and its own
-`impl Store` block. The pool, the migration set, and the few genuinely shared
-helpers stay in `mod.rs`.
+agents, channels, membership, messages, triggers — has its own source and its
+own `impl Store` block. The pool, the migration set, and the few genuinely
+shared helpers stay in `mod.rs`.
+
+`crates/kernel/src/auth/` is arranged the same way and along a different seam:
+verification is one path, so it stays in `mod.rs`, while each authority
+category -- operator, agent, trigger -- owns how its credential comes to exist.
 
 Those blocks reach `Store`'s private fields directly because they are
 descendants of the module that defines it, which is what makes the shape free:

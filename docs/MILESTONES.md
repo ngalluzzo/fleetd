@@ -54,6 +54,22 @@
 - Publish reproducible plugin qualification records and launch-profile digests.
 - Permit external lift/bridge/lower packages to consume public Fleetd artifacts
   without adding their semantic systems to this repository.
+- [x] Name the third authority category. An inbound trigger creates work under a
+  registration that fixes its channel and its message kinds, with idempotency
+  derived from the trigger and its occurrence, so a recurring job, webhook
+  receiver, or file watcher stops needing a full bearer token to append anything
+  anywhere.
+- [ ] Supervise a trigger the way a plugin generation is supervised: health
+  while it runs and restart with bounded backoff. Today a trigger is any process
+  holding its credential, so a trigger that stopped firing on Tuesday is
+  readable but nothing brings it back.
+- [ ] A contributed scheduler, which is what settles whether a trigger's
+  lifecycle really is a plugin generation's shape. Fleetd parses no cron
+  expression and ships no calendar.
+- [ ] What bounds a session lane a trigger feeds forever. One durable binding
+  serves a channel, so nightly work accumulates in a native session that is
+  never rotated, and transcript retrieval has only been measured against
+  sessions holding one or two invocations.
 
 ## M4 — Operator surface
 

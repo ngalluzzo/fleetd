@@ -62,11 +62,20 @@ The kernel owns six concepts:
 - **Membership:** permission to send or receive within a channel.
 - **Message:** an immutable envelope in a globally ordered sequence.
 - **Delivery:** a recipient snapshot and its durable processing state.
-- **Principal:** an operator or one authenticated agent identity.
+- **Principal:** an operator, one authenticated agent identity, or one
+  registered inbound trigger.
+
+A trigger is a shape of principal rather than a seventh concept. Its
+registration is durable because that is what makes its authority narrow --
+[ADR 0031](adr/0031-inbound-triggers.md) fixes the channel it may reach and the
+kinds it may create when it is registered, not when it fires -- but everything
+it does still arrives as an ordinary message from an ordinary agent.
 
 The kernel does not know what Codex, OpenCode, DSH, a task, a pull request, a
-workflow, or a semantic capability is. Adapters select exact message kinds but
-the kernel preserves every kind and payload opaquely.
+workflow, or a semantic capability is. It does not know what makes a trigger
+fire either: a cron expression, a webhook body, and a filesystem event are all
+opaque. Adapters select exact message kinds but the kernel preserves every kind
+and payload opaquely.
 
 `fleetd-kernel` is that boundary as a crate. It owns the authoritative SQLite
 store, its migrations, and every transition its own rows can make, and it is

@@ -9,7 +9,10 @@ promised, and every command they name is expected to exist.
 
 - Keep the kernel limited to the six concepts its crate doc names: agents,
   channels, membership, immutable messages, deliveries, and principals. Harness
-  and workflow semantics belong in adapters or versioned contracts.
+  and workflow semantics belong in adapters or versioned contracts. An inbound
+  trigger is a shape of principal, not a seventh concept: its registration is
+  durable so its authority can be narrow, and everything it does still arrives
+  as an ordinary message.
 - Preserve unknown message kinds and JSON payload fields.
 - Treat SQLite as authoritative; in-memory delivery may be lost and must always
   be recoverable through cursor replay or the durable inbox.

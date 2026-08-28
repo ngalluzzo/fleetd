@@ -44,13 +44,17 @@ Each item below is exercised by a reproducible record, not a design note.
 - **Optional OpenTelemetry egress** for the in-flight reasoning and tool calls
   the durable record deliberately does not keep —
   [ADR 0028](docs/adr/0028-opentelemetry-is-a-projection.md).
+- **Inbound triggers** so a recurring job, webhook receiver, or file watcher
+  creates work under a registration that fixes its channel and its message
+  kinds, with double-fire absorbed by a key fleetd derives rather than one the
+  trigger has to invent — [ADR 0031](docs/adr/0031-inbound-triggers.md).
 - **Three surfaces over one execution layer** — HTTP, MCP, and the CLI as
   peers, plus a served browser presentation and a native desktop host, from one
   generated contract that CI verifies against its sources.
 - **Architecture held by tests.** `tests/crate_boundaries.rs` fails the build if
   the kernel names a layer above it or `execution` acquires a transport.
 
-Twenty-four [ADRs](docs/adr/) record what was decided and what it cost; fifteen
+Twenty-seven [ADRs](docs/adr/) record what was decided and what it cost; twenty
 [qualification records](docs/qualification/) carry exact message identifiers,
 real model routes, and content hashes. What is deliberately *not* built yet —
 remote workers, the full-night soak, a second qualified harness — is listed in
@@ -275,13 +279,15 @@ of its daemon. See [the integration boundary](docs/INTEGRATION_BOUNDARY.md).
 ## Security boundary
 
 Every versioned HTTP operation except the dedicated browser WebSocket upgrade
-requires an operator or agent-bound bearer token. That upgrade accepts only the
-configured same-origin loopback surface and releases no application data until
-it redeems a bearer-authenticated, single-use channel grant. Administrative
-actions require the operator. Agent delivery and invocation operations are
-bound to the authenticated agent; sender attribution is always
-constructed server-side. Raw tokens are returned once and SQLite stores only
-cryptographic digests.
+requires an operator, agent-bound, or trigger-bound bearer token. That upgrade
+accepts only the configured same-origin loopback surface and releases no
+application data until it redeems a bearer-authenticated, single-use channel
+grant. Administrative actions require the operator. Agent delivery and
+invocation operations are bound to the authenticated agent, and a trigger
+credential reaches exactly one operation: reporting an occurrence for the
+trigger it names, in the channel and the message kinds its registration
+declared. Sender attribution is always constructed server-side. Raw tokens are
+returned once and SQLite stores only cryptographic digests.
 
 Listeners remain loopback-only. Authentication is not encrypted transport, so
 remote workers remain unsupported until TLS and enrollment are designed.

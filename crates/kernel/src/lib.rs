@@ -4,7 +4,8 @@
 //! bounded conversation, **membership** is permission to send or receive in
 //! one, a **message** is an immutable envelope in a globally ordered sequence,
 //! a **delivery** is a recipient snapshot and its durable processing state, and
-//! a **principal** is an operator or one authenticated agent identity.
+//! a **principal** is an operator, one authenticated agent identity, or one
+//! registered inbound trigger.
 //!
 //! The kernel does not know what a harness, a task, a workflow, or a semantic
 //! capability is. It owns the authoritative `SQLite` store and every transition

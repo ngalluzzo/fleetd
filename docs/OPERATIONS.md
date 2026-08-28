@@ -99,6 +99,69 @@ A runtime that cannot replay says so rather than returning an empty transcript,
 and an unknown session names the agent whose bindings to check. See
 [ADR 0029](adr/0029-harness-transcript-retrieval.md).
 
+## Inbound triggers
+
+A trigger is a thing that creates work with no human present: a recurring job, a
+webhook receiver, a file watcher. Registering one declares the channel it may
+reach, the agent its messages are attributed to, and the exact kinds it may
+create, and returns its credential exactly once.
+
+```sh
+fleetd trigger add --name nightly-sweep \
+  --channel CHANNEL_ID --sender AGENT_ID \
+  --kind task.request --credential-file .fleetd/nightly.token
+```
+
+The declared kinds are the whole of its authority over content, and they are
+fixed at registration: changing what a trigger may create means registering a
+different trigger. The credential file is owner-only, and the token is never
+recoverable afterwards -- `fleetd trigger rotate-credential` issues a
+replacement and revokes the old one immediately.
+
+Firing uses the trigger's own credential, not the operator's:
+
+```sh
+fleetd --token-file .fleetd/nightly.token trigger fire \
+  --trigger TRIGGER_ID --occurrence 2026-08-27T02:00 \
+  --recipient AGENT_ID --kind task.request --payload '{"sweep":"nightly"}'
+```
+
+`--occurrence` names the firing, and fleetd derives the durable idempotency key
+from the trigger and that name together. A scheduler that fires twice -- an
+overlapping run, a machine waking, a retry after a lost response -- creates work
+once, and the response's `created` says which call made it. This is the reason
+to register a trigger rather than run a crontab line: a crontab line has to
+construct a distinct key itself and silently creates nothing when it gets that
+wrong.
+
+Reading the registry is how an idle fleet is told apart from a broken one:
+
+```sh
+fleetd trigger list
+fleetd trigger show --trigger TRIGGER_ID
+```
+
+Each row carries `last_fired_at_ms`, `last_occurrence_id`, and
+`accepted_occurrences` -- occurrences that produced work, not calls received. A
+trigger re-firing Tuesday's occurrence all week has created nothing since
+Tuesday, and the record says so rather than reporting a healthy pulse.
+
+Retiring ends the standing grant and revokes every credential that could fire
+it, in one transaction. The registration stays, because a grant that was
+withdrawn is a fact worth reading later:
+
+```sh
+fleetd trigger retire --trigger TRIGGER_ID \
+  --reason 'the deploy it watched was decommissioned'
+```
+
+The reason is required and is what the next operator reads. Retiring twice is
+not an error; a retired trigger cannot be handed a replacement credential, so
+stopping one is final.
+
+Nothing in fleetd decides *when* a trigger fires. A cron expression, a webhook
+body, and a filesystem event are all opaque, and no scheduler ships here.
+
 ## Delivery inspection and controls
 
 Read-only delivery views never expose lease tokens:

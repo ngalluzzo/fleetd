@@ -71,15 +71,53 @@ authority:
 | Authority | Permitted surface |
 | --- | --- |
 | Public | Health, contract discovery, and the origin-bound browser upgrade before grant redemption |
-| Operator | Agent, credential, channel, membership, block, and invocation administration |
+| Operator | Agent, credential, channel, membership, block, trigger, and invocation administration |
 | Agent | Message append; history and stream access for member channels |
 | Bound agent | Claim and settle only that agent's deliveries; reserve, arm, and complete only that agent's invocations |
+| Bound trigger | Report an occurrence for only that trigger, and nothing else at all |
 
 Authentication failures return `401` and a Bearer challenge. An authenticated
 principal with insufficient authority returns `403`. fleetd domain failures
 use the generated `ErrorResponse` JSON envelope. Framework-level malformed
 path, query, or JSON extraction failures may be plain HTTP rejection bodies and
 must not be decoded as `ErrorResponse` without checking the content type.
+
+## Inbound triggers
+
+An inbound trigger is a thing that creates work with no human present and no
+invocation to scope to: a recurring job, a webhook receiver, a file watcher.
+[ADR 0031](adr/0031-inbound-triggers.md) gives it standing but narrow authority,
+and `POST /v1/triggers` is where an operator declares how narrow.
+
+The registration fixes the channel it may reach, the existing agent its messages
+are attributed to, and the exact message kinds it may create. Those kinds
+participate in trigger identity: changing what a trigger may create changes what
+the trigger is. `POST /v1/triggers/{trigger_id}/occurrences` is the only
+operation a trigger credential reaches, and it chooses only the recipient, a
+kind from the declared set, an opaque payload, and a name for this firing.
+Sender, channel, correlation, causation, and the durable idempotency key are all
+derived from the registration.
+
+Idempotency belongs to fleetd rather than to the trigger. The key is derived
+from the trigger and the occurrence identifier together, so an overlapping run,
+a machine waking, or a retry after a lost response is absorbed exactly and two
+triggers cannot collide on one occurrence name. The response reports `created`,
+which is how an unattended scheduler learns whether its firing produced work.
+
+A trigger has no read of any kind. It cannot list triggers, read its own
+registration, or see the channel it writes to. That absence is the contract: a
+trigger that can observe results is a workflow engine, and workflow belongs
+outside the daemon.
+
+`POST /v1/triggers/{trigger_id}/retire` ends the standing grant and revokes
+every credential that could fire it, in one transaction. Retiring keeps the
+registration, because a grant that was withdrawn is a fact worth reading later.
+Retiring an already-retired trigger returns it unchanged, and a retired trigger
+cannot be handed a replacement credential.
+
+Firing is not an operator action. An operator who wants to create work appends a
+message as themselves; firing someone else's trigger would put an occurrence in
+its record that it never produced.
 
 ## Channel membership
 
