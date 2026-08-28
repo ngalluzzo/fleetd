@@ -89,11 +89,11 @@ name a transport, and a crate that reaches a kernel table it does not own fails
 the suite. Rules that live only in prose drift the moment someone adds a
 convenient import.
 
-*Decisions are written down and numbered.* Twenty-four ADRs record what was
+*Decisions are written down and numbered.* Thirty-one ADRs record what was
 chosen, what it cost, and what was deliberately left out. A reader can
 reconstruct why the kernel has six concepts without asking anyone.
 
-*Claims are qualified with reproducible records.* Fifteen qualification
+*Claims are qualified with reproducible records.* Nineteen qualification
 documents carry exact message identifiers, real model routes, and content
 hashes; the soak runner hashes both its plan and its report. "It works" is not
 a status this project reports.
