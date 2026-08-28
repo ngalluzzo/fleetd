@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Dispatch one GitHub issue to a fleet seat.
+#
+# The backlog is GitHub Issues; fleetd owns how the work happened, not what
+# work there is. This is the seam between them, and it is deliberately two
+# calls: a channel per issue, then one addressed message.
+#
+# A channel per issue is not cosmetic. One durable session binding serves a
+# channel, so a shared channel would accumulate every issue into one native
+# session that is never rotated. Per-issue channels keep each task's reasoning
+# in its own session.
+#
+#   bin/assign 42                 # dispatch issue 42 to the author seat
+#   bin/assign 42 reviewer        # dispatch it to the reviewer seat instead
+set -euo pipefail
+
+issue="${1:?usage: bin/assign <issue-number> [seat]}"
+seat="${2:-author}"
+
+case "$seat" in
+  author)   kind="work.request/v1"   ;;
+  reviewer) kind="review.request/v1" ;;
+  *) echo "unknown seat '$seat' (expected author or reviewer)" >&2; exit 2 ;;
+esac
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fleetd="$root/target/debug/fleetd"
+repo="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+
+# The issue is the source of truth for what to do. Fetch it rather than making
+# the operator retype it, so the dispatched text and the backlog cannot drift.
+issue_json="$(gh issue view "$issue" --json number,title,body,url,labels)"
+title="$(printf '%s' "$issue_json" | python3 -c 'import sys,json;print(json.load(sys.stdin)["title"])')"
+
+agent_id() {
+  "$fleetd" agent list \
+    | python3 -c "import sys,json;print([a['id'] for a in json.load(sys.stdin) if a['name']=='$1'][0])"
+}
+planner="$(agent_id planner)"
+author="$(agent_id author)"
+reviewer="$(agent_id reviewer)"
+
+# Every seat joins, so a later hand-off needs no membership change and the
+# whole exchange stays readable by one `fleetd trace`.
+channel="$("$fleetd" channel create \
+  --name "issue-$issue" \
+  --member "$planner" --member "$author" --member "$reviewer" \
+  --metadata "$(printf '%s' "$issue_json" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(json.dumps({"issue":d["number"],"url":d["url"]}))')" \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')"
+
+case "$seat" in
+  author)   recipient="$author"   ; instructions="docs/seats/author.md"   ;;
+  reviewer) recipient="$reviewer" ; instructions="docs/seats/reviewer.md" ;;
+esac
+
+payload="$(printf '%s' "$issue_json" | python3 -c "
+import sys, json
+issue = json.load(sys.stdin)
+print(json.dumps({
+    'repository': '$repo',
+    'issue': issue['number'],
+    'url': issue['url'],
+    'title': issue['title'],
+    'body': issue['body'] or '',
+    'labels': [l['name'] for l in issue['labels']],
+    'instructions': '$instructions',
+    'base_branch': 'main',
+}))")"
+
+# The idempotency key is the issue and the seat, so dispatching twice by
+# accident hands the seat one piece of work rather than two.
+"$fleetd" --token-file .fleetd/planner.token message send \
+  --channel "$channel" \
+  --to "$recipient" \
+  --kind "$kind" \
+  --idempotency-key "assign/$issue/$seat" \
+  --payload "$payload"
+
+echo "issue $issue -> $seat  channel=$channel  ($title)" >&2
