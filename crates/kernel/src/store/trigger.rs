@@ -4,9 +4,10 @@
 //! "narrow" is a property of the row instead of a promise the caller keeps.
 //!
 //! Reads are `Store` methods. Writes are transaction-scoped functions instead,
-//! because registering a trigger and issuing the credential that lets it fire
-//! are one act: `auth::trigger` composes them, the same way it composes an agent
-//! with its first credential.
+//! because each one is half of something: registering a trigger and issuing the
+//! credential that lets it fire are one act, and so are creating work and
+//! recording that the trigger created it. The callers that compose those halves
+//! live in `auth::trigger` and in the execution layer.
 
 use sqlx::Row;
 use uuid::Uuid;
@@ -139,6 +140,65 @@ pub(crate) async fn retire_trigger_row(
     .bind(now_ms)
     .bind(now_ms)
     .bind(reason)
+    .bind(trigger_id)
+    .bind(TriggerState::Active.as_str())
+    .execute(&mut **transaction)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Reads a registration inside a caller's transaction.
+///
+/// A firing has to decide what a trigger may do and then do it without the
+/// registration moving underneath it, so the authority is read in the same
+/// transaction that acts on it.
+///
+/// # Errors
+///
+/// Returns not found for an unknown trigger, or a decoding error for an
+/// unreadable stored row.
+pub async fn trigger_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    trigger_id: &str,
+) -> Result<Trigger, FleetError> {
+    let row = sqlx::query(&format!("{} WHERE id = ?", trigger_select()))
+        .bind(trigger_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .ok_or_else(|| FleetError::NotFound {
+            entity: "trigger",
+            id: trigger_id.to_owned(),
+        })?;
+    trigger_from_row(&row)
+}
+
+/// Records that an active trigger created work, and reports whether it did.
+///
+/// The `state = 'active'` predicate is the authority check, not a courtesy: it
+/// runs in the caller's transaction, so a retirement racing a firing either
+/// wins outright or loses outright.
+///
+/// Only accepted occurrences are recorded. A repeat that the message layer
+/// absorbed created nothing, and a trigger whose scheduler has been re-firing
+/// Tuesday's occurrence all week has genuinely produced no work since Tuesday.
+///
+/// # Errors
+///
+/// Returns an error when the row cannot be written.
+pub async fn record_trigger_occurrence(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    trigger_id: &str,
+    occurrence_id: &str,
+    now_ms: i64,
+) -> Result<bool, FleetError> {
+    let result = sqlx::query(
+        "UPDATE triggers SET last_occurrence_id = ?, last_fired_at_ms = ?, \
+         updated_at_ms = ?, accepted_occurrences = accepted_occurrences + 1 \
+         WHERE id = ? AND state = ?",
+    )
+    .bind(occurrence_id)
+    .bind(now_ms)
+    .bind(now_ms)
     .bind(trigger_id)
     .bind(TriggerState::Active.as_str())
     .execute(&mut **transaction)

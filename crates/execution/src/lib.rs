@@ -21,4 +21,5 @@ pub mod operations;
 pub mod session_binding;
 pub mod settlement;
 pub mod trajectory;
+pub mod trigger;
 pub mod worker;

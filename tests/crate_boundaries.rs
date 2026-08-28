@@ -254,7 +254,7 @@ fn crate_root_re_exports_modules_only() {
 }
 
 /// The layer that decides what happens to durable state.
-const EXECUTION_MODULES: [&str; 9] = [
+const EXECUTION_MODULES: [&str; 10] = [
     "controller",
     "health",
     "invocation",
@@ -263,6 +263,7 @@ const EXECUTION_MODULES: [&str; 9] = [
     "session_binding",
     "settlement",
     "trajectory",
+    "trigger",
     "worker",
 ];
 

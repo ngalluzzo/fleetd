@@ -46,49 +46,11 @@ impl Store {
         channel_id: &str,
         input: CreateMessage,
     ) -> Result<AppendMessageResult, FleetError> {
-        if input.kind.trim().is_empty() {
-            return Err(FleetError::Invalid(
-                "message kind must not be empty".to_owned(),
-            ));
-        }
-        validate_idempotency_key(input.idempotency_key.as_deref())?;
-        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-
-        if let Some(idempotency_key) = &input.idempotency_key {
-            let existing = sqlx::query(
-                r"
-                SELECT seq, id, channel_id, sender_id, recipient_id, kind, payload_json,
-                       correlation_id, causation_id, created_at_ms
-                FROM messages
-                WHERE sender_id = ? AND idempotency_key = ?
-                ",
-            )
-            .bind(&input.sender_id)
-            .bind(idempotency_key)
-            .fetch_optional(&mut *transaction)
-            .await?;
-            if let Some(row) = existing {
-                let message = message_from_row(&row)?;
-                if !message_matches_input(&message, channel_id, &input) {
-                    return Err(FleetError::Conflict(
-                        "idempotency key was already used for a different message".to_owned(),
-                    ));
-                }
-                transaction.commit().await?;
-                return Ok(AppendMessageResult {
-                    message,
-                    created: false,
-                });
-            }
-        }
-
-        let message = insert_message(&mut transaction, channel_id, input).await?;
+        let mut transaction = self.begin_immediate().await?;
+        let result = append_message_in_transaction(&mut transaction, channel_id, input).await?;
         transaction.commit().await?;
-        self.notify_message_commit(true);
-        Ok(AppendMessageResult {
-            message,
-            created: true,
-        })
+        self.notify_message_commit(result.created);
+        Ok(result)
     }
 
     /// Reads one exact immutable message by stable identity.
@@ -211,6 +173,63 @@ fn message_matches_input(message: &Message, channel_id: &str, input: &CreateMess
         && message.payload == input.payload
         && message.correlation_id == input.correlation_id
         && message.causation_id == input.causation_id
+}
+
+/// Appends a message, or recognises a repeat, inside a caller's transaction.
+///
+/// Callers that must record their own state alongside the append compose into
+/// this rather than calling [`Store::append_message_idempotent`], so the message
+/// and whatever explains it commit together or not at all. The caller owns the
+/// commit, and therefore also owns telling the store a message landed.
+///
+/// # Errors
+///
+/// Returns an error for invalid input, unknown entities, invalid membership,
+/// conflicting idempotency-key reuse, or a persistence failure.
+pub async fn append_message_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    channel_id: &str,
+    input: CreateMessage,
+) -> Result<AppendMessageResult, FleetError> {
+    if input.kind.trim().is_empty() {
+        return Err(FleetError::Invalid(
+            "message kind must not be empty".to_owned(),
+        ));
+    }
+    validate_idempotency_key(input.idempotency_key.as_deref())?;
+
+    if let Some(idempotency_key) = &input.idempotency_key {
+        let existing = sqlx::query(
+            r"
+            SELECT seq, id, channel_id, sender_id, recipient_id, kind, payload_json,
+                   correlation_id, causation_id, created_at_ms
+            FROM messages
+            WHERE sender_id = ? AND idempotency_key = ?
+            ",
+        )
+        .bind(&input.sender_id)
+        .bind(idempotency_key)
+        .fetch_optional(&mut **transaction)
+        .await?;
+        if let Some(row) = existing {
+            let message = message_from_row(&row)?;
+            if !message_matches_input(&message, channel_id, &input) {
+                return Err(FleetError::Conflict(
+                    "idempotency key was already used for a different message".to_owned(),
+                ));
+            }
+            return Ok(AppendMessageResult {
+                message,
+                created: false,
+            });
+        }
+    }
+
+    let message = insert_message(transaction, channel_id, input).await?;
+    Ok(AppendMessageResult {
+        message,
+        created: true,
+    })
 }
 
 /// Kernel operation used by the layers above.

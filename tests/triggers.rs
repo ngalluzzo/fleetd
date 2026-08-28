@@ -4,15 +4,17 @@
 //! Registering and being able to fire are one act, so these tests treat them as
 //! one: that the declaration is normalised into a single representation, that
 //! the references are real, that the credential authenticates as the third
-//! authority category and nothing else, and that retiring a trigger actually
-//! ends its standing grant rather than only relabelling the row.
+//! authority category and nothing else, that retiring a trigger actually ends
+//! its standing grant rather than only relabelling the row, and that a firing
+//! may create exactly what the registration declared and nothing more.
 
 use fleetd::{
     auth::{AuthService, Principal},
     error::FleetError,
-    model::{CreateAgent, CreateChannel},
+    execution::trigger::fire,
+    model::{CreateAgent, CreateChannel, CreateChannelMember, MembershipDeliveryMode},
     store::Store,
-    trigger::{RegisterTrigger, RegisteredTrigger, TriggerState},
+    trigger::{RegisterTrigger, RegisteredTrigger, TriggerOccurrence, TriggerState},
 };
 use serde_json::json;
 
@@ -24,6 +26,7 @@ struct Registry {
     auth: AuthService,
     channel_id: String,
     sender_id: String,
+    worker_id: String,
 }
 
 impl Registry {
@@ -39,12 +42,22 @@ impl Registry {
             })
             .await
             .expect("create the trigger's sender");
+        let worker = store
+            .create_agent(CreateAgent {
+                name: "nightly-worker".to_owned(),
+                metadata: json!({}),
+            })
+            .await
+            .expect("create the agent a firing addresses");
         let channel = store
             .create_channel(CreateChannel {
                 name: "nightly".to_owned(),
                 metadata: json!({}),
                 member_ids: Vec::new(),
-                members: Vec::new(),
+                members: vec![
+                    member(&sender.id, MembershipDeliveryMode::StreamOnly),
+                    member(&worker.id, MembershipDeliveryMode::Inbox),
+                ],
             })
             .await
             .expect("create the trigger's channel");
@@ -54,6 +67,16 @@ impl Registry {
             auth,
             channel_id: channel.id,
             sender_id: sender.id,
+            worker_id: worker.id,
+        }
+    }
+
+    fn occurrence(&self, occurrence_id: &str, kind: &str) -> TriggerOccurrence {
+        TriggerOccurrence {
+            occurrence_id: occurrence_id.to_owned(),
+            recipient_id: self.worker_id.clone(),
+            kind: kind.to_owned(),
+            payload: json!({ "sweep": "nightly" }),
         }
     }
 
@@ -410,6 +433,13 @@ async fn listing_is_scoped_by_channel_and_keeps_retired_registrations() {
     );
 }
 
+fn member(agent_id: &str, delivery_mode: MembershipDeliveryMode) -> CreateChannelMember {
+    CreateChannelMember {
+        agent_id: agent_id.to_owned(),
+        delivery_mode,
+    }
+}
+
 /// Read directly, because "the grant ended" is a claim about stored rows rather
 /// than about what the service reports.
 async fn active_trigger_credentials(store: &Store) -> i64 {
@@ -420,4 +450,234 @@ async fn active_trigger_credentials(store: &Store) -> i64 {
     .fetch_one(store.pool())
     .await
     .expect("count active trigger credentials")
+}
+
+/// A firing creates work under the registration and nowhere else. Sender,
+/// channel, and the durable key are all derived, so the only things the
+/// occurrence chose are the recipient, the kind, and the payload.
+#[tokio::test]
+async fn a_firing_creates_work_the_registration_describes() {
+    let registry = Registry::open().await;
+    let registered = registry.register("nightly-sweep", &["task.request"]).await;
+
+    let fired = fire(
+        &registry.store,
+        &registered.trigger.id,
+        registry.occurrence("2026-08-27T02:00", "task.request"),
+    )
+    .await
+    .expect("fire the trigger");
+    assert!(fired.created);
+    assert_eq!(fired.trigger_id, registered.trigger.id);
+
+    let message = registry
+        .store
+        .get_message(&fired.message_id)
+        .await
+        .expect("read the message a firing created");
+    assert_eq!(message.channel_id, registry.channel_id);
+    assert_eq!(message.sender_id, registry.sender_id);
+    assert_eq!(
+        message.recipient_id.as_deref(),
+        Some(registry.worker_id.as_str())
+    );
+    assert_eq!(message.kind, "task.request");
+    // A firing has no message behind it, so its work is the root of its own
+    // trace rather than a continuation of a conversation it did not start.
+    assert_eq!(message.correlation_id, None);
+    assert_eq!(message.causation_id, None);
+
+    let after = registry
+        .store
+        .get_trigger(&registered.trigger.id)
+        .await
+        .expect("read the registration back");
+    assert_eq!(after.accepted_occurrences, 1);
+    assert_eq!(
+        after.last_occurrence_id.as_deref(),
+        Some("2026-08-27T02:00")
+    );
+    assert!(after.last_fired_at_ms.is_some());
+}
+
+/// The characteristic failure of an unattended scheduler is a double fire. The
+/// repeat is absorbed exactly, and the caller is told which of the two calls
+/// made the work -- something a scheduler cannot determine on its own.
+#[tokio::test]
+async fn repeating_an_occurrence_creates_one_piece_of_work() {
+    let registry = Registry::open().await;
+    let registered = registry.register("nightly-sweep", &["task.request"]).await;
+
+    let first = fire(
+        &registry.store,
+        &registered.trigger.id,
+        registry.occurrence("2026-08-27T02:00", "task.request"),
+    )
+    .await
+    .expect("fire the trigger");
+    let repeat = fire(
+        &registry.store,
+        &registered.trigger.id,
+        registry.occurrence("2026-08-27T02:00", "task.request"),
+    )
+    .await
+    .expect("fire the same occurrence again");
+
+    assert!(first.created);
+    assert!(!repeat.created);
+    assert_eq!(first.message_id, repeat.message_id);
+    assert_eq!(
+        registry
+            .store
+            .list_messages(&registry.channel_id, 0, 100)
+            .await
+            .expect("list the channel")
+            .messages
+            .len(),
+        1
+    );
+    // A trigger re-firing Tuesday's occurrence all week has produced no work
+    // since Tuesday, and the record says so.
+    assert_eq!(
+        registry
+            .store
+            .get_trigger(&registered.trigger.id)
+            .await
+            .expect("read back")
+            .accepted_occurrences,
+        1
+    );
+}
+
+/// The declared set is the authority. A kind outside it is refused, and nothing
+/// about the attempt reaches the channel.
+#[tokio::test]
+async fn a_trigger_cannot_create_a_kind_it_never_declared() {
+    let registry = Registry::open().await;
+    let registered = registry.register("nightly-sweep", &["task.request"]).await;
+
+    let refused = fire(
+        &registry.store,
+        &registered.trigger.id,
+        registry.occurrence("2026-08-27T02:00", "review.request"),
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(FleetError::Forbidden(_))),
+        "{refused:?}"
+    );
+    assert!(
+        registry
+            .store
+            .list_messages(&registry.channel_id, 0, 100)
+            .await
+            .expect("list the channel")
+            .messages
+            .is_empty()
+    );
+    assert_eq!(
+        registry
+            .store
+            .get_trigger(&registered.trigger.id)
+            .await
+            .expect("read back")
+            .accepted_occurrences,
+        0
+    );
+}
+
+/// Two triggers share one sender, and an occurrence name is each trigger's own
+/// vocabulary. Deriving the key from the pair is what keeps one scheduler's
+/// nightly run from silently absorbing another's.
+#[tokio::test]
+async fn two_triggers_do_not_collide_on_one_occurrence_name() {
+    let registry = Registry::open().await;
+    let first = registry.register("first-sweep", &["task.request"]).await;
+    let second = registry.register("second-sweep", &["task.request"]).await;
+
+    let one = fire(
+        &registry.store,
+        &first.trigger.id,
+        registry.occurrence("nightly", "task.request"),
+    )
+    .await
+    .expect("fire the first trigger");
+    let two = fire(
+        &registry.store,
+        &second.trigger.id,
+        registry.occurrence("nightly", "task.request"),
+    )
+    .await
+    .expect("fire the second trigger");
+
+    assert!(one.created);
+    assert!(two.created);
+    assert_ne!(one.message_id, two.message_id);
+}
+
+/// Retiring ends the grant, so a trigger that fires afterwards creates nothing.
+/// The scheduler behind it may not have noticed; the daemon has.
+#[tokio::test]
+async fn a_retired_trigger_creates_no_work() {
+    let registry = Registry::open().await;
+    let registered = registry.register("nightly-sweep", &["task.request"]).await;
+    registry
+        .auth
+        .retire_trigger(&registered.trigger.id, "the deploy was decommissioned")
+        .await
+        .expect("retire the trigger");
+
+    let refused = fire(
+        &registry.store,
+        &registered.trigger.id,
+        registry.occurrence("2026-08-27T02:00", "task.request"),
+    )
+    .await;
+    assert!(
+        matches!(refused, Err(FleetError::Conflict(_))),
+        "{refused:?}"
+    );
+    assert!(
+        registry
+            .store
+            .list_messages(&registry.channel_id, 0, 100)
+            .await
+            .expect("list the channel")
+            .messages
+            .is_empty()
+    );
+}
+
+/// A trigger addressing its own sender would be creating work for itself, which
+/// no member of the fleet is waiting on.
+#[tokio::test]
+async fn a_firing_must_address_a_peer() {
+    let registry = Registry::open().await;
+    let registered = registry.register("nightly-sweep", &["task.request"]).await;
+
+    let mut occurrence = registry.occurrence("2026-08-27T02:00", "task.request");
+    occurrence.recipient_id = registry.sender_id.clone();
+    let refused = fire(&registry.store, &registered.trigger.id, occurrence).await;
+    assert!(
+        matches!(refused, Err(FleetError::Invalid(_))),
+        "{refused:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_trigger_cannot_fire() {
+    let registry = Registry::open().await;
+    let refused = fire(
+        &registry.store,
+        "nope",
+        registry.occurrence("2026-08-27T02:00", "task.request"),
+    )
+    .await;
+    assert!(matches!(
+        refused,
+        Err(FleetError::NotFound {
+            entity: "trigger",
+            ..
+        })
+    ));
 }
