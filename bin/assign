@@ -93,7 +93,27 @@ sync_review_checkout() {
 }
 
 case "$seat" in
-  author) recipient="$author" ; subject="{}" ; sync_worktree "$HOME/repos/fleetd-seats/author" main ;;
+  author)
+    recipient="$author"
+    sync_worktree "$HOME/repos/fleetd-seats/author" main
+    # A review already in the channel means this dispatch is a revision, not a
+    # first draft. Carry it: the author cannot address a review it cannot read,
+    # and the channel is where the exchange already lives.
+    subject="$("$fleetd" message list --channel "$channel" | python3 -c "
+import json, sys
+messages = json.load(sys.stdin)['messages']
+reviews = [m for m in messages if m['kind'] == 'review.result/v1']
+if not reviews:
+    print('{}')
+    raise SystemExit
+text = ''.join(
+    part['text']
+    for message in reviews[-1]['payload'].get('assistant_messages', [])
+    for part in message.get('content', [])
+    if part.get('type') == 'text'
+)
+print(json.dumps({'review': text, 'revision': True}))")"
+    ;;
   reviewer)
     recipient="$reviewer"
     # What the reviewer needs that the issue does not carry: the pull request to

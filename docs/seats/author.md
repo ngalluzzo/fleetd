@@ -25,6 +25,14 @@ its labels, and a base branch. The issue body is the request. If it is
 ambiguous, say so in your result rather than guessing — a wrong assumption
 costs more than a round trip.
 
+## If the payload carries a review
+
+Then this is a revision, and `review` holds what the reviewer found. Address
+every finding or say why you disagree with it — a finding you silently skip is
+worse than one you argue against. Do not restart the work; the branch and the
+pull request already exist, and your job is the smallest change that answers the
+review. Re-run `bin/ci` before reporting.
+
 ## What to do
 
 1. Branch from `main`: `git switch -c issue-<number>-<short-slug>`.
