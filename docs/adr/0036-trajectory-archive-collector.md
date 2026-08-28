@@ -186,8 +186,7 @@ consequences and designed to depend on nothing but itself. Per invocation:
 
 1. **Read the authority.** Fetch the `invocation_observations` row from the
    operator surface: `event_count`, the per-class counts,
-   `observed_payload_bytes`, `last_event_seq`, `last_event_digest`,
-   `event_chain_digest`.
+   `observed_payload_bytes`, `last_event_seq`, `event_chain_digest`.
 2. **Prove no gaps.** Read the invocation's file and require `event_seq`
    dense from 1 through `last_event_seq`. Density *is* the no-gaps proof: the
    fold admits only contiguous sequences, so against a terminal row a hole in
