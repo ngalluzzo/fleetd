@@ -2,29 +2,38 @@
 
 use std::{error::Error, fs, io::Write, path::Path};
 
-use fleetd::model::{IssuedCredential, RegisteredAgent};
+use fleetd::model::IssuedCredential;
+use serde::Serialize;
 use serde_json::json;
 
 pub type MainResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 use super::print_json;
 
-pub(super) fn print_registration(
-    registration: &RegisteredAgent,
+/// Reports what was registered, and where its one-time token went.
+///
+/// `subject` names the registered thing in the printed object -- "agent" or
+/// "trigger" -- because the two registrations differ only in what they wrap. A
+/// second copy of this would be a second place for the token to leak into
+/// stdout when someone asked for a file.
+pub(super) fn print_registration<T: Serialize>(
+    subject: &str,
+    registered: &T,
+    credential: &IssuedCredential,
     credential_file: Option<&Path>,
 ) -> MainResult<()> {
     if let Some(path) = credential_file {
-        persist_secret_file(path, &registration.credential.token)?;
+        persist_secret_file(path, &credential.token)?;
         return print_json(&json!({
-            "agent": registration.agent,
+            subject: registered,
             "credential": {
-                "id": registration.credential.id,
-                "created_at_ms": registration.credential.created_at_ms,
+                "id": credential.id,
+                "created_at_ms": credential.created_at_ms,
                 "token_file": path.display().to_string()
             }
         }));
     }
-    print_json(&registration)
+    print_json(&json!({ subject: registered, "credential": credential }))
 }
 
 pub(super) fn print_credential(

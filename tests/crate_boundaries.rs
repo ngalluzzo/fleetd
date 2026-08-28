@@ -277,7 +277,7 @@ const SOURCE_LAYERS: [&str; 0] = [];
 
 /// The command surface, split by concept.
 ///
-/// Six of these are the same concepts `HTTP_ROUTE_DOMAINS` names, because the
+/// Seven of these are the same concepts `HTTP_ROUTE_DOMAINS` names, because the
 /// CLI and HTTP are two ways to ask one question and the tree should say so. The
 /// rest are the binary's own: running the daemon, running a seat, replaying a
 /// session, and the plumbing they share.
@@ -286,7 +286,7 @@ const SOURCE_LAYERS: [&str; 0] = [];
 /// instead of in `SOURCE_LAYERS`. Declaring it by concept keeps the rule that
 /// matters -- a layer must not appear unannounced -- while letting one surface
 /// stop being a 1,700-line file.
-const COMMAND_SURFACE_MODULES: [&str; 12] = [
+const COMMAND_SURFACE_MODULES: [&str; 13] = [
     "agents",
     "channels",
     "client",
@@ -298,6 +298,7 @@ const COMMAND_SURFACE_MODULES: [&str; 12] = [
     "secrets",
     "serve",
     "transcript",
+    "triggers",
     "worker",
 ];
 
@@ -652,7 +653,7 @@ fn the_source_tree_matches_the_declared_layers() {
         rust_module_names(&workspace_root().join("src/cli")),
         expected_command_surface,
         "src/cli does not match COMMAND_SURFACE_MODULES. A command group was added or removed \
-         without saying what it is; six of these mirror HTTP_ROUTE_DOMAINS on purpose."
+         without saying what it is; seven of these mirror HTTP_ROUTE_DOMAINS on purpose."
     );
 
     let mut expected_execution: Vec<String> =

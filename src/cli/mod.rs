@@ -1,9 +1,10 @@
 //! The command surface.
 //!
-//! Six of these modules mirror `HTTP_ROUTE_DOMAINS` one for one — agents,
-//! channels, messages, inbox, invocations, operations — because the CLI and
-//! HTTP are two ways to ask the same question. The rest are the binary's own:
-//! running the daemon, running a seat, and the plumbing they share.
+//! Seven of these modules mirror `HTTP_ROUTE_DOMAINS` one for one — agents,
+//! channels, messages, inbox, invocations, operations, triggers — because the
+//! CLI and HTTP are two ways to ask the same question. The rest are the
+//! binary's own: running the daemon, running a seat, and the plumbing they
+//! share.
 
 use std::{
     error::Error,
@@ -28,6 +29,7 @@ mod operations;
 mod secrets;
 mod serve;
 mod transcript;
+mod triggers;
 mod worker;
 
 use agents::{AgentCommand, agent_command};
@@ -43,6 +45,7 @@ use operations::{
 use secrets::{print_credential, print_registration};
 use serve::{ServeArgs, serve};
 use transcript::{TranscriptArgs, transcript_command};
+use triggers::{TriggerCommand, trigger_command};
 use worker::{WorkerCommand, load_worker_config, worker_command};
 
 /// Flattens a typed error to its message.
@@ -97,6 +100,11 @@ enum Command {
         #[command(subcommand)]
         command: InvocationCommand,
     },
+    /// Register and inspect the things that create work on their own.
+    Trigger {
+        #[command(subcommand)]
+        command: TriggerCommand,
+    },
     /// Run a local harness worker against fleetd's authoritative database.
     Worker {
         #[command(subcommand)]
@@ -146,6 +154,9 @@ pub async fn run() -> MainResult<()> {
         }
         Command::Invocation { command } => {
             invocation_command(&ApiClient::load(&server, token_file.as_deref())?, command).await
+        }
+        Command::Trigger { command } => {
+            trigger_command(&ApiClient::load(&server, token_file.as_deref())?, command).await
         }
         Command::Worker { command } => worker_command(command, &fleet).await,
         Command::Status(args) => {

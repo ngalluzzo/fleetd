@@ -47,7 +47,12 @@ pub(super) async fn agent_command(api: &ApiClient, command: AgentCommand) -> Mai
                 .error_for_status()?
                 .json()
                 .await?;
-            print_registration(&registration, credential_file.as_deref())
+            print_registration(
+                "agent",
+                &registration.agent,
+                &registration.credential,
+                credential_file.as_deref(),
+            )
         }
         AgentCommand::List => print_response(api.get("/v1/agents").send().await?).await,
         AgentCommand::RotateCredential {
