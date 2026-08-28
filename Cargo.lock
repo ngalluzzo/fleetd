@@ -978,6 +978,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleetd-harness-claude"
+version = "0.1.0"
+dependencies = [
+ "fleetd-acp-host",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "fleetd-harness-codex"
 version = "0.1.0"
 dependencies = [

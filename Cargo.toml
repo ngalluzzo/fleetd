@@ -20,6 +20,7 @@ members = [
     "crates/plugin-host",
     "crates/proto",
     "plugins/acp-reference",
+    "plugins/claude",
     "plugins/codex",
     "plugins/opencode",
     "tools/soak",
