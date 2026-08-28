@@ -50,3 +50,22 @@ pub(super) async fn require_channel_access(
         "agent is not a member of this channel".to_owned(),
     ))
 }
+
+/// Admits only the trigger the credential names.
+///
+/// A trigger's authority is over one registration, so there is no route a
+/// trigger reaches by holding some other trigger's token. An operator is
+/// deliberately not admitted here either: an operator who wants to create work
+/// can append a message as themselves, and firing someone else's trigger would
+/// put an occurrence in its record that it never produced.
+pub(super) fn require_bound_trigger(
+    principal: &Principal,
+    expected_trigger_id: &str,
+) -> Result<(), FleetError> {
+    if principal.trigger_id() == Some(expected_trigger_id) {
+        return Ok(());
+    }
+    Err(FleetError::Forbidden(
+        "credential is bound to another trigger".to_owned(),
+    ))
+}

@@ -586,11 +586,42 @@ export type PluginGenerationState = 'active' | 'stopped';
 export type PluginShutdownOutcome = 'graceful' | 'forced' | 'failed';
 
 /**
+ * What an operator declares when registering a trigger.
+ *
+ * `sender_id` names an existing agent rather than introducing a principal of
+ * its own. A trigger's messages are attributable to a durable identity that
+ * already exists, and the kernel's six concepts are unchanged; what is new is
+ * the credential, which may do this and nothing else.
+ */
+export type RegisterTrigger = {
+    /**
+     * The exact kinds this trigger may create. Non-empty, deduplicated, and
+     * part of the trigger's identity: changing it changes what the trigger is.
+     */
+    accepted_kinds: Array<string>;
+    channel_id: string;
+    name: string;
+    sender_id: string;
+};
+
+/**
  * An agent registration and its one-time credential response.
  */
 export type RegisteredAgent = {
     agent: Agent;
     credential: IssuedCredential;
+};
+
+/**
+ * A trigger registration and its one-time credential response.
+ *
+ * Registering and being able to fire are one act. A trigger holding no
+ * credential is inert, and a credential naming a trigger that does not exist is
+ * authority over nothing, so neither is a state fleetd will hand back.
+ */
+export type RegisteredTrigger = {
+    credential: IssuedCredential;
+    trigger: Trigger;
 };
 
 /**
@@ -607,6 +638,18 @@ export type ResolveDeliveryBlock = {
     note?: string | null;
     resolution: BlockResolution;
     retry_after_ms?: number;
+};
+
+/**
+ * Why an operator is ending a trigger's standing grant.
+ *
+ * Required rather than optional. A retired trigger with no reason recorded
+ * leaves the next operator guessing whether it was decommissioned or switched
+ * off in an incident, which is exactly the question the record exists to
+ * answer.
+ */
+export type RetireTrigger = {
+    reason: string;
 };
 
 /**
@@ -663,6 +706,72 @@ export type SessionBinding = {
 export type SessionBindingState = 'opening' | 'ready' | 'active' | 'uncertain' | 'retired';
 
 export type SessionPersistence = 'confirmed' | 'runtime_claimed' | 'unknown';
+
+/**
+ * One registered trigger, as an operator reads it.
+ *
+ * The firing history is the reason to register a trigger at all. A crontab
+ * entry that stopped firing on Tuesday leaves no trace, and an idle fleet looks
+ * exactly like a healthy quiet one; `last_fired_at_ms` is what turns that
+ * absence into a fact.
+ */
+export type Trigger = {
+    accepted_kinds: Array<string>;
+    accepted_occurrences: number;
+    channel_id: string;
+    created_at_ms: number;
+    id: string;
+    last_fired_at_ms?: number | null;
+    /**
+     * The last occurrence Fleetd accepted from this trigger, and when.
+     */
+    last_occurrence_id?: string | null;
+    name: string;
+    retired_at_ms?: number | null;
+    retired_reason?: string | null;
+    sender_id: string;
+    state: TriggerState;
+    updated_at_ms: number;
+};
+
+/**
+ * What Fleetd answers when a trigger fires.
+ *
+ * `created` distinguishes a firing that produced work from one Fleetd
+ * recognised as a repeat. An unattended scheduler cannot tell the difference on
+ * its own, and the difference is the whole reason idempotency lives here.
+ */
+export type TriggerFired = {
+    created: boolean;
+    message_id: string;
+    occurrence_id: string;
+    trigger_id: string;
+};
+
+/**
+ * What a trigger supplies when it fires.
+ *
+ * Deliberately small. Sender, channel, correlation, causation, and the durable
+ * idempotency key are all derived from the registration, so this carries only
+ * what the trigger actually knows: which firing this is, who should act, and
+ * what to say.
+ */
+export type TriggerOccurrence = {
+    kind: string;
+    /**
+     * The trigger's own name for this firing. Fleetd derives the durable
+     * idempotency key from the trigger and this together, so a repeat is
+     * absorbed exactly and two triggers cannot collide on one key.
+     */
+    occurrence_id: string;
+    payload: unknown;
+    recipient_id: string;
+};
+
+/**
+ * Whether a trigger may still create work.
+ */
+export type TriggerState = 'active' | 'retired';
 
 export type GetHealthData = {
     body?: never;
@@ -2151,3 +2260,270 @@ export type ListSessionBindingsResponses = {
 };
 
 export type ListSessionBindingsResponse = ListSessionBindingsResponses[keyof ListSessionBindingsResponses];
+
+export type ListTriggersData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Restrict the listing to triggers registered against one channel.
+         */
+        channel_id?: string | null;
+    };
+    url: '/v1/triggers';
+};
+
+export type ListTriggersErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ListTriggersError = ListTriggersErrors[keyof ListTriggersErrors];
+
+export type ListTriggersResponses = {
+    /**
+     * Registered triggers
+     */
+    200: Array<Trigger>;
+};
+
+export type ListTriggersResponse = ListTriggersResponses[keyof ListTriggersResponses];
+
+export type RegisterTriggerData = {
+    body: RegisterTrigger;
+    path?: never;
+    query?: never;
+    url: '/v1/triggers';
+};
+
+export type RegisterTriggerErrors = {
+    /**
+     * Invalid declaration
+     */
+    400: ErrorResponse;
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Channel or sender not found
+     */
+    404: ErrorResponse;
+    /**
+     * Trigger name conflicts with existing state
+     */
+    409: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type RegisterTriggerError = RegisterTriggerErrors[keyof RegisterTriggerErrors];
+
+export type RegisterTriggerResponses = {
+    /**
+     * Trigger registered
+     */
+    201: RegisteredTrigger;
+};
+
+export type RegisterTriggerResponse = RegisterTriggerResponses[keyof RegisterTriggerResponses];
+
+export type GetTriggerData = {
+    body?: never;
+    path: {
+        /**
+         * Stable trigger ID
+         */
+        trigger_id: string;
+    };
+    query?: never;
+    url: '/v1/triggers/{trigger_id}';
+};
+
+export type GetTriggerErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Trigger not found
+     */
+    404: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type GetTriggerError = GetTriggerErrors[keyof GetTriggerErrors];
+
+export type GetTriggerResponses = {
+    /**
+     * Trigger registration
+     */
+    200: Trigger;
+};
+
+export type GetTriggerResponse = GetTriggerResponses[keyof GetTriggerResponses];
+
+export type RotateTriggerCredentialData = {
+    body?: never;
+    path: {
+        /**
+         * Stable trigger ID
+         */
+        trigger_id: string;
+    };
+    query?: never;
+    url: '/v1/triggers/{trigger_id}/credentials/rotate';
+};
+
+export type RotateTriggerCredentialErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Trigger not found
+     */
+    404: ErrorResponse;
+    /**
+     * Trigger is retired
+     */
+    409: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type RotateTriggerCredentialError = RotateTriggerCredentialErrors[keyof RotateTriggerCredentialErrors];
+
+export type RotateTriggerCredentialResponses = {
+    /**
+     * Replacement credential
+     */
+    200: IssuedCredential;
+};
+
+export type RotateTriggerCredentialResponse = RotateTriggerCredentialResponses[keyof RotateTriggerCredentialResponses];
+
+export type FireTriggerData = {
+    body: TriggerOccurrence;
+    path: {
+        /**
+         * Stable trigger ID
+         */
+        trigger_id: string;
+    };
+    query?: never;
+    url: '/v1/triggers/{trigger_id}/occurrences';
+};
+
+export type FireTriggerErrors = {
+    /**
+     * Invalid occurrence
+     */
+    400: ErrorResponse;
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Credential is bound to another trigger, or the kind was never declared
+     */
+    403: ErrorResponse;
+    /**
+     * Trigger not found
+     */
+    404: ErrorResponse;
+    /**
+     * Trigger is retired
+     */
+    409: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type FireTriggerError = FireTriggerErrors[keyof FireTriggerErrors];
+
+export type FireTriggerResponses = {
+    /**
+     * Occurrence accepted
+     */
+    200: TriggerFired;
+};
+
+export type FireTriggerResponse = FireTriggerResponses[keyof FireTriggerResponses];
+
+export type RetireTriggerData = {
+    body: RetireTrigger;
+    path: {
+        /**
+         * Stable trigger ID
+         */
+        trigger_id: string;
+    };
+    query?: never;
+    url: '/v1/triggers/{trigger_id}/retire';
+};
+
+export type RetireTriggerErrors = {
+    /**
+     * Invalid retirement reason
+     */
+    400: ErrorResponse;
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Trigger not found
+     */
+    404: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type RetireTriggerError = RetireTriggerErrors[keyof RetireTriggerErrors];
+
+export type RetireTriggerResponses = {
+    /**
+     * Retired trigger
+     */
+    200: Trigger;
+};
+
+export type RetireTriggerResponse = RetireTriggerResponses[keyof RetireTriggerResponses];

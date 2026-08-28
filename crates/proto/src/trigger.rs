@@ -91,6 +91,17 @@ pub struct Trigger {
     pub retired_reason: Option<String>,
 }
 
+/// Why an operator is ending a trigger's standing grant.
+///
+/// Required rather than optional. A retired trigger with no reason recorded
+/// leaves the next operator guessing whether it was decommissioned or switched
+/// off in an incident, which is exactly the question the record exists to
+/// answer.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+pub struct RetireTrigger {
+    pub reason: String,
+}
+
 /// A trigger registration and its one-time credential response.
 ///
 /// Registering and being able to fire are one act. A trigger holding no

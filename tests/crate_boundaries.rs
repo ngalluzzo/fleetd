@@ -303,7 +303,7 @@ const COMMAND_SURFACE_MODULES: [&str; 12] = [
 
 /// The layer that exposes it. Route domains own handlers; the rest is
 /// composition, shared guards, and the transport beneath them.
-const HTTP_ROUTE_DOMAINS: [&str; 7] = [
+const HTTP_ROUTE_DOMAINS: [&str; 8] = [
     "agents",
     "channels",
     "deliveries",
@@ -311,6 +311,7 @@ const HTTP_ROUTE_DOMAINS: [&str; 7] = [
     "messages",
     "operations",
     "streams",
+    "triggers",
 ];
 
 const HTTP_SUPPORT: [&str; 7] = [

@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "1.8.0"
+    "version": "1.9.0"
   },
   "paths": {
     "/health": {
@@ -3206,6 +3206,546 @@
           }
         ]
       }
+    },
+    "/v1/triggers": {
+      "get": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "List inbound triggers",
+        "description": "Operator-only. Each registration carries when it last created work, so a trigger that stopped firing is a fact rather than an absence.",
+        "operationId": "listTriggers",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "query",
+            "description": "Restrict the listing to triggers registered against one channel.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Registered triggers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Trigger"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "Register an inbound trigger",
+        "description": "Operator-only. Declares what a trigger may create and returns its credential token exactly once.",
+        "operationId": "registerTrigger",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterTrigger"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Trigger registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredTrigger"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid declaration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Channel or sender not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Trigger name conflicts with existing state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/triggers/{trigger_id}": {
+      "get": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "Read one inbound trigger",
+        "operationId": "getTrigger",
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "description": "Stable trigger ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trigger registration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Trigger"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Trigger not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/triggers/{trigger_id}/credentials/rotate": {
+      "post": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "Rotate a trigger credential",
+        "description": "Operator-only. Immediately revokes earlier credentials and returns the replacement token exactly once. A retired trigger has no replacement to issue.",
+        "operationId": "rotateTriggerCredential",
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "description": "Stable trigger ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Replacement credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedCredential"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Trigger not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Trigger is retired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/triggers/{trigger_id}/occurrences": {
+      "post": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "Report that a trigger fired",
+        "description": "The trigger's own credential only. Sender, channel, correlation, causation, and the durable idempotency key come from the registration; repeating an occurrence identifier is absorbed exactly and reports `created: false`.",
+        "operationId": "fireTrigger",
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "description": "Stable trigger ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TriggerOccurrence"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Occurrence accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TriggerFired"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid occurrence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Credential is bound to another trigger, or the kind was never declared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Trigger not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Trigger is retired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/triggers/{trigger_id}/retire": {
+      "post": {
+        "tags": [
+          "triggers"
+        ],
+        "summary": "End a trigger's standing grant",
+        "description": "Operator-only. Revokes every credential that could fire the trigger and keeps the registration as a record. Retiring an already-retired trigger reports it unchanged.",
+        "operationId": "retireTrigger",
+        "parameters": [
+          {
+            "name": "trigger_id",
+            "in": "path",
+            "description": "Stable trigger ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetireTrigger"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Retired trigger",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Trigger"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid retirement reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Trigger not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -4847,6 +5387,34 @@
           "failed"
         ]
       },
+      "RegisterTrigger": {
+        "type": "object",
+        "description": "What an operator declares when registering a trigger.\n\n`sender_id` names an existing agent rather than introducing a principal of\nits own. A trigger's messages are attributable to a durable identity that\nalready exists, and the kernel's six concepts are unchanged; what is new is\nthe credential, which may do this and nothing else.",
+        "required": [
+          "name",
+          "channel_id",
+          "sender_id",
+          "accepted_kinds"
+        ],
+        "properties": {
+          "accepted_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The exact kinds this trigger may create. Non-empty, deduplicated, and\npart of the trigger's identity: changing it changes what the trigger is."
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sender_id": {
+            "type": "string"
+          }
+        }
+      },
       "RegisteredAgent": {
         "type": "object",
         "description": "An agent registration and its one-time credential response.",
@@ -4860,6 +5428,22 @@
           },
           "credential": {
             "$ref": "#/components/schemas/IssuedCredential"
+          }
+        }
+      },
+      "RegisteredTrigger": {
+        "type": "object",
+        "description": "A trigger registration and its one-time credential response.\n\nRegistering and being able to fire are one act. A trigger holding no\ncredential is inert, and a credential naming a trigger that does not exist is\nauthority over nothing, so neither is a state fleetd will hand back.",
+        "required": [
+          "trigger",
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "$ref": "#/components/schemas/IssuedCredential"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/Trigger"
           }
         }
       },
@@ -4898,6 +5482,18 @@
             "default": 0,
             "maximum": 86400000,
             "minimum": 0
+          }
+        }
+      },
+      "RetireTrigger": {
+        "type": "object",
+        "description": "Why an operator is ending a trigger's standing grant.\n\nRequired rather than optional. A retired trigger with no reason recorded\nleaves the next operator guessing whether it was decommissioned or switched\noff in an incident, which is exactly the question the record exists to\nanswer.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
           }
         }
       },
@@ -5097,6 +5693,139 @@
           "runtime_claimed",
           "unknown"
         ]
+      },
+      "Trigger": {
+        "type": "object",
+        "description": "One registered trigger, as an operator reads it.\n\nThe firing history is the reason to register a trigger at all. A crontab\nentry that stopped firing on Tuesday leaves no trace, and an idle fleet looks\nexactly like a healthy quiet one; `last_fired_at_ms` is what turns that\nabsence into a fact.",
+        "required": [
+          "id",
+          "name",
+          "channel_id",
+          "sender_id",
+          "accepted_kinds",
+          "state",
+          "created_at_ms",
+          "updated_at_ms",
+          "accepted_occurrences"
+        ],
+        "properties": {
+          "accepted_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accepted_occurrences": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_fired_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "last_occurrence_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The last occurrence Fleetd accepted from this trigger, and when."
+          },
+          "name": {
+            "type": "string"
+          },
+          "retired_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "retired_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sender_id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TriggerState"
+          },
+          "updated_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TriggerFired": {
+        "type": "object",
+        "description": "What Fleetd answers when a trigger fires.\n\n`created` distinguishes a firing that produced work from one Fleetd\nrecognised as a repeat. An unattended scheduler cannot tell the difference on\nits own, and the difference is the whole reason idempotency lives here.",
+        "required": [
+          "trigger_id",
+          "occurrence_id",
+          "message_id",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "occurrence_id": {
+            "type": "string"
+          },
+          "trigger_id": {
+            "type": "string"
+          }
+        }
+      },
+      "TriggerOccurrence": {
+        "type": "object",
+        "description": "What a trigger supplies when it fires.\n\nDeliberately small. Sender, channel, correlation, causation, and the durable\nidempotency key are all derived from the registration, so this carries only\nwhat the trigger actually knows: which firing this is, who should act, and\nwhat to say.",
+        "required": [
+          "occurrence_id",
+          "recipient_id",
+          "kind",
+          "payload"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "occurrence_id": {
+            "type": "string",
+            "description": "The trigger's own name for this firing. Fleetd derives the durable\nidempotency key from the trigger and this together, so a repeat is\nabsorbed exactly and two triggers cannot collide on one key."
+          },
+          "payload": {},
+          "recipient_id": {
+            "type": "string"
+          }
+        }
+      },
+      "TriggerState": {
+        "type": "string",
+        "description": "Whether a trigger may still create work.",
+        "enum": [
+          "active",
+          "retired"
+        ]
       }
     },
     "securitySchemes": {
@@ -5130,6 +5859,10 @@
     {
       "name": "operations",
       "description": "Operator-visible worker and harness evidence"
+    },
+    {
+      "name": "triggers",
+      "description": "Inbound triggers that create work on their own"
     }
   ]
 }

@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, Options as Options2, TDataShape } from './client/index.js';
-import type { AcknowledgeDeliveryData, AcknowledgeDeliveryErrors, AcknowledgeDeliveryResponses, AddChannelMemberData, AddChannelMemberErrors, AddChannelMemberResponses, ArchiveChannelData, ArchiveChannelErrors, ArchiveChannelResponses, ArmInvocationData, ArmInvocationErrors, ArmInvocationResponses, BlockDeliveryData, BlockDeliveryErrors, BlockDeliveryResponses, ClaimDeliveriesData, ClaimDeliveriesErrors, ClaimDeliveriesResponses, CompleteInvocationData, CompleteInvocationErrors, CompleteInvocationResponses, CreateAgentData, CreateAgentErrors, CreateAgentResponses, CreateBrowserChannelStreamGrantData, CreateBrowserChannelStreamGrantErrors, CreateBrowserChannelStreamGrantResponses, CreateChannelData, CreateChannelErrors, CreateChannelMessageData, CreateChannelMessageErrors, CreateChannelMessageResponses, CreateChannelResponses, GetHealthData, GetHealthResponses, GetOpenApiDocumentData, GetOpenApiDocumentResponses, ListAgentsData, ListAgentSeatsData, ListAgentSeatsErrors, ListAgentSeatsResponses, ListAgentsErrors, ListAgentsResponses, ListChannelMembersData, ListChannelMembersErrors, ListChannelMembersResponses, ListChannelMessagesData, ListChannelMessagesErrors, ListChannelMessagesResponses, ListChannelsData, ListChannelsErrors, ListChannelsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListDeliveriesData, ListDeliveriesErrors, ListDeliveriesResponses, ListDeliveryBlocksData, ListDeliveryBlocksErrors, ListDeliveryBlocksResponses, ListInvocationObservationsData, ListInvocationObservationsErrors, ListInvocationObservationsResponses, ListInvocationsData, ListInvocationsErrors, ListInvocationsResponses, ListPluginGenerationsData, ListPluginGenerationsErrors, ListPluginGenerationsResponses, ListSessionBindingsData, ListSessionBindingsErrors, ListSessionBindingsResponses, OpenDirectConversationData, OpenDirectConversationErrors, OpenDirectConversationResponses, ReadFleetHealthData, ReadFleetHealthErrors, ReadFleetHealthResponses, RenameChannelData, RenameChannelErrors, RenameChannelResponses, ReserveInvocationsData, ReserveInvocationsErrors, ReserveInvocationsResponses, ResolveDeliveryBlockData, ResolveDeliveryBlockErrors, ResolveDeliveryBlockResponses, RetryDeliveryData, RetryDeliveryErrors, RetryDeliveryResponses, RotateAgentCredentialData, RotateAgentCredentialErrors, RotateAgentCredentialResponses, TraceInvocationData, TraceInvocationErrors, TraceInvocationResponses } from './types.gen.js';
+import type { AcknowledgeDeliveryData, AcknowledgeDeliveryErrors, AcknowledgeDeliveryResponses, AddChannelMemberData, AddChannelMemberErrors, AddChannelMemberResponses, ArchiveChannelData, ArchiveChannelErrors, ArchiveChannelResponses, ArmInvocationData, ArmInvocationErrors, ArmInvocationResponses, BlockDeliveryData, BlockDeliveryErrors, BlockDeliveryResponses, ClaimDeliveriesData, ClaimDeliveriesErrors, ClaimDeliveriesResponses, CompleteInvocationData, CompleteInvocationErrors, CompleteInvocationResponses, CreateAgentData, CreateAgentErrors, CreateAgentResponses, CreateBrowserChannelStreamGrantData, CreateBrowserChannelStreamGrantErrors, CreateBrowserChannelStreamGrantResponses, CreateChannelData, CreateChannelErrors, CreateChannelMessageData, CreateChannelMessageErrors, CreateChannelMessageResponses, CreateChannelResponses, FireTriggerData, FireTriggerErrors, FireTriggerResponses, GetHealthData, GetHealthResponses, GetOpenApiDocumentData, GetOpenApiDocumentResponses, GetTriggerData, GetTriggerErrors, GetTriggerResponses, ListAgentsData, ListAgentSeatsData, ListAgentSeatsErrors, ListAgentSeatsResponses, ListAgentsErrors, ListAgentsResponses, ListChannelMembersData, ListChannelMembersErrors, ListChannelMembersResponses, ListChannelMessagesData, ListChannelMessagesErrors, ListChannelMessagesResponses, ListChannelsData, ListChannelsErrors, ListChannelsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListDeliveriesData, ListDeliveriesErrors, ListDeliveriesResponses, ListDeliveryBlocksData, ListDeliveryBlocksErrors, ListDeliveryBlocksResponses, ListInvocationObservationsData, ListInvocationObservationsErrors, ListInvocationObservationsResponses, ListInvocationsData, ListInvocationsErrors, ListInvocationsResponses, ListPluginGenerationsData, ListPluginGenerationsErrors, ListPluginGenerationsResponses, ListSessionBindingsData, ListSessionBindingsErrors, ListSessionBindingsResponses, ListTriggersData, ListTriggersErrors, ListTriggersResponses, OpenDirectConversationData, OpenDirectConversationErrors, OpenDirectConversationResponses, ReadFleetHealthData, ReadFleetHealthErrors, ReadFleetHealthResponses, RegisterTriggerData, RegisterTriggerErrors, RegisterTriggerResponses, RenameChannelData, RenameChannelErrors, RenameChannelResponses, ReserveInvocationsData, ReserveInvocationsErrors, ReserveInvocationsResponses, ResolveDeliveryBlockData, ResolveDeliveryBlockErrors, ResolveDeliveryBlockResponses, RetireTriggerData, RetireTriggerErrors, RetireTriggerResponses, RetryDeliveryData, RetryDeliveryErrors, RetryDeliveryResponses, RotateAgentCredentialData, RotateAgentCredentialErrors, RotateAgentCredentialResponses, RotateTriggerCredentialData, RotateTriggerCredentialErrors, RotateTriggerCredentialResponses, TraceInvocationData, TraceInvocationErrors, TraceInvocationResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -427,4 +427,80 @@ export const listSessionBindings = <ThrowOnError extends boolean = false>(option
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/v1/session-bindings',
     ...options
+});
+
+/**
+ * List inbound triggers
+ *
+ * Operator-only. Each registration carries when it last created work, so a trigger that stopped firing is a fact rather than an absence.
+ */
+export const listTriggers = <ThrowOnError extends boolean = false>(options?: Options<ListTriggersData, ThrowOnError>) => (options?.client ?? client).get<ListTriggersResponses, ListTriggersErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/triggers',
+    ...options
+});
+
+/**
+ * Register an inbound trigger
+ *
+ * Operator-only. Declares what a trigger may create and returns its credential token exactly once.
+ */
+export const registerTrigger = <ThrowOnError extends boolean = false>(options: Options<RegisterTriggerData, ThrowOnError>) => (options.client ?? client).post<RegisterTriggerResponses, RegisterTriggerErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/triggers',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Read one inbound trigger
+ */
+export const getTrigger = <ThrowOnError extends boolean = false>(options: Options<GetTriggerData, ThrowOnError>) => (options.client ?? client).get<GetTriggerResponses, GetTriggerErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/triggers/{trigger_id}',
+    ...options
+});
+
+/**
+ * Rotate a trigger credential
+ *
+ * Operator-only. Immediately revokes earlier credentials and returns the replacement token exactly once. A retired trigger has no replacement to issue.
+ */
+export const rotateTriggerCredential = <ThrowOnError extends boolean = false>(options: Options<RotateTriggerCredentialData, ThrowOnError>) => (options.client ?? client).post<RotateTriggerCredentialResponses, RotateTriggerCredentialErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/triggers/{trigger_id}/credentials/rotate',
+    ...options
+});
+
+/**
+ * Report that a trigger fired
+ *
+ * The trigger's own credential only. Sender, channel, correlation, causation, and the durable idempotency key come from the registration; repeating an occurrence identifier is absorbed exactly and reports `created: false`.
+ */
+export const fireTrigger = <ThrowOnError extends boolean = false>(options: Options<FireTriggerData, ThrowOnError>) => (options.client ?? client).post<FireTriggerResponses, FireTriggerErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/triggers/{trigger_id}/occurrences',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * End a trigger's standing grant
+ *
+ * Operator-only. Revokes every credential that could fire the trigger and keeps the registration as a record. Retiring an already-retired trigger reports it unchanged.
+ */
+export const retireTrigger = <ThrowOnError extends boolean = false>(options: Options<RetireTriggerData, ThrowOnError>) => (options.client ?? client).post<RetireTriggerResponses, RetireTriggerErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/triggers/{trigger_id}/retire',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });

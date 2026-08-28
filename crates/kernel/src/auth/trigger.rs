@@ -28,6 +28,9 @@ use super::{
     token::{TRIGGER_TOKEN_PREFIX, issue_credential, token_digest},
 };
 
+/// A reason nobody can read is the same as no reason recorded.
+const MAX_RETIREMENT_REASON_BYTES: usize = 512;
+
 impl AuthService {
     /// Registers a trigger and the credential that lets it fire, in one
     /// transaction.
@@ -79,6 +82,12 @@ impl AuthService {
         trigger_id: &str,
         reason: &str,
     ) -> Result<Trigger, FleetError> {
+        if reason.trim().is_empty() || reason.len() > MAX_RETIREMENT_REASON_BYTES {
+            return Err(FleetError::Invalid(format!(
+                "a retirement reason must contain between 1 and \
+                 {MAX_RETIREMENT_REASON_BYTES} bytes"
+            )));
+        }
         let now = now_ms();
         let mut transaction = self.store.begin_immediate().await?;
         if retire_trigger_row(&mut transaction, trigger_id, reason, now).await? {
