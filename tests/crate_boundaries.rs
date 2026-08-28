@@ -274,6 +274,32 @@ const EXECUTION_MODULES: [&str; 9] = [
 /// directory here is a new layer nobody declared, which is what this catches.
 const SOURCE_LAYERS: [&str; 0] = [];
 
+/// The command surface, split by concept.
+///
+/// Six of these are the same concepts `HTTP_ROUTE_DOMAINS` names, because the
+/// CLI and HTTP are two ways to ask one question and the tree should say so. The
+/// rest are the binary's own: running the daemon, running a seat, replaying a
+/// session, and the plumbing they share.
+///
+/// `cli` is a directory rather than a layer, which is why it is enumerated here
+/// instead of in `SOURCE_LAYERS`. Declaring it by concept keeps the rule that
+/// matters -- a layer must not appear unannounced -- while letting one surface
+/// stop being a 1,700-line file.
+const COMMAND_SURFACE_MODULES: [&str; 12] = [
+    "agents",
+    "channels",
+    "client",
+    "inbox",
+    "init",
+    "invocations",
+    "messages",
+    "operations",
+    "secrets",
+    "serve",
+    "transcript",
+    "worker",
+];
+
 /// The layer that exposes it. Route domains own handlers; the rest is
 /// composition, shared guards, and the transport beneath them.
 const HTTP_ROUTE_DOMAINS: [&str; 7] = [
@@ -550,7 +576,7 @@ fn inspect_imports(path: &Path, package: &str) {
 ///
 /// The library root, the binary, and its command line. Everything else belongs
 /// to a layer directory, so the tree reads as the architecture.
-const UNLAYERED_ROOT_FILES: [&str; 3] = ["lib.rs", "main.rs", "cli.rs"];
+const UNLAYERED_ROOT_FILES: [&str; 2] = ["lib.rs", "main.rs"];
 
 fn rust_module_names(directory: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(directory)
@@ -595,9 +621,10 @@ fn the_source_tree_matches_the_declared_layers() {
         .expect("src is readable")
         .filter_map(|entry| {
             let path = entry.expect("src entry is readable").path();
-            // `bin` is Cargo's directory for extra binaries, not a layer.
+            // `bin` is Cargo's directory for extra binaries, and `cli` is the
+            // command surface split by concept. Neither is a layer.
             let name = path.file_name()?.to_str()?.to_owned();
-            (path.is_dir() && name != "bin").then_some(name)
+            (path.is_dir() && name != "bin" && name != "cli").then_some(name)
         })
         .collect();
     layers.sort();
@@ -611,6 +638,18 @@ fn the_source_tree_matches_the_declared_layers() {
         "the directories under src/ do not match SOURCE_LAYERS. A layer was added or removed \
          without saying what it is: `execution` decides what happens to durable state, and a \
          surface exposes it over one mechanism."
+    );
+
+    let mut expected_command_surface: Vec<String> = COMMAND_SURFACE_MODULES
+        .iter()
+        .map(|m| (*m).to_owned())
+        .collect();
+    expected_command_surface.sort();
+    assert_eq!(
+        rust_module_names(&workspace_root().join("src/cli")),
+        expected_command_surface,
+        "src/cli does not match COMMAND_SURFACE_MODULES. A command group was added or removed \
+         without saying what it is; six of these mirror HTTP_ROUTE_DOMAINS on purpose."
     );
 
     let mut expected_execution: Vec<String> =
