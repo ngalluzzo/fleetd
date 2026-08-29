@@ -17,15 +17,12 @@
 //! and the earlier conclusion that this integration could not be exercised from
 //! inside a session was wrong.
 //!
-//! What actually blocked authentication was this plugin's own environment.
-//! Claude Code stores its subscription credential in the macOS Keychain and
-//! needs `USER` and `LOGNAME` to reach it; without them it reports
-//! "Not logged in" however complete the rest of the environment is. And setting
-//! `CLAUDE_CONFIG_DIR` moves credential lookup to that directory, so pointing it
-//! at the operator's ordinary config directory -- which holds no credential
-//! file, because the credential is in the Keychain -- breaks a login that works
-//! when the variable is simply absent. It is therefore optional, and supplying
-//! it means choosing file-based credentials in that directory on purpose.
+//! Subscription state is intentionally not inherited. Claude Code releases have
+//! used both account-scoped system storage and an owner-only credential file;
+//! Fleetd must provision whichever exact mechanism a seat declares rather than
+//! granting the adapter ambient home access. `USER` and `LOGNAME` still name the
+//! selected account, while optional `CLAUDE_CONFIG_DIR` deliberately redirects
+//! configuration and credential lookup into a private directory.
 //!
 //! An operator supplying `ANTHROPIC_API_KEY` is the adapter's other documented
 //! path, and this plugin deliberately does not carry it: a provider credential
@@ -51,7 +48,7 @@ const CHECKS: ConfigChecks = ConfigChecks::new("Claude Code");
 /// The host refuses a runtime whose `agentInfo.name` differs, so this is the
 /// adapter's package name rather than "Claude Code": the adapter is the process
 /// on the other end of the protocol.
-const ADAPTER_AGENT_NAME: &str = "@zed-industries/claude-code-acp";
+const ADAPTER_AGENT_NAME: &str = "@agentclientprotocol/claude-agent-acp";
 
 /// Nothing outside this list reaches the adapter, and nothing is inherited.
 ///
@@ -62,12 +59,11 @@ const ADAPTER_AGENT_NAME: &str = "@zed-industries/claude-code-acp";
 /// Claude Code refuse to run inside another Claude Code session, and inheriting
 /// nothing is what keeps a seat launchable from an operator's own session.
 ///
-/// `USER` and `LOGNAME` are here because Claude Code cannot reach its Keychain
-/// credential without them. That is the narrowest addition that authenticates,
-/// and it is identity rather than authority: neither carries a secret, and the
-/// credential itself never passes through fleetd.
+/// `USER` and `LOGNAME` name the selected local account. They are identity
+/// rather than authority: neither carries a secret.
 const ALLOWED_ENVIRONMENT: &[&str] = &[
     "CLAUDE_CODE_EXECUTABLE",
+    "CLAUDE_CODE_TMPDIR",
     "CLAUDE_CONFIG_DIR",
     "HOME",
     "LOGNAME",
@@ -87,16 +83,12 @@ struct ClaudeConfig {
     expected_version: String,
     /// The Claude Code binary the adapter drives.
     claude_executable: PathBuf,
-    /// The account Claude Code authenticates as. Supplied rather than inherited,
-    /// like every other value here, and required because Claude Code cannot read
-    /// its Keychain credential without it.
+    /// The local account Claude Code runs as. Supplied rather than inherited,
+    /// like every other value here.
     user: String,
     /// Claude Code's own configuration directory. Optional, and omitting it is
-    /// the normal case: setting it moves credential lookup into that directory,
-    /// so naming the operator's ordinary config directory breaks a Keychain
-    /// login that works when the variable is absent. Supply it only to choose
-    /// file-based credentials on purpose. Fleetd never reads it and never places
-    /// anything in it.
+    /// the normal case. Supply it only to choose private redirected state on
+    /// purpose. Fleetd never reads it and never places anything in it.
     #[serde(default)]
     config_dir: Option<PathBuf>,
     home: PathBuf,
@@ -142,6 +134,16 @@ fn prepare_config(value: Value) -> Result<DriverConfig, DriverError> {
     );
     environment.insert("USER".to_owned(), config.user.clone());
     environment.insert("LOGNAME".to_owned(), config.user);
+    // Claude Code otherwise creates its per-uid runtime directory at the
+    // ambient `/tmp/claude-<uid>`. Keep sockets and cache-break state inside
+    // the seat's already-declared private temp root so strict Seatbelt does
+    // not need write access to another Claude session's shared runtime state.
+    if let Some(tmpdir) = &config.tmpdir {
+        environment.insert(
+            "CLAUDE_CODE_TMPDIR".to_owned(),
+            tmpdir.to_string_lossy().into_owned(),
+        );
+    }
     if let Some(config_dir) = &config.config_dir {
         environment.insert(
             "CLAUDE_CONFIG_DIR".to_owned(),
@@ -244,13 +246,14 @@ mod tests {
                 .expect("test executable")
                 .to_string_lossy()
         );
-        // Claude Code cannot reach its Keychain credential without these, and
-        // reports "Not logged in" however complete the rest of the environment
-        // is. Measured, not assumed.
+        // Account identity is explicit rather than inherited.
         assert_eq!(prepared.runtime.environment["USER"], "operator");
         assert_eq!(prepared.runtime.environment["LOGNAME"], "operator");
-        // Absent unless an operator asked for it. Setting it moves credential
-        // lookup into that directory and breaks a working Keychain login.
+        assert_eq!(
+            prepared.runtime.environment["CLAUDE_CODE_TMPDIR"],
+            env::temp_dir().to_string_lossy()
+        );
+        // Absent unless an operator asked for redirected private state.
         assert!(
             !prepared
                 .runtime
