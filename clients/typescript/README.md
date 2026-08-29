@@ -117,9 +117,28 @@ await conversation.send({
 });
 ```
 
+A native service or TUI uses the same session state machine with the direct
+bearer WebSocket transport:
+
+```ts
+import {
+  ConversationSession,
+  createNativeConversationTransport,
+} from "@fleetd/client";
+
+const conversation = new ConversationSession(
+  createNativeConversationTransport({
+    origin: "http://127.0.0.1:4317",
+    participantId,
+    operatorCredential,
+    participantCredential,
+  }),
+);
+```
+
 The session does not interpret agent execution, harness events, or application
-payload conformance. A future TUI supplies a native bearer-WebSocket transport
-to the same interface.
+payload conformance. Browser and native targets share selection, cursor,
+attention, convergence, and teardown behavior through the same interface.
 
 ## Operator collaboration client
 

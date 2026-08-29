@@ -11,6 +11,7 @@
     ".": "./src/index.ts",
     "./browser-channel-stream": "./src/browser-channel-stream.ts",
     "./native-channel-stream": "./src/native-channel-stream.ts",
+    "./native-conversation-transport": "./src/native-conversation-transport.ts",
     "./conversation": "./src/conversation-session.ts",
     "./conversation-transport": "./src/conversation-transport.ts",
     "./operator": "./src/operator-client.ts",
@@ -19,7 +20,7 @@
   },
   "scripts": {
     "generate": "openapi-ts",
-    "test": "node --experimental-strip-types --test test/browser-channel-stream.test.mjs test/native-channel-stream.test.mjs test/conversation-session.test.mjs && bun test test/operator-client.test.mjs",
+    "test": "node --experimental-strip-types --test test/browser-channel-stream.test.mjs test/native-channel-stream.test.mjs test/native-conversation-transport.test.mjs test/conversation-session.test.mjs && bun test test/operator-client.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

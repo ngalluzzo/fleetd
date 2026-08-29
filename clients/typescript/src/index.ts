@@ -1,6 +1,7 @@
 export * from "./generated/index.ts";
 export * from "./browser-channel-stream.ts";
 export * from "./native-channel-stream.ts";
+export * from "./native-conversation-transport.ts";
 export * from "./conversation-transport.ts";
 export * from "./conversation-session.ts";
 export * from "./operator-client.ts";

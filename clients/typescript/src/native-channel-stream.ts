@@ -185,11 +185,10 @@ export function openNativeChannelStream(
             socket = normalized.createWebSocket(url, {
               headers: { Authorization: `Bearer ${credential}` },
             });
-          } catch (cause) {
+          } catch {
             throw new NativeChannelStreamError(
               "socket_open_failed",
               "native channel stream could not create its WebSocket",
-              { cause },
             );
           }
           activeSocket = socket;

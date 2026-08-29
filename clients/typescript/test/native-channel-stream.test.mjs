@@ -247,6 +247,25 @@ test("surfaces rejected upgrades without exposing the credential", async () => {
   });
 });
 
+test("redacts errors thrown by a credential-bearing socket factory", async () => {
+  const stream = openNativeChannelStream({
+    origin: ORIGIN,
+    channelId: CHANNEL_ID,
+    credential: CREDENTIAL,
+    accept() {},
+    createWebSocket() {
+      throw new Error(`factory received ${CREDENTIAL}`);
+    },
+  });
+
+  await assert.rejects(stream.closed, (error) => {
+    assertStreamError("socket_open_failed")(error);
+    assert.equal(String(error).includes(CREDENTIAL), false);
+    assert.equal(error.cause, undefined);
+    return true;
+  });
+});
+
 test("rejects binary and drifting envelopes as protocol failures", async () => {
   for (const emit of [
     (socket) => socket.message(message(1), { isBinary: true }),
