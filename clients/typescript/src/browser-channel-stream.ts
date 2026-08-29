@@ -1,14 +1,22 @@
 import type { Message } from "./generated/types.gen.ts";
+import {
+  DEFAULT_CHANNEL_STREAM_MAX_PENDING_MESSAGES,
+  DEFAULT_CHANNEL_STREAM_READY_TIMEOUT_MS,
+  DEFAULT_CHANNEL_STREAM_RECONNECT_DELAYS_MS,
+  MessageAcceptanceQueue,
+  createAcceptedIdentityIndex,
+  decodeChannelMessage,
+  isChannelStreamCursor,
+  isDecodeFailure,
+  isExactRecord,
+  type AcceptedIdentityIndex,
+  type ChannelStreamStatus,
+} from "./channel-stream-core.ts";
 
 export const BROWSER_CHANNEL_STREAM_PROTOCOL =
   "fleetd.channel-stream.browser.v1" as const;
 export const BROWSER_CHANNEL_STREAM_PATH =
   "/v1/browser/channel-stream" as const;
-
-const DEFAULT_RECONNECT_DELAYS_MS = [250, 1_000, 2_000] as const;
-const DEFAULT_MAX_PENDING_MESSAGES = 64;
-const DEFAULT_READY_TIMEOUT_MS = 10_000;
-const MAX_RETAINED_IDENTITIES = 4_096;
 
 export type BrowserChannelStreamErrorCode =
   | "consumer_rejected"
@@ -20,12 +28,7 @@ export type BrowserChannelStreamErrorCode =
   | "socket_protocol_mismatch";
 
 /** Locally observed wire state. It never represents remote agent activity. */
-export type BrowserChannelStreamStatus =
-  | "connecting"
-  | "live"
-  | "reconnecting"
-  | "failed"
-  | "closed";
+export type BrowserChannelStreamStatus = ChannelStreamStatus;
 
 export class BrowserChannelStreamError extends Error {
   declare readonly code: BrowserChannelStreamErrorCode;
@@ -117,12 +120,6 @@ interface NormalizedOptions {
   scheduleTimeout: BrowserChannelStreamTimeoutScheduler;
 }
 
-interface AcceptedIdentityIndex {
-  bySequence: Map<number, string>;
-  byId: Map<string, number>;
-  order: number[];
-}
-
 class RetryableTransportError extends Error {}
 
 /**
@@ -143,11 +140,7 @@ export function openBrowserChannelStream(
   let stopRequested = false;
   let activeSocket: BrowserChannelStreamSocket | undefined;
   let activeGrantRequest: AbortController | undefined;
-  const acceptedIdentities: AcceptedIdentityIndex = {
-    bySequence: new Map(),
-    byId: new Map(),
-    order: [],
-  };
+  const acceptedIdentities = createAcceptedIdentityIndex();
   const setStatus = (next: BrowserChannelStreamStatus) => {
     if (status === next) return;
     status = next;
@@ -336,7 +329,7 @@ function normalizeOptions(options: BrowserChannelStreamOptions): NormalizedOptio
   }
 
   const reconnectDelaysMs =
-    options.reconnectDelaysMs ?? DEFAULT_RECONNECT_DELAYS_MS;
+    options.reconnectDelaysMs ?? DEFAULT_CHANNEL_STREAM_RECONNECT_DELAYS_MS;
   if (
     !Array.isArray(reconnectDelaysMs) ||
     reconnectDelaysMs.some(
@@ -349,7 +342,7 @@ function normalizeOptions(options: BrowserChannelStreamOptions): NormalizedOptio
   }
 
   const maxPendingMessages =
-    options.maxPendingMessages ?? DEFAULT_MAX_PENDING_MESSAGES;
+    options.maxPendingMessages ?? DEFAULT_CHANNEL_STREAM_MAX_PENDING_MESSAGES;
   if (
     !Number.isSafeInteger(maxPendingMessages) ||
     maxPendingMessages < 1 ||
@@ -358,7 +351,8 @@ function normalizeOptions(options: BrowserChannelStreamOptions): NormalizedOptio
     throw invalidOptions("maxPendingMessages must be between 1 and 4096");
   }
 
-  const readyTimeoutMs = options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+  const readyTimeoutMs =
+    options.readyTimeoutMs ?? DEFAULT_CHANNEL_STREAM_READY_TIMEOUT_MS;
   if (
     !Number.isSafeInteger(readyTimeoutMs) ||
     readyTimeoutMs < 100 ||
@@ -501,11 +495,9 @@ interface SocketAttemptOptions {
 
 function consumeSocketAttempt(options: SocketAttemptOptions): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const pending: Message[] = [];
     let grant: string | undefined = options.grant;
     let opened = false;
     let ready = false;
-    let accepting = false;
     let disconnected = false;
     let settled = false;
     let terminalError: BrowserChannelStreamError | undefined;
@@ -519,13 +511,15 @@ function consumeSocketAttempt(options: SocketAttemptOptions): Promise<void> {
       grant = undefined;
     };
 
+    let lane: MessageAcceptanceQueue;
+
     const settleIfPossible = () => {
-      if (settled || accepting) return;
+      if (settled || lane.busy) return;
       if (terminalError) {
         settled = true;
         detach();
         reject(terminalError);
-      } else if (disconnected && pending.length === 0) {
+      } else if (disconnected && lane.pending === 0) {
         settled = true;
         detach();
         resolve();
@@ -535,7 +529,7 @@ function consumeSocketAttempt(options: SocketAttemptOptions): Promise<void> {
     const fail = (error: BrowserChannelStreamError) => {
       if (settled || terminalError) return;
       terminalError = error;
-      pending.length = 0;
+      lane.stop();
       closeSocket(options.socket, "fleetd_client_error");
       settleIfPossible();
     };
@@ -547,49 +541,32 @@ function consumeSocketAttempt(options: SocketAttemptOptions): Promise<void> {
       settleIfPossible();
     };
 
-    const drain = async () => {
-      if (accepting || settled || terminalError) return;
-      accepting = true;
-      try {
-        while (!settled && !terminalError && pending.length > 0) {
-          const message = pending.shift();
-          if (!message) break;
-          const duplicate = classifyDuplicate(
-            message,
-            options.getCursor(),
-            options.acceptedIdentities,
+    lane = new MessageAcceptanceQueue({
+      accept: options.accept,
+      maxPendingMessages: options.maxPendingMessages,
+      acceptedIdentities: options.acceptedIdentities,
+      getCursor: options.getCursor,
+      setCursor: options.setCursor,
+      failed(failure) {
+        if (failure.type === "identity_conflict") {
+          fail(
+            new BrowserChannelStreamError(
+              "server_protocol_error",
+              "browser channel stream reused a stable message identity inconsistently",
+            ),
           );
-          if (duplicate === "conflict") {
-            fail(
-              new BrowserChannelStreamError(
-                "server_protocol_error",
-                "browser channel stream reused a stable message identity inconsistently",
-              ),
-            );
-            break;
-          }
-          if (duplicate === "duplicate") continue;
-
-          try {
-            await options.accept(message);
-          } catch (cause) {
-            fail(
-              new BrowserChannelStreamError(
-                "consumer_rejected",
-                "browser channel stream consumer rejected a message",
-                { cause },
-              ),
-            );
-            break;
-          }
-          options.setCursor(message.seq);
-          rememberIdentity(message, options.acceptedIdentities);
+        } else {
+          fail(
+            new BrowserChannelStreamError(
+              "consumer_rejected",
+              "browser channel stream consumer rejected a message",
+              { cause: failure.cause },
+            ),
+          );
         }
-      } finally {
-        accepting = false;
-        settleIfPossible();
-      }
-    };
+      },
+      idle: settleIfPossible,
+    });
 
     options.socket.onopen = () => {
       if (settled || terminalError || disconnected) return;
@@ -651,13 +628,11 @@ function consumeSocketAttempt(options: SocketAttemptOptions): Promise<void> {
         fail(message);
         return;
       }
-      if (pending.length >= options.maxPendingMessages) {
-        pending.length = 0;
+      if (!lane.offer(message)) {
+        lane.clear();
         disconnect("fleetd_client_backpressure");
         return;
       }
-      pending.push(message);
-      void drain();
     };
 
     options.socket.onerror = () => {
@@ -665,7 +640,7 @@ function consumeSocketAttempt(options: SocketAttemptOptions): Promise<void> {
     };
     options.socket.onclose = () => {
       disconnected = true;
-      if (options.isStopped()) pending.length = 0;
+      if (options.isStopped()) lane.clear();
       settleIfPossible();
     };
     const abortAttempt = () => {
@@ -697,68 +672,13 @@ function decodeMessageFrame(
   if (!isExactRecord(value, ["message", "type"]) || value.type !== "message") {
     return protocolFailure("browser channel stream received an unsupported frame");
   }
-  const message = value.message;
-  if (
-    !isExactRecord(message, [
-      "causation_id",
-      "channel_id",
-      "correlation_id",
-      "created_at_ms",
-      "id",
-      "kind",
-      "payload",
-      "recipient_id",
-      "sender_id",
-      "seq",
-    ]) ||
-    !Number.isSafeInteger(message.seq) ||
-    (message.seq as number) <= 0 ||
-    typeof message.id !== "string" ||
-    message.id.length === 0 ||
-    message.channel_id !== channelId ||
-    typeof message.sender_id !== "string" ||
-    message.sender_id.length === 0 ||
-    !isNullableString(message.recipient_id) ||
-    typeof message.kind !== "string" ||
-    message.kind.length === 0 ||
-    !isNullableString(message.correlation_id) ||
-    !isNullableString(message.causation_id) ||
-    !Number.isSafeInteger(message.created_at_ms)
-  ) {
+  const message = decodeChannelMessage(value.message, channelId);
+  if (isDecodeFailure(message)) {
     return protocolFailure(
       "browser channel stream received an invalid immutable message envelope",
     );
   }
   return message as unknown as Message;
-}
-
-function classifyDuplicate(
-  message: Message,
-  cursor: number,
-  identities: AcceptedIdentityIndex,
-): "new" | "duplicate" | "conflict" {
-  const sequenceForId = identities.byId.get(message.id);
-  if (sequenceForId !== undefined && sequenceForId !== message.seq) {
-    return "conflict";
-  }
-  const idForSequence = identities.bySequence.get(message.seq);
-  if (idForSequence !== undefined && idForSequence !== message.id) {
-    return "conflict";
-  }
-  if (message.seq <= cursor) return "duplicate";
-  return "new";
-}
-
-function rememberIdentity(message: Message, identities: AcceptedIdentityIndex): void {
-  identities.bySequence.set(message.seq, message.id);
-  identities.byId.set(message.id, message.seq);
-  identities.order.push(message.seq);
-  if (identities.order.length <= MAX_RETAINED_IDENTITIES) return;
-  const expiredSequence = identities.order.shift();
-  if (expiredSequence === undefined) return;
-  const expiredId = identities.bySequence.get(expiredSequence);
-  identities.bySequence.delete(expiredSequence);
-  if (expiredId !== undefined) identities.byId.delete(expiredId);
 }
 
 function browserSocketUrl(origin: string): string {
@@ -779,27 +699,8 @@ function closeSocket(
   }
 }
 
-function isExactRecord(
-  value: unknown,
-  keys: readonly string[],
-): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return (
-    actual.length === expected.length &&
-    actual.every((key, index) => key === expected[index])
-  );
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
-}
-
 function isCursor(value: number): boolean {
-  return Number.isSafeInteger(value) && value >= 0;
+  return isChannelStreamCursor(value);
 }
 
 function protocolFailure(message: string): BrowserChannelStreamError {
