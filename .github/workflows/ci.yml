@@ -100,6 +100,12 @@ jobs:
       - name: Generated artifacts match their sources
         run: npm run verify:generated
 
+      # The real-daemon run belongs to bin/ci after the Rust build. This job
+      # still compiles the runner so its independent process harness cannot
+      # drift unnoticed on a clean checkout.
+      - name: Native stream qualification runner compiles
+        run: bun build tools/qualify-native-channel-stream.ts --target node --outfile /tmp/qualify-native-channel-stream-check.js
+
   desktop:
     name: desktop
     # macOS is the desktop target, and `electrobun prepare` fetches a

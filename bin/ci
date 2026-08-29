@@ -32,6 +32,10 @@ npm ci
 npm run test -w @fleetd/client -w @fleetd/conversation-web
 npm run typecheck -w @fleetd/client -w @fleetd/conversation-web
 
+# Exercise the native TypeScript channel client against the real daemon,
+# including durable replay after the daemon process is replaced.
+node --experimental-strip-types tools/qualify-native-channel-stream.ts
+
 # Regenerates every committed derived artifact and asks git whether the result
 # differs: the contract from the handlers, the client from the contract, the
 # served bundle from the app, the client's version against the contract's, and
@@ -59,3 +63,5 @@ npm audit --omit=dev --audit-level=moderate
 # would notice it stopped compiling.
 bun build tools/qualify-live-conversation.ts --target bun \
     --outfile target/qualify-live-conversation-check.js
+bun build tools/qualify-native-channel-stream.ts --target node \
+    --outfile target/qualify-native-channel-stream-check.js
