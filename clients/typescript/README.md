@@ -57,6 +57,31 @@ duplicate sequences are not re-presented, and a missing or mismatched grant
 linkage fails closed without an HTTP history fallback. `maxPendingMessages`
 bounds frames waiting behind the one message currently being accepted.
 
+Native services and terminal presentations use the bearer-authenticated stream
+directly. The credential is sent only in the WebSocket upgrade header and never
+appears in the URL or subprotocol:
+
+```ts
+import { openNativeChannelStream } from "@fleetd/client";
+
+const stream = openNativeChannelStream({
+  origin: "http://127.0.0.1:4317",
+  channelId,
+  credential: participantToken,
+  after: retainedCursor,
+  async accept(message) {
+    await persistMessageAndCursor(message, message.seq);
+  },
+});
+
+await stream.closed;
+```
+
+The adapter reconnects only from the highest cursor whose `accept` callback
+resolved. Persist the message and cursor together before resolving when the
+consumer performs external effects. A rejected callback fails the stream
+without advancing; bounded backpressure reconnects and replays from SQLite.
+
 ## Headless conversation session
 
 Presentation targets compose the wire client through `ConversationTransport`

@@ -10,6 +10,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./browser-channel-stream": "./src/browser-channel-stream.ts",
+    "./native-channel-stream": "./src/native-channel-stream.ts",
     "./conversation": "./src/conversation-session.ts",
     "./conversation-transport": "./src/conversation-transport.ts",
     "./operator": "./src/operator-client.ts",
@@ -18,14 +19,18 @@
   },
   "scripts": {
     "generate": "openapi-ts",
-    "test": "node --experimental-strip-types --test test/browser-channel-stream.test.mjs test/conversation-session.test.mjs && bun test test/operator-client.test.mjs",
+    "test": "node --experimental-strip-types --test test/browser-channel-stream.test.mjs test/native-channel-stream.test.mjs test/conversation-session.test.mjs && bun test test/operator-client.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@hey-api/openapi-ts": "0.97.3",
+    "@types/ws": "8.18.1",
     "typescript": "6.0.3"
   },
   "overrides": {
     "js-yaml": "5.3.0"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
   }
 }
