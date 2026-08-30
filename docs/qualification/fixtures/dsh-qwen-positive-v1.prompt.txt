@@ -1,0 +1,21 @@
+Execute the neutral harness positive control exactly as follows. Work only in the current checkout. Do not change any committed source or configuration bytes. The only persistent new path you may create is `qualification-positive-control.json` at the repository root.
+
+1. Require `git rev-parse HEAD` to equal `92c4df7edefd8d195afe7944daa05f4248866d0a`.
+2. Verify these exact SHA-256 values before running anything:
+   - `experiments/real-vertical-slice/protocol/v0.3/conformance/p2/manifest.json` = `6c9d86109e34db14b7eb8e6172ea507db4164046eedbfbdd414590c33463710d`
+   - `experiments/real-vertical-slice/protocol/v0.3/conformance/p2/README.md` = `befc6b685fde8842752949315e6bea1691abbd63676f5e7614cbe0e23843f5b9`
+   - `experiments/real-vertical-slice/protocol/v0.3/conformance/p2/value-schema-cases.json` = `6fddb18a99200319ccccdeb6770f65377fe56b446b28d351c08f7a37a773bc83`
+   - `experiments/real-vertical-slice/federated/kernel-duel-v0.3/p2/run-duel.mjs` = `6aa8dcd73686f12e12c9dc84c59462994437834fdb892088419e9e43d521cb43`
+   - `experiments/real-vertical-slice/federated/kernel-v0.3-rust/target/debug/gooi-kernel-v03-rust` = `6e18ecd59967c89af58ddb9e80554bff7ef56468ee24d90f17f3f324972ce43b`
+   - `experiments/real-vertical-slice/federated/kernel-v0.3-typescript-glm/dist/src/cli.js` = `13d770e329e18e90890c833e292475db4699eb5bbe74cdaac554a90885f0ee22`
+3. Run exactly this command from the repository root, with no wrapper or alternative runner:
+   `node experiments/real-vertical-slice/federated/kernel-duel-v0.3/p2/run-duel.mjs`
+4. Require exit status 0 and stdout exactly `{"status":"pass","cases":107,"classifications":214,"divergences":0}` followed by one LF.
+5. The committed runner rewrites its two evidence files with checkout-specific absolute paths. Restore exactly these two runner-owned paths to `HEAD` after inspecting the result, and no others:
+   - `experiments/real-vertical-slice/federated/kernel-duel-v0.3/p2/duel-result.json`
+   - `experiments/real-vertical-slice/federated/kernel-duel-v0.3/p2/DUEL_RESULT.md`
+6. Only after every check passes, write `qualification-positive-control.json` as exactly this one canonical JSON line followed by one LF:
+   `{"duel_summary":{"cases":107,"classifications":214,"divergences":0,"status":"pass"},"input_digests":{"manifest_sha256":"6c9d86109e34db14b7eb8e6172ea507db4164046eedbfbdd414590c33463710d","reference_boundary_sha256":"befc6b685fde8842752949315e6bea1691abbd63676f5e7614cbe0e23843f5b9","value_schema_corpus_sha256":"6fddb18a99200319ccccdeb6770f65377fe56b446b28d351c08f7a37a773bc83"},"protocol":"gooi.harness-positive-control/v1"}`
+7. Verify the artifact SHA-256 is `f9adbad0987217eea433dc75935d0c34a8e9fb66badcad3eaf18abc036c11882` and verify there are no tracked changes and no other untracked paths. If any precondition or command fails, do not create the artifact and report the exact failure.
+
+Return a concise report of the verified revision and digests, runner exit and summary, artifact digest, tracked status, and any permission requests. Do not do unrelated work.

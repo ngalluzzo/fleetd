@@ -1,0 +1,87 @@
+{
+  "program": "gooi",
+  "phase": "P3",
+  "sequence": 2,
+  "role": "corpus-audit",
+  "vision": {
+    "path": "VISION.md",
+    "sha256": "3b080b70ce263a73fdf97c2ddbe463d586d18637b9262693542247b75ff73444"
+  },
+  "roadmap": {
+    "path": "ROADMAP.md",
+    "sha256": "d6fc2f8392726698d0520e434b08a70acafbb12214e9f8e7e34e6161b5802e1a"
+  },
+  "program_state": {
+    "path": "PROGRAM_STATE.json",
+    "sha256": "43bfe3780bf750606ae73b43bb9cca108c604247a41ddb1682a5f38151410b70"
+  },
+  "snapshot": {
+    "root": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-2026-08-29/snapshots/sha256-3782b7a015def1e73f0defc4936777022021cee2cd1a2655d07d2a0cf2a1ea2c",
+    "protocol": "gooi.audit-snapshot/v1",
+    "source_commit": "f83d29d662f0d7725445ddf13bd66752f8087926",
+    "manifest_sha256": "3782b7a015def1e73f0defc4936777022021cee2cd1a2655d07d2a0cf2a1ea2c",
+    "file_count": 145,
+    "total_bytes": 427854,
+    "candidate_tree_git_oid": "c87a36de07945d7028cc3e3d6a7ec799e447871c",
+    "candidate_manifest_sha256": "15c41d974c9a4e73df10312330b76eb1b56436fb6adac665c2906fd4a0e10da5",
+    "candidate_runner_sha256": "ac0cb8c2c3af7b7c8808ec49c6adad7adc49b4efe45bca083b781d1c27585a51"
+  },
+  "objective": "Independently decide whether the exact 31-case P3 composition candidate can be promoted without semantic repair. This is the required freeze audit, not an implementation review. Read only the content-addressed snapshot, derive evidence rather than trusting the candidate report or earlier audits, and return exactly one verdict: APPROVE-FREEZE, REPAIR, or BLOCKED.",
+  "inputs": [
+    "VISION.md",
+    "ROADMAP.md",
+    "PROGRAM_STATE.json",
+    "FLEET_PROTOCOL.md",
+    "decisions/0003-bound-p3-to-phase-pure-composition.md",
+    "experiments/real-vertical-slice/protocol/v0.3/README.md",
+    "experiments/real-vertical-slice/protocol/v0.3/VALUE_SCHEMA.md",
+    "experiments/real-vertical-slice/protocol/v0.3/DIAGNOSTICS.md",
+    "experiments/real-vertical-slice/protocol/v0.3/CONFORMANCE.md",
+    "experiments/real-vertical-slice/protocol/v0.3/schemas/**",
+    "experiments/real-vertical-slice/model-qualification/p3-composition/run-001/WORK_PACKET.md",
+    "experiments/real-vertical-slice/model-qualification/p3-composition/run-001/GLM_AUDIT.md",
+    "experiments/real-vertical-slice/model-qualification/p3-composition/run-001/CODEX_PRECHECK.md",
+    "experiments/real-vertical-slice/model-qualification/p3-composition/run-001/candidate/**"
+  ],
+  "outputs": [
+    "One durable Fleetd work.result/v1 response containing the verdict and audit evidence. Do not modify the snapshot or GOOI. Disposable analysis scripts or notes may be written only beneath the current Fleetd qualification working directory and are not promotion artifacts."
+  ],
+  "audit_requirements": [
+    "Verify the snapshot revision and every governing digest supplied above before relying on semantics. Treat a mismatch as BLOCKED.",
+    "Run the candidate verifier without --write and record its exact exit and stdout, but do not treat that self-verifier as sufficient evidence.",
+    "Independently enumerate all 31 manifest cases and confirm the exact inventory: 16 ready, 8 blocked, 7 invalid, with expected exit 0 for ready/blocked and 2 for invalid.",
+    "For every case, independently verify that the stored expected object is canonical JSON, that graph_hash omits only graph_hash under the gooi.graph/v0.3 domain, that plan_hash omits only plan_hash under gooi.plan/v0.3, and that graph and plan diagnostics are byte-for-byte equal.",
+    "For every case, verify exact graph and plan status, exit classification, effective-value inclusion or exclusion, contributing claim IDs, direct root-authority tuples, diagnostic objects and cardinalities, empty P3 obligations, and deterministic output sorting.",
+    "Verify all four algebras are behaviorally discriminated: exclusive, compatible-equality, keyed-set-union, and bounded-meet. Check equal and unequal contributions, keyed collisions and outside-array differences, explicit shared 403 representation with reverse forbidden, opaque retention, and order-sensitive versus order-insensitive arrays.",
+    "Independently validate bounded-meet direction, canonical endpoint identity, closure, antisymmetry, duplicate-pair rules, complete unique GLBs, and static top-level non-empty enum/carrier set equality.",
+    "Prove static bounded-meet package validation applies to every registered package even when no claim uses it.",
+    "Prove malformed-package precedence: a statically malformed package is diagnosed before facet-value validation and composition; an off-enum claim referencing it must not also emit facet-value-invalid; valid common claim envelopes and direct roots remain visible; invalid outputs have no effective values or obligations.",
+    "Prove off-enum behavior separately: for a statically well-formed package, emit one facet-value-invalid per offending claim before composition.",
+    "Independently close or reopen every numbered item in GLM_AUDIT.md (P3-AUD-001 through P3-AUD-007) and CODEX_PRECHECK.md (P3-PRE-001 and P3-PRE-002). Do not accept those documents as oracles.",
+    "Verify phase purity across all cases: only active authoritative claims and complete bundles/scopes; no derivations, retractions, partial or failed scopes, missing bindings, orphaning, or non-empty obligations.",
+    "Verify the 100 fixed-seed permutation contract for every case and distinguish actual independent recomputation from merely rerunning candidate/run-corpus.mjs.",
+    "Confirm the snapshot contains neither Rust nor TypeScript reference implementations. Do not inspect, locate, or infer behavior from either reference outside the snapshot."
+  ],
+  "acceptance": [
+    "Begin the final response with exactly `VERDICT: APPROVE-FREEZE`, `VERDICT: REPAIR`, or `VERDICT: BLOCKED`.",
+    "APPROVE-FREEZE is permitted only if the exact candidate needs no semantic or fixture repair and can be promoted byte-for-byte; the only remaining work may be coordinator-owned README placement and externally recorded digest bookkeeping.",
+    "REPAIR requires every definite defect to name the exact case/file, violated normative rule, observed bytes or structured value, required correction, and whether hashes or manifest entries must change.",
+    "BLOCKED requires the exact missing, stale, inaccessible, or ambiguous authority that prevents a decision; do not guess.",
+    "Report the 31-case status census, self-verifier outcome, independent checks performed, closure status for every prior finding, exact candidate manifest digest, and whether any scratch files or permission requests occurred.",
+    "Do not claim promotion, modify README/digests, or advance PROGRAM_STATE.json. The coordinator alone performs bookkeeping after an APPROVE-FREEZE verdict."
+  ],
+  "non_goals": [
+    "Do not inspect, run, compare, or modify either Rust or TypeScript reference implementation.",
+    "Do not repair candidate files, protocol files, governing documents, decisions, audits, or prechecks.",
+    "Do not implement P3, run a reference duel, or use either implementation as an oracle.",
+    "Do not perform P4 multi-hop authority work or P5 completeness/planning work.",
+    "Do not access the GOOI repository outside the supplied snapshot, use the web, or broaden the audit corpus."
+  ],
+  "stop_conditions": [
+    "Any supplied governing or snapshot identity does not match the bytes you can read.",
+    "Any required semantic authority is absent from the snapshot.",
+    "A second unresolved normative question is required to decide the candidate.",
+    "The audit would require reference-implementation inspection or a write to the snapshot or GOOI.",
+    "The candidate verifier attempts to mutate files without --write or any required command cannot run under the declared boundary."
+  ]
+}

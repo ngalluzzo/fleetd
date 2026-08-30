@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "qualification": "dsh-ptc-qwen-harness-ab-prerequisites",
+  "date": "2026-08-29",
+  "parent_record": "docs/qualification/dsh-ptc-qwen-harness-ab-blocked-2026-08-29.json",
+  "status": "stopped_at_prerequisite_b",
+  "verdict": "required_loopback_only_ephemeral_bind_not_expressible_with_tested_seatbelt_mechanism",
+  "platform": {
+    "product": "macOS",
+    "version": "26.5.2",
+    "build": "25F84",
+    "darwin": "25.5.0",
+    "architecture": "arm64",
+    "sandbox_exec_path": "/usr/bin/sandbox-exec",
+    "sandbox_exec_sha256": "8290e4be7387a0df83cd1559e86afd880464f269450573d012795761fe298f16",
+    "nc_path": "/usr/bin/nc",
+    "nc_sha256": "427423db6d5d5e9f720c5e110a2c9b3cba39ea089dafed4ab936d04dd218bdac",
+    "external_interface": {
+      "name": "en0",
+      "address": "192.168.1.184"
+    }
+  },
+  "tested_policy": {
+    "network_bind": "(allow network-bind (local tcp \"localhost:*\"))",
+    "network_inbound": "(allow network-inbound (local tcp \"localhost:*\"))",
+    "baseline": "fleetd_deny_default_process_filesystem_ipc_signal_rules_with_private_temporary_writable_root"
+  },
+  "matrix": [
+    {
+      "id": "ipv4_loopback_ephemeral",
+      "protocol": "tcp",
+      "address": "127.0.0.1",
+      "port": 0,
+      "expected": "allow",
+      "observed": "allowed",
+      "exit_code": 0
+    },
+    {
+      "id": "ipv6_loopback_ephemeral",
+      "protocol": "tcp6",
+      "address": "::1",
+      "port": 0,
+      "expected": "allow",
+      "observed": "allowed",
+      "exit_code": 0
+    },
+    {
+      "id": "ipv4_wildcard_ephemeral",
+      "protocol": "tcp",
+      "address": "0.0.0.0",
+      "port": 0,
+      "expected": "deny",
+      "observed": "allowed",
+      "exit_code": 0,
+      "safety_failure": true
+    },
+    {
+      "id": "external_interface_ephemeral",
+      "protocol": "tcp",
+      "address": "192.168.1.184",
+      "port": 0,
+      "expected": "deny",
+      "observed": "allowed",
+      "exit_code": 0,
+      "safety_failure": true
+    },
+    {
+      "id": "ipv4_loopback_fixed",
+      "protocol": "tcp",
+      "address": "127.0.0.1",
+      "port": 43123,
+      "expected": "deny",
+      "observed": "allowed",
+      "exit_code": 0,
+      "safety_failure": true
+    },
+    {
+      "id": "unrelated_udp_inbound",
+      "protocol": "udp",
+      "address": "127.0.0.1",
+      "port": 0,
+      "expected": "deny",
+      "observed": "denied",
+      "exit_code": 1,
+      "error": "nc: Operation not permitted"
+    }
+  ],
+  "bind_without_inbound": {
+    "tcp_listener_observed": "denied",
+    "exit_code": 1,
+    "error": "nc: listen: Operation not permitted"
+  },
+  "parser_rejections": [
+    {
+      "filter": "(local tcp \"127.0.0.1:*\")",
+      "exit_code": 65,
+      "error": "host must be * or localhost in network address"
+    },
+    {
+      "filter": "(local tcp \"[::1]:*\")",
+      "exit_code": 65,
+      "error": "host must be * or localhost in network address"
+    },
+    {
+      "filter": "(local tcp \"localhost:0\")",
+      "exit_code": 65,
+      "error": "invalid port in network address"
+    },
+    {
+      "filter": "(local tcp \"localhost:49152-65535\")",
+      "exit_code": 65,
+      "error": "invalid port in network address"
+    }
+  ],
+  "prerequisites": {
+    "a_hermetic_runtime_rehome": {
+      "status": "not_started_after_fail_fast_b"
+    },
+    "b_typed_loopback_only_ephemeral_bind": {
+      "status": "platform_limit",
+      "typed_capability_added": false,
+      "raw_sbpl_escape_hatch_added": false,
+      "generic_network_bind_added": false,
+      "unsandboxed_exception_added": false
+    }
+  },
+  "qualification": {
+    "source_files_edited": [],
+    "runtime_rehomed": false,
+    "dsh_source_patched": false,
+    "profile_catalog_edited": false,
+    "seats_restarted": false,
+    "model_free_harness_boots": 0,
+    "work_messages_created": 0,
+    "invocations_created": 0,
+    "positive_control_started": false,
+    "seq_119_replayed": false,
+    "artifacts_created": 0
+  },
+  "prior_seats": [
+    {
+      "agent_id": "7d5177c1-f5f9-429c-b7ff-6ba5c8ffd647",
+      "profile_id": "qual-dsh-ptc-qwen-positive",
+      "desired_state": "stopped",
+      "revision": 2
+    },
+    {
+      "agent_id": "8d7cb92d-ed8a-48ff-be64-00e083a8d7bb",
+      "profile_id": "qual-opencode-qwen-positive",
+      "desired_state": "stopped",
+      "revision": 2
+    }
+  ],
+  "model_metrics_at_final_checkpoint": {
+    "requests_started": 0,
+    "requests_completed": 0,
+    "requests_failed": 0,
+    "streaming_requests": 0,
+    "in_flight": 0,
+    "prompt_tokens_total": 0,
+    "completion_tokens_total": 0,
+    "latest": null,
+    "last_request_at": null
+  },
+  "follow_up_contract": {
+    "required_capabilities": [
+      "allow_ipv4_loopback_ephemeral",
+      "allow_ipv6_loopback_ephemeral_where_supported",
+      "deny_ipv4_wildcard_ephemeral",
+      "deny_external_interface_ephemeral",
+      "deny_fixed_undeclared_loopback_ports",
+      "deny_unrelated_inbound",
+      "opencode_1_4_0_acp_model_free_boot_and_shutdown"
+    ],
+    "candidate_mechanisms": [
+      "fleetd_owned_prebound_socket_with_runtime_fd_adoption",
+      "separately_sandboxed_loopback_broker",
+      "vm_or_os_sandbox_with_enforceable_address_and_port_policy"
+    ],
+    "seatbelt_localhost_wildcard_is_acceptable": false
+  }
+}

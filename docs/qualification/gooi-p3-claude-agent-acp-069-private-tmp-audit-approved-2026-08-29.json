@@ -1,0 +1,224 @@
+{
+  "protocol": "fleetd.qualification/gooi-p3-claude-agent-acp-audit/v1",
+  "date": "2026-08-29",
+  "status": "completed",
+  "qualification_verdict": "AUDITOR_APPROVED_FREEZE",
+  "auditor_verdict": "APPROVE-FREEZE",
+  "claim_boundary": "A fresh Fleetd-only Claude audit approved the exact candidate without semantic or fixture repair. Promotion and coordinator bookkeeping remain outside this run.",
+  "candidate": {
+    "commit": "f83d29d662f0d7725445ddf13bd66752f8087926",
+    "gooi_worktree_clean_before_and_after": true,
+    "gooi_mutated": false
+  },
+  "snapshot": {
+    "root": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-2026-08-29/snapshots/sha256-3782b7a015def1e73f0defc4936777022021cee2cd1a2655d07d2a0cf2a1ea2c",
+    "manifest_sha256": "3782b7a015def1e73f0defc4936777022021cee2cd1a2655d07d2a0cf2a1ea2c",
+    "file_count": 145,
+    "total_bytes": 427854,
+    "all_file_digests_verified_after": true,
+    "non_readonly_files_after": 0,
+    "symlinks_after": 0,
+    "git_metadata_after": 0,
+    "rust_or_typescript_files": 0,
+    "modified": false
+  },
+  "credential_bootstrap": {
+    "qualification_root": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-claude-agent-acp-0.69.0-private-tmp-v1-2026-08-29",
+    "source_path_class": "ambient_claude_credentials",
+    "destination_path_class": "qualification_private_home_credentials",
+    "bytes": 501,
+    "mode": "0600",
+    "top_level_key_name": "claudeAiOauth",
+    "root_metadata_copied": false,
+    "other_ambient_state_copied": false,
+    "parsed": false,
+    "printed": false,
+    "hashed": false,
+    "values_or_bytes_in_evidence": false,
+    "missing_typed_fleetd_feature": "credential_onboarding"
+  },
+  "fleetd": {
+    "repository_commit": "8af2743b78ac8220d090221440ad1f1a9d7d8935",
+    "coordinator_agent_id": "7e5185dc-d3ec-4b5d-a960-4edea250494c",
+    "auditor_agent_id": "7f3cefaa-405c-4281-bd4f-ccd0f0afae48",
+    "auditor_agent_name": "gooi-p3-claude-auditor-acp069-private-tmp-20260829",
+    "channel_id": "f1db32eb-33c2-4467-acca-910706973c05",
+    "channel_name": "gooi-p3-corpus-audit-claude-acp069-private-tmp-20260829",
+    "message_seq": 126,
+    "message_id": "229601d3-7c89-4670-ae43-ce30a0ecfc22",
+    "message_kind": "work.request/v1",
+    "idempotency_key": "gooi/P3/corpus-audit/claude/f83d29d6/snapshot-3782b7a0/claude-agent-acp-0.69.0/private-tmp-v1",
+    "payload_bytes": 7440,
+    "payload_sha256": "195ae94da6e070397adc0ab00c123bb24e3d0c293370270e6fbb895135890ed0",
+    "durable_payload_byte_equal_to_frozen_request_without_evidence_newline": true,
+    "worker_config_sha256": "4e14b9cca2437a54cae12fa02592dbc6d648299d6a8c1061344e1e40be404346",
+    "sandbox": {
+      "kind": "macos_seatbelt",
+      "posture": "strict",
+      "read_access": "declared_and_system",
+      "network": "allow_outbound",
+      "configured_tmpdir": "qualification_private_tmp",
+      "claude_code_tmpdir_same_as_configured_tmpdir": true,
+      "ambient_tmp_granted": false,
+      "ambient_gooi_read_granted": false,
+      "snapshot_read_only_granted": true,
+      "process_group_boundary_remained_active": true
+    }
+  },
+  "runtime": {
+    "fleetd_binary_sha256_at_launch": "978251f2372bf44d06d7d334a194a2682fd60a0c59137700b92db496db808fea",
+    "plugin_id": "fleetd.harness.claude",
+    "plugin_version": "0.1.0",
+    "plugin_sha256_at_launch": "d83da78b09ec1fc399ab78efb7858b7ca99b0454a130564f3a7dd9e9eb56dfa4",
+    "focused_plugin_tests": {
+      "command": "cargo test -p fleetd-harness-claude",
+      "passed": 6,
+      "failed": 0
+    },
+    "adapter_name": "@agentclientprotocol/claude-agent-acp",
+    "adapter_version": "0.69.0",
+    "adapter_entrypoint_sha256": "260aac90bf75f197b93640087c1de66441761d43c2784efa035fdcee60b5dacd",
+    "adapter_package_sha256": "b45f4fe9301303d39cad609858c6417958dfb739290cf08e231ba23f48531da1",
+    "claude_agent_sdk_version": "0.3.232",
+    "claude_code_version": "2.1.251",
+    "claude_code_sha256": "625869b01e0050f260b2980fac248fd9cef9e462612bded4ec9d3d49ff8969a5",
+    "profile_digest": "sha256:866107b61dc7785d8a68d2e2bd07c43187ec82dcd7680a28e0198b3a55549d52",
+    "compatibility_digest": "sha256:c83682f8a23d0c5a1b7efe2e6f678562bf3eb99c403272927d2ee3ecfe4b3625",
+    "initialize_identity": {
+      "name": "@agentclientprotocol/claude-agent-acp",
+      "title": "Claude Agent",
+      "version": "0.69.0",
+      "protocol_version": 1
+    },
+    "post_run_shared_path_note": {
+      "concurrent_build_replaced_shared_target_paths": true,
+      "fleetd_path_sha256_after": "cf81323ee74b6824215b0bd38282f0a14105883ed62aa053a12a18b0a7a40495",
+      "plugin_path_sha256_after": "6e8f74a2fa675dcbb92af3dd5c27d91acf2f0e73ea1461ce7e95db734e2d0755",
+      "effect_on_running_process": "none",
+      "evidence_limitation": "The launch binary and plugin are identified by pre-dispatch digests but were not retained in an immutable runtime store."
+    }
+  },
+  "generation": {
+    "id": "5948133d-3f32-4d18-9d07-ffccabeee7ec",
+    "process_id": 84689,
+    "shutdown": "graceful",
+    "exit_code": 0,
+    "stop_disposition": "stopped",
+    "stop_reason": "worker stopped routing work"
+  },
+  "invocation": {
+    "id": "1aeb97c1-f4a3-45b9-865d-e463659fa3ce",
+    "generation_id": "5948133d-3f32-4d18-9d07-ffccabeee7ec",
+    "state": "terminal",
+    "dispatch_armed": true,
+    "dispatch_armed_at_ms": 1788028713576,
+    "terminal_at_ms": 1788029704992,
+    "wall_time_ms": 991416,
+    "execution_certainty": "outcome_known",
+    "terminal_reason": "completed",
+    "stop_reason": "end_turn",
+    "runtime_stop_reason": null,
+    "session_persistence": "runtime_claimed",
+    "session_quiescent": true,
+    "event_count": 674,
+    "observed_payload_bytes": 1400690,
+    "last_event_seq": 674,
+    "event_chain_digest": "sha256:53d40619a8389994e52e8495208d677e0f41f88d88ec1cc55b609fba903e91fd",
+    "event_counts": {
+      "prompt": 0,
+      "assistant": 94,
+      "reasoning": 0,
+      "tool_adapter_events": 352,
+      "plan": 0,
+      "usage": 155,
+      "metadata": 1,
+      "permission": 72,
+      "unknown": 0
+    },
+    "semantic_tool_call_count": null,
+    "semantic_tool_call_count_limitation": "Fleetd retained normalized aggregate event counts and the event-chain digest, not individual event bodies; adapter tool updates are not semantic tool-call counts.",
+    "usage": {
+      "used": 221965,
+      "size": 1000000,
+      "reported_cost_amount": 3.6204931999999994,
+      "reported_cost_currency": "USD"
+    }
+  },
+  "result": {
+    "seq": 127,
+    "id": "c3d9626a-b9cb-4d5f-bfd1-ddc582033673",
+    "causation_id": "229601d3-7c89-4670-ae43-ce30a0ecfc22",
+    "kind": "work.result/v1",
+    "payload_bytes": 12874,
+    "payload_sha256": "df517932cb99b68d1c5b284f60cb0be96dc21d541ea29b34c9888f4dfc46bcca",
+    "final_text_bytes": 5931,
+    "final_text_sha256": "7b4e87e2fa6294188106652e7b270cfce9b596044eef2033ecbf32203cf7e89a",
+    "first_line": "VERDICT: APPROVE-FREEZE",
+    "status": "completed",
+    "output_complete": true,
+    "findings": {
+      "cases_total": 31,
+      "ready": 16,
+      "blocked": 8,
+      "invalid": 7,
+      "exit_zero": 24,
+      "exit_two": 7,
+      "byte_identical_expected_outputs": 31,
+      "independent_permutation_recomputations": 3100,
+      "permutation_mismatches": 0,
+      "candidate_self_verifier_stdout": "PASS files=126 cases=31 permutations=3100",
+      "candidate_self_verifier_exit": 0,
+      "audit_findings_closed": [
+        "P3-AUD-001",
+        "P3-AUD-002",
+        "P3-AUD-003",
+        "P3-AUD-004",
+        "P3-AUD-005",
+        "P3-AUD-006",
+        "P3-AUD-007",
+        "P3-PRE-001",
+        "P3-PRE-002"
+      ]
+    },
+    "disclosed_inner_sandbox_option": {
+      "name": "dangerouslyDisableSandbox",
+      "count_reported_by_auditor": 1,
+      "purpose": "early Git execution probe",
+      "outer_fleetd_seatbelt_disabled": false,
+      "observed_outer_boundary_effect": "Git still failed opening /dev/null",
+      "used_by_later_conclusions": false,
+      "individual_event_body_retained_by_fleetd": false
+    }
+  },
+  "workspace_effects": {
+    "total_files_after_credential_cleanup": 144,
+    "total_bytes_after_credential_cleanup": 1698208,
+    "scratch_files": 133,
+    "private_claude_state_files": 10,
+    "private_tmp_files": 1,
+    "git_metadata": 0,
+    "rust_or_typescript_files_in_scratch": 0,
+    "all_within_qualification_root": true
+  },
+  "cleanup": {
+    "worker_and_descendants_stopped_before_credential_delete": true,
+    "qualification_credential_copy_deleted": true,
+    "qualification_credential_copy_absent": true,
+    "ambient_credential_present": true,
+    "ambient_credential_bytes": 501,
+    "ambient_credential_mode": "0600"
+  },
+  "logs": {
+    "stdout_sha256": "1dad351761f7d8f06a6aa452c09f1a3a12822f32af3de2fa21b6d3508d886d1b",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "containment": {
+    "direct_claude_cli_audit": false,
+    "gooi_modified": false,
+    "snapshot_modified": false,
+    "reference_implementation_access_reported": false,
+    "unrelated_seat_restarted": false,
+    "prior_requests_touched": false,
+    "commit_created": false
+  }
+}

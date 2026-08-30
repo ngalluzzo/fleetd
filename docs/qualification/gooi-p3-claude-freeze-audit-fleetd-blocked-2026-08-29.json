@@ -1,0 +1,199 @@
+{
+  "protocol": "fleetd.qualification/gooi-p3-claude-freeze-audit/v1",
+  "date": "2026-08-29",
+  "status": "blocked_before_dispatch",
+  "auditor_verdict": null,
+  "qualification_verdict": "BLOCKED_TRANSPORT",
+  "claim_boundary": "This record proves a Fleetd-routed request and a fail-closed pre-dispatch stop. It is not a semantic audit of the GOOI P3 candidate.",
+  "candidate": {
+    "repository": "/Users/ngalluzzo/repos/gooi",
+    "commit": "f83d29d662f0d7725445ddf13bd66752f8087926",
+    "tree_oid": "c87a36de07945d7028cc3e3d6a7ec799e447871c",
+    "manifest_sha256": "15c41d974c9a4e73df10312330b76eb1b56436fb6adac665c2906fd4a0e10da5",
+    "runner_sha256": "ac0cb8c2c3af7b7c8808ec49c6adad7adc49b4efe45bca083b781d1c27585a51",
+    "preflight": {
+      "command": "/opt/homebrew/bin/node <snapshot>/experiments/real-vertical-slice/model-qualification/p3-composition/run-001/candidate/run-corpus.mjs",
+      "exit_code": 0,
+      "stdout": "PASS files=126 cases=31 permutations=3100",
+      "case_count": 31,
+      "permutations": 3100,
+      "plan_status_census": {"ready": 16, "blocked": 8, "invalid": 7}
+    }
+  },
+  "snapshot": {
+    "protocol": "gooi.audit-snapshot/v1",
+    "root": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-2026-08-29/snapshots/sha256-3782b7a015def1e73f0defc4936777022021cee2cd1a2655d07d2a0cf2a1ea2c",
+    "manifest": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-2026-08-29/evidence/snapshot-manifest.sha256-3782b7a015def1e73f0defc4936777022021cee2cd1a2655d07d2a0cf2a1ea2c.json",
+    "manifest_sha256": "3782b7a015def1e73f0defc4936777022021cee2cd1a2655d07d2a0cf2a1ea2c",
+    "file_count": 145,
+    "total_bytes": 427854,
+    "regular_file_mode": "0444",
+    "directory_mode": "0555",
+    "verified_after_run": true,
+    "authorized_inputs": [
+      "VISION.md",
+      "ROADMAP.md",
+      "PROGRAM_STATE.json",
+      "FLEET_PROTOCOL.md",
+      "decisions/0003-bound-p3-to-phase-pure-composition.md",
+      "experiments/real-vertical-slice/protocol/v0.3/{README.md,VALUE_SCHEMA.md,DIAGNOSTICS.md,CONFORMANCE.md,schemas/**}",
+      "experiments/real-vertical-slice/model-qualification/p3-composition/run-001/{WORK_PACKET.md,GLM_AUDIT.md,CODEX_PRECHECK.md,candidate/**}"
+    ],
+    "explicitly_excluded": [
+      "experiments/real-vertical-slice/federated/kernel-v0.3-rust/**",
+      "experiments/real-vertical-slice/federated/kernel-v0.3-typescript/**",
+      "experiments/real-vertical-slice/federated/kernel-duel*/**",
+      "all ambient GOOI paths outside the snapshot"
+    ],
+    "excluded_path_check": "pass",
+    "symlink_count": 0
+  },
+  "prompt": {
+    "fixture": "docs/qualification/fixtures/gooi-p3-claude-freeze-audit-v1.payload.json",
+    "fixture_sha256": "d0d159782dc82996148c9e90fc97fc16b11cfc29daf14a2df75ff7541f531387",
+    "canonical_evidence": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-2026-08-29/evidence/request-payload.canonical.json",
+    "canonical_bytes_with_lf": 7441,
+    "canonical_sha256_with_lf": "98133641bd5418d3eb1b383c320e90a6ef437083c07b70592381dcfaf67eb1d7",
+    "payload_bytes_without_lf": 7440,
+    "payload_sha256_without_lf": "195ae94da6e070397adc0ab00c123bb24e3d0c293370270e6fbb895135890ed0",
+    "durable_payload_byte_equality": true,
+    "credential_material_present": false
+  },
+  "fleetd": {
+    "repository_commit": "8af2743b78ac8220d090221440ad1f1a9d7d8935",
+    "version": "0.1.0",
+    "binary_sha256": "c781514f1571143c757321eadffb2b572e4f5cb2131e10fde2ffd3761495391f",
+    "database": "/Users/ngalluzzo/repos/fleetd/.fleetd/fleetd.db",
+    "coordinator_agent_id": "7e5185dc-d3ec-4b5d-a960-4edea250494c",
+    "auditor_agent_id": "ef5a9b01-8e7a-49dc-bea5-e5f452f0a14d",
+    "auditor_agent_name": "gooi-p3-claude-freeze-auditor-20260829",
+    "channel_id": "f27a66c6-6ae1-40c2-9d18-4df6daf7305c",
+    "channel_name": "gooi-p3-corpus-audit-claude-20260829",
+    "message_seq": 123,
+    "message_id": "65e7e00b-808d-41e2-9e44-90b925d796cb",
+    "message_kind": "work.request/v1",
+    "idempotency_key": "gooi/P3/corpus-audit/claude/f83d29d6/snapshot-3782b7a0/v1",
+    "delivery_state_after_stop": "pending",
+    "delivery_attempt_after_stop": 12
+  },
+  "worker": {
+    "profile_path": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-2026-08-29/claude-worker.json",
+    "profile_sha256": "c5ca6a7d09346f43674da0c204ac8f794526698041124a3e78b4220e720e5f7b",
+    "working_directory": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-2026-08-29/workspace",
+    "sandbox": {
+      "kind": "macos_seatbelt",
+      "posture": "strict",
+      "read_access": "declared_and_system",
+      "network": "allow_outbound",
+      "gooi_repository_granted": false,
+      "snapshot_read_only_granted": true,
+      "workspace_writable": true
+    },
+    "turn": {
+      "wall_timeout_ms": 1200000,
+      "idle_timeout_ms": 300000,
+      "tool_budget": 128,
+      "permission_policy": "allow_once",
+      "max_thinking_tokens": 16000
+    },
+    "stopped_by_coordinator": true,
+    "unrelated_seats_restarted": false
+  },
+  "claude_runtime": {
+    "plugin_id": "fleetd.harness.claude",
+    "plugin_version": "0.1.0",
+    "plugin_sha256": "223bfc34ad2a3a0559b849a8fc1950476c9ecde38a76b20309e8deaedea69692",
+    "adapter_name": "@zed-industries/claude-code-acp",
+    "adapter_version": "0.16.2",
+    "adapter_entrypoint_sha256": "0d0a87a08b316df91d9134f77cd376cce8fd7373c303abc0460aed8046dcf8e7",
+    "claude_agent_sdk_version": "0.2.44",
+    "claude_code_version": "2.1.251",
+    "claude_code_sha256": "625869b01e0050f260b2980fac248fd9cef9e462612bded4ec9d3d49ff8969a5",
+    "node_version": "v25.9.0",
+    "node_sha256": "32e234a5b6bec67d72a016f2baadf7fadf3afd328470b395b73af473fdee0d85",
+    "profile_digest": "sha256:cf1c25a164655b1a25932a5b57a7caefe380018c707124a99a2f9925d2eda604",
+    "compatibility_digest": "sha256:6e289ea62b6fb7311224f158d8f18f37b3c114e96a6339cab39d3fbfc21e56b2",
+    "initialize_identity": {
+      "name": "@zed-industries/claude-code-acp",
+      "title": "Claude Code",
+      "version": "0.16.2",
+      "protocol_version": 1,
+      "auth_method_id": "claude-login"
+    }
+  },
+  "attempts": [
+    {"attempt": 1, "invocation_id": "70ef859e-990a-4122-b370-8b7a2352dffb", "generation_id": "72f80849-7822-4046-9eb0-c6286f343649"},
+    {"attempt": 2, "invocation_id": "b18321b7-a06e-43f1-99e3-e2cc8941c9fc", "generation_id": "15600ad7-95ba-410e-9f3c-bab5ecae5de4"},
+    {"attempt": 3, "invocation_id": "ef53df95-0160-4c1f-8f13-a5acbdbf8a6f", "generation_id": "bcbcb7b3-61cd-45f3-83bb-b358c9a4aea7"},
+    {"attempt": 4, "invocation_id": "1df1b405-677e-40fb-9661-31af3b0e330a", "generation_id": "d39fe940-ac9c-4a49-b313-f8efc1400df1"},
+    {"attempt": 5, "invocation_id": "5353e5dd-58fb-44e3-8bfd-42c9d24b61c5", "generation_id": "6a75b231-7696-4ed1-a622-57b6a3ace6f8"},
+    {"attempt": 6, "invocation_id": "a9b7e1cb-e535-4341-903c-3d03ca30c268", "generation_id": "297d7d48-35fd-49c4-8335-7fadc392becc"},
+    {"attempt": 7, "invocation_id": "92af2085-7be8-4224-8d65-40cb12437f0e", "generation_id": "0f52dd53-0002-49e0-a44e-0f4d74f7e482"},
+    {"attempt": 8, "invocation_id": "7f09a5a9-cfde-4dd1-bd23-206293e6c902", "generation_id": "d66a4e98-bffa-4f50-b853-0fbc61f17ec5"},
+    {"attempt": 9, "invocation_id": "06f9112e-3468-4c5d-9772-0fe207f3509e", "generation_id": "f171723f-dc0d-4982-805d-fd29dc75f51b"},
+    {"attempt": 10, "invocation_id": "02c08d0b-a28d-4926-b8c7-fc83c66d643d", "generation_id": "a5be9d6d-21a8-45ce-a6ca-f007f08c929e"},
+    {"attempt": 11, "invocation_id": "93af3732-50b1-4dd0-8b02-bdd083d2d1f4", "generation_id": "b1b98208-141b-4d3c-83d2-b7be6e6fbf0d"},
+    {"attempt": 12, "invocation_id": "3f42195e-aada-4756-b144-ecf26ec76910", "generation_id": "77e1e836-42b1-45fc-a9b6-9fe4f8587689"}
+  ],
+  "common_attempt_result": {
+    "invocation_state": "terminal",
+    "terminal_reason": "retry",
+    "execution_certainty": "not_started",
+    "dispatch_armed": false,
+    "generation_shutdown": "graceful",
+    "generation_exit_code": 0,
+    "error": "plugin call harness.acp.session.open failed with JSON-RPC error -32000: inner ACP runtime error: Internal error: {\"details\":\"Query closed before response received\"}"
+  },
+  "observations": {
+    "model_prompt_dispatched": false,
+    "model_events": 0,
+    "prompt_events": 0,
+    "assistant_events": 0,
+    "reasoning_events": 0,
+    "tool_events": 0,
+    "permission_events": 0,
+    "usage_events": 0,
+    "usage": null,
+    "event_chain_digest": null,
+    "result_message_count": 0,
+    "result_text": null
+  },
+  "filesystem_evidence": {
+    "gooi_before_status_sha256": "a7c11e7221ce6478b41590dc906bcf38b8bbbd6590e139054e7f9a36e978c79e",
+    "gooi_after_status_sha256": "a7c11e7221ce6478b41590dc906bcf38b8bbbd6590e139054e7f9a36e978c79e",
+    "gooi_head_unchanged": true,
+    "gooi_worktree_clean_before_and_after": true,
+    "snapshot_digest_set_unchanged": true,
+    "harness_runtime_writes_outside_disposable_qualification_state": false,
+    "coordinator_evidence_writes": [
+      "docs/qualification/fixtures/gooi-p3-claude-freeze-audit-v1.payload.json",
+      "docs/qualification/gooi-p3-claude-freeze-audit-fleetd-blocked-2026-08-29.md",
+      "docs/qualification/gooi-p3-claude-freeze-audit-fleetd-blocked-2026-08-29.json"
+    ],
+    "claude_private_state_safe_shape": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-2026-08-29/evidence/claude-private-state-safe-shape.json",
+    "runtime_created_private_files": [
+      {"path": "workspace/claude-home/.claude.json", "bytes": 423, "mode": "0600", "sha256": "ff06c3dfb9907351f0b7948e076317b828be1985d9cd8b586f213abbad2d6323"},
+      {"path": "workspace/claude-home/.claude/backups/.claude.json.backup.1788027029289", "bytes": 84, "mode": "0600", "sha256": "31c45dd9cbce907b179d55b6b0f944b25a779b632396e15ecc909e57e9d4a2cb"}
+    ]
+  },
+  "logs": {
+    "stdout": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-2026-08-29/logs/worker.stdout.log",
+    "stdout_sha256": "82aaf4a92a2996dd2f12512fa197b0d159316ed051ec9bd4b42b87cc885007e2",
+    "stderr": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-2026-08-29/logs/worker.stderr.log",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "blocker": {
+    "exact": "Claude Code ACP initialize succeeded, but session.open could not obtain the SDK initialization result because its query closed before a response. The private disposable HOME did not contain the ambient onboarding/account-routing keys. That state difference is correlated, not a proven root cause.",
+    "missing_contracts": [
+      "A qualified, typed way for Fleetd's Claude adapter to bootstrap the minimum authenticated-subscription/onboarding state into a disposable HOME without granting ambient-home reads or copying unrelated account/project state.",
+      "Preserved and redacted Claude Agent SDK/Claude Code stderr diagnostics for pre-arm session.open failures so authentication, onboarding, sandbox, and version incompatibilities can be distinguished."
+    ],
+    "forbidden_fallbacks_not_used": [
+      "direct Claude CLI audit",
+      "ambient GOOI repository grant",
+      "reference implementation inspection",
+      "sandbox weakening",
+      "unrelated seat restart"
+    ]
+  }
+}

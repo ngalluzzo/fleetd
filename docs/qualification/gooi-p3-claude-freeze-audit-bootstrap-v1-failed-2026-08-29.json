@@ -1,0 +1,94 @@
+{
+  "protocol": "fleetd.qualification/gooi-p3-claude-bootstrap-probe/v1",
+  "date": "2026-08-29",
+  "status": "failed_auth_status_gate",
+  "qualification_verdict": "BLOCKED_BOOTSTRAP",
+  "audit_dispatched": false,
+  "auditor_verdict": null,
+  "claim_boundary": "This record qualifies only the two-field private-HOME bootstrap and Claude auth-status gate. It is not a GOOI P3 semantic audit.",
+  "qualification_root": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-bootstrap-v1-2026-08-29",
+  "candidate": {
+    "commit": "f83d29d662f0d7725445ddf13bd66752f8087926",
+    "gooi_worktree_clean": true,
+    "gooi_mutated": false
+  },
+  "intended_snapshot": {
+    "manifest_sha256": "3782b7a015def1e73f0defc4936777022021cee2cd1a2655d07d2a0cf2a1ea2c",
+    "opened_by_claude": false,
+    "modified": false
+  },
+  "bootstrap": {
+    "manual": true,
+    "typed_fleetd_feature": false,
+    "source_description": "ordinary /Users/ngalluzzo/.claude.json",
+    "copied_top_level_fields": ["hasCompletedOnboarding", "oauthAccount"],
+    "copied_top_level_field_count": 2,
+    "copied_projects": false,
+    "copied_caches": false,
+    "copied_settings": false,
+    "copied_history": false,
+    "copied_token_shaped_fields": false,
+    "copied_ambient_state_wholesale": false,
+    "private_home": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-bootstrap-v1-2026-08-29/workspace/claude-home",
+    "safe_schema_evidence": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-bootstrap-v1-2026-08-29/evidence/bootstrap-safe-schema.json",
+    "initial_private_file": {
+      "bytes": 873,
+      "mode": "0600",
+      "sha256": "cf000d81c6f6e727be40b19f47fff4741a9ce9f6cdfe3af478a8c9704a032b82"
+    },
+    "post_probe_private_file": {
+      "bytes": 1213,
+      "mode": "0600",
+      "sha256": "2c1c6fb64aa11045264d2aef3003ec42cb7e33dca56d13f90d16aa69744ef4bd",
+      "change_reason": "Claude Code auth status added its own first-start and migration metadata inside the disposable HOME."
+    },
+    "values_or_pii_in_evidence": false
+  },
+  "probe": {
+    "only_direct_claude_command": true,
+    "command": "env -i HOME=<private-home> USER=ngalluzzo LOGNAME=ngalluzzo PATH=<pinned-path> TERM=xterm-256color TMPDIR=<private-tmp> /Users/ngalluzzo/.local/share/claude/versions/2.1.251 auth status",
+    "claude_code_version": "2.1.251",
+    "claude_code_sha256": "625869b01e0050f260b2980fac248fd9cef9e462612bded4ec9d3d49ff8969a5",
+    "exit_code": 1,
+    "response_valid_json": true,
+    "response_field_schema": [
+      {"name": "analyticsDisabled", "type": "boolean"},
+      {"name": "apiProvider", "type": "string"},
+      {"name": "authMethod", "type": "string"},
+      {"name": "loggedIn", "type": "boolean"},
+      {"name": "projectsDirectory", "type": "string"}
+    ],
+    "logged_in": false,
+    "raw_response_retained": false,
+    "acceptance_gate_passed": false
+  },
+  "conditional_fleetd_run": {
+    "fresh_agent_created": false,
+    "fresh_channel_created": false,
+    "fresh_request_created": false,
+    "worker_booted": false,
+    "model_prompt_dispatched": false,
+    "reason": "The required auth-status probe returned loggedIn:false."
+  },
+  "prior_blocked_request": {
+    "message_seq": 123,
+    "reactivated": false,
+    "delivery_state": "pending",
+    "delivery_attempt": 12,
+    "last_settlement": "retry"
+  },
+  "containment": {
+    "direct_claude_audit_invoked": false,
+    "adapter_upgraded": false,
+    "ambient_state_copied_wholesale": false,
+    "copied_field_set_expanded_after_failure": false,
+    "gooi_modified": false,
+    "reference_paths_opened": false,
+    "unrelated_seat_restarted": false,
+    "commit_created": false
+  },
+  "missing_fleetd_feature": {
+    "name": "typed Claude onboarding and subscription bootstrap",
+    "finding": "The authorized onboarding/account metadata is not sufficient to make the isolated HOME authenticated. Fleetd still lacks a typed, content-addressed and privacy-bounded contract that presents the actual qualified Claude subscription state to the adapter without ambient-home reads or provider secrets in desired state."
+  }
+}

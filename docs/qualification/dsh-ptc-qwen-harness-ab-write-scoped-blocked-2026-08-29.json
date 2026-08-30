@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "experiment": "dsh-ptc-qwen-harness-ab-write-scoped",
+  "date": "2026-08-29",
+  "status": "blocked_before_model_request",
+  "promotion_verdict": "not_evaluated",
+  "sandbox": {
+    "posture": "write_scoped",
+    "security_scope": "writes_scoped_reads_and_network_unrestricted",
+    "claim": "write_confinement_only",
+    "hermetic": false,
+    "read_confidentiality": false,
+    "network_confidentiality": false,
+    "process_group_inheritance": true,
+    "allowed_write_roots": [
+      "working_directory",
+      "additional_directories",
+      "writable_directories",
+      "private_state_directory",
+      "private_temp_directory",
+      "/dev/null"
+    ],
+    "profile_digests": {
+      "opencode": "sha256:94bdef93020ff6a485c50f92e190bbb8631a0a0e4fd48614e4c5a5a18b66069b",
+      "dsh": "sha256:dd90957cc9a3ddc851e56fa6c20ef6cc3eb14d23359dbd68602cef4a88967dcf"
+    },
+    "negative_control": {
+      "process": "descendant_python",
+      "operation": "os.open",
+      "flags": ["O_WRONLY", "O_CREAT", "O_TRUNC"],
+      "mode": "0600",
+      "target": "sibling_outside_declared_roots",
+      "errno": 1,
+      "errno_name": "EPERM",
+      "message": "Operation not permitted",
+      "target_created": false
+    },
+    "positive_controls": {
+      "ambient_runtime_read": true,
+      "workspace_write": true,
+      "private_state_write": true,
+      "private_temp_write": true,
+      "dev_null_write": true,
+      "descendant_in_root_write": true,
+      "loopback_ephemeral_bind": true,
+      "real_opencode_listener": "127.0.0.1:60908"
+    }
+  },
+  "source": {
+    "fleetd_base_commit": "8af2743b78ac8220d090221440ad1f1a9d7d8935",
+    "committed": false,
+    "gooi_frozen_commit": "b18bbdeb2c5cd195e52d29270008b040cb8c2145",
+    "gooi_modified": false
+  },
+  "runtimes": {
+    "fleetd_sha256": "c781514f1571143c757321eadffb2b572e4f5cb2131e10fde2ffd3761495391f",
+    "dsh": {
+      "tag": "dsh-v0.1.2-alpha.1",
+      "commit": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+      "cli_sha256": "dc23f6c5dd7df8834e3e38bdb9609d77b459834681ae9b7133b417b0c35f3166",
+      "adapter_sha256": "b3d5673b2321d97918ff249862f3bb516c383b213c06aa40563154101d37222f",
+      "tools_mode": "ptc",
+      "composition_identity": "2753509caf68d89f7bb6b7dfc449da72c5dfb81be1d7f9b273159fa3d5f41dfb"
+    },
+    "opencode": {
+      "version": "1.4.0",
+      "binary_sha256": "3d2c79a23f8a17d7ac35c819fba5bfac9393642de51434896adf7887629cc763",
+      "adapter_sha256": "d97dbc688ec5d9ac41654a8e74ae74c2a1ad0364f1f56a1eefc81c2adbd0e453"
+    }
+  },
+  "inference": {
+    "plugin_id": "fleetd.inference.mlx-vlm",
+    "version": "0.6.15",
+    "python_sha256": "bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07",
+    "backend_profile_digest": "sha256:27270216d39378dce1d53771e71eed044de9352feb24f392541873ae6d5b0e6c",
+    "backend_catalog_sha256": "bc83ea9768dff6aed96985aa364259af8d5cc01116d7039b68b92fbfa3434ea9",
+    "base_url": "http://127.0.0.1:18082/v1",
+    "model": "/Users/ngalluzzo/Models/qwen3.8-27b-8bit",
+    "draft_model": "/Users/ngalluzzo/Models/qwen3.8-27b-mtp-8bit",
+    "draft_kind": "mtp",
+    "draft_block_size": 4,
+    "max_kv_size": 262144,
+    "max_output_tokens": 8192,
+    "max_num_seqs": 1,
+    "enable_thinking": true,
+    "reasoning_effort": "none",
+    "sampling": {
+      "requests_observed": 0,
+      "temperature_emitted": null,
+      "top_p_emitted": null
+    },
+    "metrics_after_controls": {
+      "requests_started": 0,
+      "requests_completed": 0,
+      "requests_failed": 0,
+      "prompt_tokens_total": 0,
+      "completion_tokens_total": 0,
+      "latest": null
+    }
+  },
+  "model_free_controls": {
+    "dsh": {
+      "result": "pass",
+      "generation_id": "cdb7711c-575e-495a-82bb-77422f7a7b73",
+      "runtime_name": "deepseek-harness-acp",
+      "runtime_version": "0.0.1",
+      "runtime_executable_digest": "sha256:dc23f6c5dd7df8834e3e38bdb9609d77b459834681ae9b7133b417b0c35f3166",
+      "profile_digest": "sha256:35a273d978ab6de67ce88f4961f99c75ccb6f700b989670112318b5cd1ed0535",
+      "compatibility_digest": "sha256:7e68c7839c51f11e83dede995a6059fce4a4cdf3612bf213ce3c63b6eb277943",
+      "shutdown_outcome": "graceful",
+      "shutdown_exit_code": 0,
+      "reservations": 0,
+      "turns": 0
+    },
+    "opencode": {
+      "result": "pass",
+      "generation_id": "3b15b721-97de-4128-a58b-5e5a6964029a",
+      "runtime_name": "OpenCode",
+      "runtime_version": "1.4.0",
+      "runtime_executable_digest": "sha256:3d2c79a23f8a17d7ac35c819fba5bfac9393642de51434896adf7887629cc763",
+      "profile_digest": "sha256:9a5d0b8188c5b3e0b2f62b45d59378b9b4186624a051e827d21b39366e6e82e8",
+      "compatibility_digest": "sha256:a9d642e6e3f293ca0ce0ec51eef8a4856a7c9bc7c29143e60f81202d5716e5e0",
+      "shutdown_outcome": "graceful",
+      "shutdown_exit_code": 0,
+      "reservations": 0,
+      "turns": 0,
+      "observed_external_tls_connections": true
+    }
+  },
+  "positive_control": {
+    "version": null,
+    "prompt_sha256": null,
+    "expected_artifact_sha256": null,
+    "model_calls": 0,
+    "artifacts": 0,
+    "status": "not_started",
+    "stop_reason": "required_command_absent_at_frozen_gooi_commit"
+  },
+  "blocker": {
+    "required_command": "node experiments/real-vertical-slice/federated/kernel-duel-v0.3/p2/run-duel.mjs",
+    "frozen_commit": "b18bbdeb2c5cd195e52d29270008b040cb8c2145",
+    "error": "MODULE_NOT_FOUND",
+    "first_commit_with_command": "92c4df7edefd8d195afe7944daa05f4248866d0a",
+    "first_commit_parent": "b18bbdeb2c5cd195e52d29270008b040cb8c2145",
+    "command_sha256_at_first_commit": "6aa8dcd73686f12e12c9dc84c59462994437834fdb892088419e9e43d521cb43",
+    "committed_duel_result_sha256": "3ca132ba093eebdc8505cbc9ffdc8403d05a8499bbedb320afe3babc6546bbeb",
+    "frozen_input_modified": false,
+    "substitute_used": false
+  },
+  "primary_seq_119": {
+    "status": "not_started",
+    "payload_retrieved": false,
+    "model_calls": 0,
+    "artifacts": 0
+  },
+  "tests": [
+    {"command": "cargo test -p fleetd-plugin-host", "result": "pass", "tests": 4},
+    {"command": "cargo test --test plugin_lifecycle", "result": "pass", "tests": 9},
+    {"command": "cargo test cli::worker::tests --bin fleetd", "result": "pass", "tests": 6},
+    {"command": "cargo test cli::worker_supervisor::tests --bin fleetd", "result": "pass", "tests": 3},
+    {"command": "cargo test -p fleetd-harness-deepseek", "result": "pass", "tests": 6},
+    {"command": "cargo test -p fleetd-harness-opencode", "result": "pass", "tests": 8},
+    {"command": "cargo clippy -p fleetd-plugin-host --all-targets -- -D warnings", "result": "pass"},
+    {"command": "cargo clippy --bin fleetd --tests -- -D warnings", "result": "pass"},
+    {"command": "cargo fmt --all -- --check", "result": "pass"}
+  ],
+  "touched_files": [
+    "crates/plugin-host/src/lib.rs",
+    "crates/plugin-host/src/sandbox.rs",
+    "crates/plugin-host/src/supervisor.rs",
+    "src/cli/worker.rs",
+    "tests/fixtures/mock_plugin.sh",
+    "tests/fixtures/write_scoped_runtime.txt",
+    "tests/plugin_lifecycle.rs",
+    "plugins/deepseek/Cargo.toml",
+    "plugins/deepseek/src/main.rs",
+    "plugins/deepseek/tests/plugin.rs",
+    "plugins/deepseek/tests/fixtures/mock_deepseek.py",
+    ".fleetd/worker-profiles.json",
+    ".fleetd/qualification/dsh-qwen-write-scoped-2026-08-29/control/dsh-worker.json",
+    ".fleetd/qualification/dsh-qwen-write-scoped-2026-08-29/control/opencode-worker.json",
+    "docs/WORKER.md",
+    "docs/adr/0039-write-scoped-seatbelt-is-write-confinement-only.md",
+    "docs/qualification/dsh-ptc-qwen-harness-ab-write-scoped-blocked-2026-08-29.md",
+    "docs/qualification/dsh-ptc-qwen-harness-ab-write-scoped-blocked-2026-08-29.json"
+  ]
+}

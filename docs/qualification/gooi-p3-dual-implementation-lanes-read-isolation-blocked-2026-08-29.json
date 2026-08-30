@@ -1,0 +1,85 @@
+{
+  "protocol": "fleetd.qualification/gooi-p3-dual-implementation-lanes/v1",
+  "date": "2026-08-29",
+  "status": "blocked_before_identity_creation",
+  "verdict": "BLOCKED_READ_ISOLATION_CAPABILITY",
+  "claim_boundary": "Claude can satisfy the requested strict read/write boundary; OpenCode 1.4.0 cannot both boot and satisfy that boundary with Fleetd's qualified macOS sandbox postures.",
+  "intended_input": {
+    "gooi_commit": "0b27dd33f4c7816fab2222e437a3af161e062dd6",
+    "p3_payload_tree_sha256": "cb9531768d1faba3155d4312dfa8b4460a0e79a23d7f04a571bedf31a83df270",
+    "p3_manifest_sha256": "2a65956e4917c4f5d9b563ef3136580c66849ce478e7506fc1acde0fb8d0cdb8"
+  },
+  "requested_lanes": [
+    {
+      "name": "gooi-kernel-rust-p3",
+      "harness": "@agentclientprotocol/claude-agent-acp@0.69.0",
+      "sandbox_preflight": "satisfiable_under_strict",
+      "dispatched": false
+    },
+    {
+      "name": "gooi-kernel-typescript-p3",
+      "harness": "OpenCode 1.4.0",
+      "model_route": "zai-coding-plan/glm-5.3",
+      "sandbox_preflight": "not_satisfiable_with_read_isolation",
+      "dispatched": false
+    }
+  ],
+  "blocker": {
+    "stage": "worker_profile_preflight_before_identity_creation",
+    "strict": {
+      "security_scope": "deny_default_declared_reach",
+      "available_network_modes": [
+        "deny",
+        "allow_outbound"
+      ],
+      "opencode_acp_listener_supported": false
+    },
+    "seatbelt_listener_experiment": {
+      "candidate_rule": "localhost:* network-bind plus network-inbound",
+      "allows_ipv4_loopback_ephemeral": true,
+      "allows_ipv6_loopback_ephemeral": true,
+      "incorrectly_allows_ipv4_wildcard_ephemeral": true,
+      "incorrectly_allows_external_interface_ephemeral": true,
+      "incorrectly_allows_fixed_loopback_port": true,
+      "numeric_loopback_host_accepted_by_parser": false,
+      "ephemeral_port_only_accepted_by_parser": false
+    },
+    "write_scoped": {
+      "opencode_acp_boot_qualified": true,
+      "security_scope": "writes_scoped_reads_and_network_unrestricted",
+      "enforces_declared_write_roots": true,
+      "enforces_declared_read_roots": false,
+      "satisfies_requested_boundary": false
+    }
+  },
+  "runtime_evidence": {
+    "fleetd_source_commit": "38911f6e1f802fb34d746d102d250ff302fe5ddc",
+    "sandbox_source_sha256": "42c987c2516dc0e56637adfacab44308fefc7b2032802411b734cbd43867b4ed",
+    "worker_contract_sha256": "48ff9e9274dcb94daf9fec49c624da00539a39fb1c3a58ae29c8b18d165c60b8",
+    "seatbelt_limit_report_sha256": "86a184e81c962ce438e76d9991662dfc7fd82f06d1a8fc8f69b5cc5a598893ac",
+    "opencode_version": "1.4.0",
+    "opencode_executable_sha256": "3d2c79a23f8a17d7ac35c819fba5bfac9393642de51434896adf7887629cc763",
+    "fleetd_opencode_plugin_sha256": "cfbe228bb4c85fc92449b8a3653e9eb6b128b1a249951ab499d753db044dbea6"
+  },
+  "durable_state": {
+    "agents_created": 0,
+    "channels_created": 0,
+    "messages_created": 0,
+    "invocations_created": 0,
+    "event_chains_created": 0,
+    "credential_copies_created": 0
+  },
+  "resume_choices": [
+    "Authorize OpenCode/GLM under write_scoped and accept ambient reads plus unrestricted network.",
+    "Choose a GLM-capable Fleetd harness that boots under strict.",
+    "Add a different isolation mechanism that enforces both the requested read set and listener restrictions."
+  ],
+  "containment": {
+    "gooi_clean_before_and_after": true,
+    "gooi_modified": false,
+    "fleetd_existing_seats_touched": false,
+    "unrelated_worker_restarted": false,
+    "credential_copied": false,
+    "commit_created": false
+  }
+}

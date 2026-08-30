@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "experiment": "dsh-ptc-qwen-harness-ab-positive-v1",
+  "date": "2026-08-29",
+  "status": "stopped_after_first_dsh_positive_control",
+  "promotion_verdict": "not_evaluated_no_comparative_evidence",
+  "comparative_verdict": "dsh_ptc_failed_frozen_positive_control",
+  "previous_record_preserved": "docs/qualification/dsh-ptc-qwen-harness-ab-write-scoped-blocked-2026-08-29.json",
+  "gate": {
+    "required": "both_positive_controls_pass_before_primary",
+    "dsh_ptc": "fail",
+    "opencode": "not_run",
+    "primary_seq_119": "not_run",
+    "primary_payload_retrieved": false,
+    "stop_enforced": true
+  },
+  "frozen_inputs": {
+    "gooi_commit": "92c4df7edefd8d195afe7944daa05f4248866d0a",
+    "gooi_commit_reason": "direct_child_first_adding_required_runner",
+    "fresh_roots": {
+      "dsh": ".fleetd/qualification/dsh-qwen-write-scoped-2026-08-29/runs/positive-v1/dsh/workspace",
+      "opencode": ".fleetd/qualification/dsh-qwen-write-scoped-2026-08-29/runs/positive-v1/opencode/workspace",
+      "identical_before_dispatch": true
+    },
+    "inputs": {
+      "manifest_sha256": "6c9d86109e34db14b7eb8e6172ea507db4164046eedbfbdd414590c33463710d",
+      "reference_boundary_sha256": "befc6b685fde8842752949315e6bea1691abbd63676f5e7614cbe0e23843f5b9",
+      "value_schema_corpus_sha256": "6fddb18a99200319ccccdeb6770f65377fe56b446b28d351c08f7a37a773bc83",
+      "runner_sha256": "6aa8dcd73686f12e12c9dc84c59462994437834fdb892088419e9e43d521cb43",
+      "rust_command_artifact_sha256": "6e18ecd59967c89af58ddb9e80554bff7ef56468ee24d90f17f3f324972ce43b",
+      "typescript_command_artifact_sha256": "13d770e329e18e90890c833e292475db4699eb5bbe74cdaac554a90885f0ee22",
+      "command_artifacts_committed_at_gooi_commit": false,
+      "command_artifacts_staged_identically_in_both_roots": true
+    },
+    "command": {
+      "utf8_plus_lf": "node experiments/real-vertical-slice/federated/kernel-duel-v0.3/p2/run-duel.mjs\n",
+      "sha256": "3d65b3d64c3a56eb1c45595cb57893805a92d874f2c64ba24179cb6d1af88aef",
+      "expected_stdout_utf8": "{\"status\":\"pass\",\"cases\":107,\"classifications\":214,\"divergences\":0}\n",
+      "independently_verified": true
+    },
+    "committed_runner_evidence": {
+      "duel_result_sha256": "3ca132ba093eebdc8505cbc9ffdc8403d05a8499bbedb320afe3babc6546bbeb",
+      "duel_result_md_sha256": "59a1d83ef3ece2826400d136589f0c89c5813b8152475841196af530e702b411"
+    },
+    "prompt": {
+      "version": "dsh-qwen-positive-v1",
+      "path": "docs/qualification/fixtures/dsh-qwen-positive-v1.prompt.txt",
+      "bytes": 3042,
+      "sha256": "4cd9536110e27ba48ffcd566e61c5303e9abb821b6ac81ac76a4c00b176b34c3",
+      "canonical_task_payload_sha256": "622e46ee562f7c8b8892eefd76e57e734dedd10673b11e548e908b73718da69a",
+      "identical_between_arms": true
+    },
+    "expected_artifact": {
+      "path": "docs/qualification/fixtures/dsh-qwen-positive-v1.expected.json",
+      "bytes": 425,
+      "sha256": "f9adbad0987217eea433dc75935d0c34a8e9fb66badcad3eaf18abc036c11882",
+      "canonical_json_plus_lf": true,
+      "independently_derived_before_dispatch": true
+    }
+  },
+  "runtime_identity": {
+    "fleetd": {
+      "base_commit": "8af2743b78ac8220d090221440ad1f1a9d7d8935",
+      "committed": false,
+      "binary_sha256": "c781514f1571143c757321eadffb2b572e4f5cb2131e10fde2ffd3761495391f"
+    },
+    "dsh": {
+      "tag": "dsh-v0.1.2-alpha.1",
+      "source_commit": "cd5ef8148158c3a752a658978873241fdf8e2bbc",
+      "cli_sha256": "dc23f6c5dd7df8834e3e38bdb9609d77b459834681ae9b7133b417b0c35f3166",
+      "adapter_sha256": "2807ad0540d050705adc1ea430b65ec8ac4a71da3fb03901fd5340089549a99d",
+      "tools_mode": "ptc",
+      "composition_identity": "2753509caf68d89f7bb6b7dfc449da72c5dfb81be1d7f9b273159fa3d5f41dfb",
+      "composition_file_sha256": "52649d42d7f6d6568ff202c5e192001bedc4075e3e2d886d8d0995605386b5cd",
+      "worker_config_sha256": "5988c7c599143a8358115583d81878ca06a448d327e2bc8382aebaddd1b38f58",
+      "sandbox_profile_digest": "sha256:1f343236b4de7f31222938458dea99b2d7f7686c081d9fbb00032252d04093e0"
+    },
+    "opencode": {
+      "version": "1.4.0",
+      "binary_sha256": "3d2c79a23f8a17d7ac35c819fba5bfac9393642de51434896adf7887629cc763",
+      "adapter_sha256": "8271927f22a669e8b3114c66ce51531e1ce29c768c8706ef394f920ade21e1b6",
+      "worker_config_sha256": "ea3cfc32c272ce9fba9b595fbae7ad3c4ce8d153244b5adac92570769a7f1e5e",
+      "sandbox_profile_digest": "sha256:1090e72a970602859535f5bf78213ac9904a57719778a6275e9d7ae4534d0f77"
+    },
+    "node": {
+      "version": "v25.9.0",
+      "binary_sha256": "32e234a5b6bec67d72a016f2baadf7fadf3afd328470b395b73af473fdee0d85"
+    }
+  },
+  "sandbox": {
+    "posture": "write_scoped",
+    "security_scope": "writes_scoped_reads_and_network_unrestricted",
+    "claim": "write_confinement_only",
+    "hermetic": false,
+    "read_confidentiality": false,
+    "network_confidentiality": false,
+    "process_group_inheritance": true,
+    "outer_os_boundary_remained_active": true,
+    "outside_root_write_observed": false,
+    "inner_dsh_workspace_write": {
+      "status": "unavailable_under_outer_seatbelt",
+      "error": "sandbox-exec: sandbox_apply: Operation not permitted",
+      "defense_in_depth_present": false,
+      "danger_full_access_requests": 7,
+      "fleetd_permission_decisions": {
+        "allowed_once": 7,
+        "denied": 0
+      },
+      "outer_boundary_removed_by_inner_escalation": false
+    }
+  },
+  "inference": {
+    "plugin_id": "fleetd.inference.mlx-vlm",
+    "version": "0.6.15",
+    "python_sha256": "bc56ea9cdc0fface1eb75712f871a454324f6cbfec4e30311b197f208a7f3d07",
+    "backend_profile_digest": "sha256:27270216d39378dce1d53771e71eed044de9352feb24f392541873ae6d5b0e6c",
+    "base_url": "http://127.0.0.1:18082/v1",
+    "model": "/Users/ngalluzzo/Models/qwen3.8-27b-8bit",
+    "model_directory_manifest_sha256": "0811141b17da265c712aac5373524b15ecbaa2feadd2dbbb06869e5638502282",
+    "draft_model": "/Users/ngalluzzo/Models/qwen3.8-27b-mtp-8bit",
+    "draft_model_directory_manifest_sha256": "7fed863214adb93d3b203031c98ce24d70fe441181e30950255a949e10581dde",
+    "draft_kind": "mtp",
+    "draft_block_size": 4,
+    "context_size": 262144,
+    "max_num_seqs": 1,
+    "apc_enabled": true,
+    "tool_parser": "qwen3_coder",
+    "reasoning_effort": "none",
+    "max_output_tokens": 8192,
+    "observed_request": {
+      "max_tokens": 8192,
+      "reasoning_effort": "off",
+      "thinking_enabled": false,
+      "temperature": null,
+      "top_p": null,
+      "sampling_note": "not emitted or exposed; no harness-specific override added"
+    },
+    "provider_metrics": {
+      "requests_started": 10,
+      "requests_completed": 9,
+      "requests_failed": 1,
+      "streaming_requests": 10,
+      "in_flight_after_run": 0,
+      "prompt_tokens_total_completed": 88568,
+      "completion_tokens_total_completed": 1955,
+      "generated_tokens_total_completed": 1955,
+      "reasoning_tokens_total_completed": 0,
+      "failed_request_error": "stream_closed_before_completion",
+      "failed_request_tokens_observed": false,
+      "completed_requests": [
+        {"prompt_tokens": 8324, "completion_tokens": 90, "ttft_s": 19.94201829202939, "elapsed_s": 22.50144837499829, "finish_reason": "tool_calls"},
+        {"prompt_tokens": 8756, "completion_tokens": 125, "ttft_s": 1.3448630410130136, "elapsed_s": 5.373155166045763, "finish_reason": "tool_calls"},
+        {"prompt_tokens": 9014, "completion_tokens": 318, "ttft_s": 0.9677744170185179, "elapsed_s": 9.883352792006917, "finish_reason": "tool_calls"},
+        {"prompt_tokens": 9363, "completion_tokens": 303, "ttft_s": 1.186897916952148, "elapsed_s": 9.613154999969993, "finish_reason": "tool_calls"},
+        {"prompt_tokens": 10163, "completion_tokens": 221, "ttft_s": 2.3093896249774843, "elapsed_s": 9.245491374982521, "finish_reason": "tool_calls"},
+        {"prompt_tokens": 10454, "completion_tokens": 114, "ttft_s": 1.3305559580330737, "elapsed_s": 4.973713166022208, "finish_reason": "tool_calls"},
+        {"prompt_tokens": 10614, "completion_tokens": 158, "ttft_s": 0.7741231659892946, "elapsed_s": 6.64106824999908, "finish_reason": "tool_calls"},
+        {"prompt_tokens": 10840, "completion_tokens": 178, "ttft_s": 0.9456613329821266, "elapsed_s": 6.972633500001393, "finish_reason": "tool_calls"},
+        {"prompt_tokens": 11040, "completion_tokens": 448, "ttft_s": 0.8492479999549687, "elapsed_s": 16.877729291969445, "finish_reason": "tool_calls"}
+      ]
+    }
+  },
+  "dsh_positive_control": {
+    "channel_id": "83ec66ee-343b-4962-8c9a-7cce365289fc",
+    "request": {
+      "seq": 121,
+      "message_id": "990830a7-85e9-4ce7-83ac-7638b1ca8137",
+      "payload_sha256": "622e46ee562f7c8b8892eefd76e57e734dedd10673b11e548e908b73718da69a"
+    },
+    "result": {
+      "seq": 122,
+      "message_id": "b33c3c90-ceff-4c09-afd5-fbc06ff4526a",
+      "status": "failed",
+      "stop_reason": "host_wall_deadline",
+      "runtime_stop_reason": "cancelled",
+      "output_complete": true,
+      "assistant_message_truncated": true
+    },
+    "invocation": {
+      "id": "f809f490-fecc-4ca3-9696-15e331b98626",
+      "delivery_attempt": 1,
+      "reserved_at_ms": 1788025858367,
+      "dispatch_armed_at_ms": 1788025858444,
+      "terminal_at_ms": 1788025978457,
+      "wall_time_ms": 120013,
+      "durable_terminal_reason": "completed",
+      "durable_execution_certainty": "outcome_known",
+      "durable_terminal_reason_note": "result message published; payload outcome is failed"
+    },
+    "generation": {
+      "id": "8522f24a-eb1c-477f-92ad-bd67f4823165",
+      "runtime_name": "deepseek-harness-acp",
+      "runtime_version": "0.0.1",
+      "profile_digest": "sha256:d17c09b108e0f76fb2ca6bbba5621119d0cc1b375ff48b9f401cbda34b57888e",
+      "compatibility_digest": "sha256:0e6ef120b8becb49540b92ff46964e7f81f8499baa6c695e01dbf4b2120c8484",
+      "shutdown_outcome": "graceful",
+      "shutdown_exit_code": 0
+    },
+    "session": {
+      "binding_id": "f3918695-ddab-4cb5-83f8-2454df056820",
+      "session_ref": "6dc05901-688a-4e57-ba40-8f0e7f73fd29",
+      "raw_session_path": ".fleetd/qualification/dsh-qwen-write-scoped-2026-08-29/runs/positive-v1/dsh/workspace/.fleetd/dsh-home/sessions/--Users-ngalluzzo-repos-fleetd-.fleetd-qualification-dsh-qwen-write-scoped-2026-08-29-runs-positive-v1-dsh-workspace--/6dc05901-688a-4e57-ba40-8f0e7f73fd29/session.jsonl.zstd",
+      "raw_session_sha256": "8d8de607ae3abc2397f9e6528841f2d4901496ef152f65a318bda9105cd84622",
+      "raw_session_records": 226,
+      "fleetd_transcript_render": "blocked_missing_interface_fleetd.harness-acp_0.2.0"
+    },
+    "observation": {
+      "first_event_at_ms": 1788025881081,
+      "ttft_from_dispatch_arm_ms": 22637,
+      "artifact_event_at_ms": 1788025958131,
+      "artifact_acceptance_time_from_dispatch_arm_ms": 99687,
+      "event_count": 35,
+      "observed_payload_bytes": 19163,
+      "assistant_event_count": 1,
+      "reasoning_event_count": 0,
+      "usage_event_count": 9,
+      "permission_event_count": 7,
+      "adapter_tool_event_count": 18,
+      "semantic_run_code_calls": 9,
+      "semantic_subtool_dispatches": 9,
+      "event_chain_digest": "sha256:dc5c9581e40b125b095e95d20f974e0852333063d84e72d27b1a76f5658a28df"
+    },
+    "artifact": {
+      "path": ".fleetd/qualification/dsh-qwen-write-scoped-2026-08-29/runs/positive-v1/dsh/workspace/qualification-positive-control.json",
+      "exists": true,
+      "bytes": 425,
+      "sha256": "f9adbad0987217eea433dc75935d0c34a8e9fb66badcad3eaf18abc036c11882",
+      "exact_expected_bytes": true,
+      "duel_summary": {"status": "pass", "cases": 107, "classifications": 214, "divergences": 0},
+      "tracked_changes_after_run": 0,
+      "visible_untracked_paths_after_run": ["qualification-positive-control.json"],
+      "outside_root_writes_observed": false
+    },
+    "protocol_failures": [
+      {
+        "kind": "host_wall_deadline",
+        "detail": "authoritative work.result/v1 status failed at 120013 ms"
+      },
+      {
+        "kind": "exact_command_violation",
+        "required": "node experiments/real-vertical-slice/federated/kernel-duel-v0.3/p2/run-duel.mjs",
+        "observed": "node experiments/real-vertical-slice/federated/kernel-duel-v0.3/p2/run-duel.mjs; echo \"exit=$?\"",
+        "observed_stdout": "{\"status\":\"pass\",\"cases\":107,\"classifications\":214,\"divergences\":0}\nexit=0\n",
+        "dsh_expected_match": false,
+        "final_claim_contradicted_trace": true
+      },
+      {
+        "kind": "inner_sandbox_unavailable",
+        "detail": "DSH workspace-write sandbox could not nest beneath outer Fleetd Seatbelt"
+      },
+      {
+        "kind": "truncated_final_response",
+        "detail": "deadline interrupted final prose during permission disclosure"
+      }
+    ]
+  },
+  "opencode_positive_control": {
+    "channel_id": "46a90938-0ee8-47fd-af05-28e6f2a77380",
+    "status": "not_run_by_gate",
+    "model_requests": 0,
+    "artifact_exists": false,
+    "tracked_changes": 0,
+    "visible_untracked_paths": []
+  },
+  "primary_seq_119": {
+    "status": "not_run_by_gate",
+    "durable_payload_retrieved": false,
+    "model_requests": 0,
+    "artifacts": 0
+  },
+  "mutations": {
+    "gooi_source_modified": false,
+    "production_backend_modified": false,
+    "global_package_state_modified": false,
+    "unrelated_seat_restarted": false,
+    "commit_created": false
+  },
+  "evidence": {
+    "durable_database": ".fleetd/fleetd.db",
+    "markdown_report": "docs/qualification/dsh-ptc-qwen-harness-ab-positive-v1-failed-2026-08-29.md",
+    "json_manifest": "docs/qualification/dsh-ptc-qwen-harness-ab-positive-v1-failed-2026-08-29.json"
+  }
+}

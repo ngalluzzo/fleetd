@@ -1,0 +1,170 @@
+{
+  "protocol": "fleetd.qualification/gooi-p3-claude-agent-acp-audit/v1",
+  "date": "2026-08-29",
+  "status": "blocked_before_dispatch",
+  "qualification_verdict": "BLOCKED_TYPED_TEMP_CAPABILITY",
+  "auditor_verdict": null,
+  "claim_boundary": "The new adapter initialized successfully and exposed an exact pre-arm Seatbelt denial. No model audit ran, so this is not semantic evidence for or against the GOOI P3 candidate.",
+  "candidate": {
+    "commit": "f83d29d662f0d7725445ddf13bd66752f8087926",
+    "gooi_worktree_clean_before_and_after": true,
+    "gooi_mutated": false
+  },
+  "snapshot": {
+    "manifest_sha256": "3782b7a015def1e73f0defc4936777022021cee2cd1a2655d07d2a0cf2a1ea2c",
+    "modified": false,
+    "opened_by_model": false
+  },
+  "plugin_rebuild": {
+    "preflight_found_stale_binary": true,
+    "stale_binary_embedded_identity": "@zed-industries/claude-code-acp",
+    "stale_binary_sha256": "223bfc34ad2a3a0559b849a8fc1950476c9ecde38a76b20309e8deaedea69692",
+    "source_expected_identity": "@agentclientprotocol/claude-agent-acp",
+    "command": "cargo build -p fleetd-harness-claude",
+    "rebuilt_binary_sha256": "12b8394abc55589c47a2a8b617c0c9558b88c7e461a1d3ada308c274a9ea4968",
+    "embedded_identity_verified": true,
+    "focused_tests": {
+      "command": "cargo test -p fleetd-harness-claude",
+      "passed": 6,
+      "failed": 0
+    }
+  },
+  "credential_bootstrap": {
+    "qualification_root": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-claude-agent-acp-0.69.0-2026-08-29",
+    "source_path_class": "ambient_claude_credentials",
+    "destination_path_class": "qualification_private_home_credentials",
+    "bytes": 501,
+    "mode": "0600",
+    "top_level_key_name": "claudeAiOauth",
+    "root_metadata_copied": false,
+    "parsed": false,
+    "printed": false,
+    "hashed": false,
+    "values_or_bytes_in_evidence": false,
+    "safe_metadata_evidence": "/Users/ngalluzzo/repos/fleetd/.fleetd/qualification/p3-claude-freeze-audit-claude-agent-acp-0.69.0-2026-08-29/evidence/credential-bootstrap-safe-metadata.json"
+  },
+  "fleetd": {
+    "repository_commit": "8af2743b78ac8220d090221440ad1f1a9d7d8935",
+    "binary_sha256": "978251f2372bf44d06d7d334a194a2682fd60a0c59137700b92db496db808fea",
+    "coordinator_agent_id": "7e5185dc-d3ec-4b5d-a960-4edea250494c",
+    "auditor_agent_id": "28bb43e0-abc7-44c3-abcc-f9679b1b2e01",
+    "auditor_agent_name": "gooi-p3-claude-auditor-acp069-20260829",
+    "channel_id": "acc690d2-28dc-46fa-909f-11b7051c7622",
+    "channel_name": "gooi-p3-corpus-audit-claude-acp069-20260829",
+    "message_seq": 125,
+    "message_id": "29c5e2c3-e7dd-405e-8975-c2d1ecde5722",
+    "message_kind": "work.request/v1",
+    "idempotency_key": "gooi/P3/corpus-audit/claude/f83d29d6/snapshot-3782b7a0/claude-agent-acp-0.69.0/v1",
+    "payload_bytes": 7440,
+    "payload_sha256": "195ae94da6e070397adc0ab00c123bb24e3d0c293370270e6fbb895135890ed0",
+    "durable_payload_byte_equal_to_frozen_request": true,
+    "worker_profile_sha256": "435b1d261cbb1685d9b3de4457eae39fd78c18ea2fa74bf38e6de45c59866a9b",
+    "delivery_after_stop": {
+      "state": "pending",
+      "attempt": 1,
+      "last_settlement": "retry"
+    },
+    "sandbox": {
+      "kind": "macos_seatbelt",
+      "posture": "strict",
+      "read_access": "declared_and_system",
+      "network": "allow_outbound",
+      "configured_tmpdir": "qualification_private_tmp",
+      "ambient_tmp_granted": false,
+      "ambient_gooi_read_granted": false,
+      "snapshot_read_only_granted": true
+    }
+  },
+  "runtime": {
+    "plugin_id": "fleetd.harness.claude",
+    "plugin_version": "0.1.0",
+    "plugin_sha256": "12b8394abc55589c47a2a8b617c0c9558b88c7e461a1d3ada308c274a9ea4968",
+    "adapter_name": "@agentclientprotocol/claude-agent-acp",
+    "adapter_version": "0.69.0",
+    "adapter_entrypoint_sha256": "260aac90bf75f197b93640087c1de66441761d43c2784efa035fdcee60b5dacd",
+    "adapter_package_sha256": "b45f4fe9301303d39cad609858c6417958dfb739290cf08e231ba23f48531da1",
+    "claude_agent_sdk_version": "0.3.232",
+    "claude_code_version": "2.1.251",
+    "claude_code_sha256": "625869b01e0050f260b2980fac248fd9cef9e462612bded4ec9d3d49ff8969a5",
+    "profile_digest": "sha256:3b78493bcbc763eac09bca7f658eba90648553ac44a3754439b214ffed01e6d7",
+    "compatibility_digest": "sha256:02302c2e6d794bae27e6529bc7b3d44b76bcb5de1345c81e13cc1c0c9fda1c36",
+    "initialize_identity": {
+      "name": "@agentclientprotocol/claude-agent-acp",
+      "title": "Claude Agent",
+      "version": "0.69.0",
+      "protocol_version": 1
+    }
+  },
+  "generations": [
+    {
+      "generation_id": "b943ffcb-7d0c-4771-b9c1-70138b808af0",
+      "purpose": "initialization and one session-open attempt",
+      "shutdown": "graceful",
+      "exit_code": 0,
+      "stop_disposition": "restart"
+    },
+    {
+      "generation_id": "5354951d-b6d3-42eb-8458-2c5e40148695",
+      "purpose": "restart had initialized before coordinator stop",
+      "shutdown": "graceful",
+      "exit_code": 0,
+      "stop_disposition": "stopped",
+      "invocation_count": 0
+    }
+  ],
+  "invocation": {
+    "id": "27bf69fb-9474-42f7-9d4c-8b1798d55888",
+    "generation_id": "b943ffcb-7d0c-4771-b9c1-70138b808af0",
+    "state": "terminal",
+    "dispatch_armed": false,
+    "execution_certainty": "not_started",
+    "terminal_reason": "retry"
+  },
+  "failure": {
+    "stage": "harness.acp.session.open_before_arm",
+    "error": "plugin call harness.acp.session.open failed with JSON-RPC error -32000: inner ACP runtime error: Internal error: {\"details\":\"Claude Code process exited with code 1. stderr: EPERM: operation not permitted, open '/tmp/claude-501'\"}",
+    "denied_path": "/tmp/claude-501",
+    "configured_private_tmpdir_was_ignored_for_this_open": true,
+    "interpretation": "The new adapter and rebuilt plugin initialized correctly and preserved Claude Code stderr. Claude Code then attempted a UID-scoped ambient /tmp path that is outside the strict typed sandbox grants.",
+    "narrow_follow_up": "Either make the adapter/Claude Code honor the qualification-private TMPDIR, or add a typed UID-private Claude temp capability with exact path, ownership, mode, lifecycle, endpoint normalization, and profile/compatibility identity. Do not grant blanket /tmp access."
+  },
+  "event_chain_proof": {
+    "invocation_count": 1,
+    "dispatch_armed_count": 0,
+    "not_started_count": 1,
+    "terminal_retry_count": 1,
+    "invocation_observation_rows": 0,
+    "prompt_events": 0,
+    "assistant_events": 0,
+    "reasoning_events": 0,
+    "tool_events": 0,
+    "permission_events": 0,
+    "usage_events": 0,
+    "event_chain_digest": null,
+    "result_message_count": 0,
+    "result_text": null
+  },
+  "cleanup": {
+    "worker_and_descendants_stopped_before_credential_delete": true,
+    "qualification_credential_copy_deleted": true,
+    "qualification_credential_copy_absent": true,
+    "ambient_credential_present": true,
+    "ambient_credential_bytes": 501,
+    "ambient_credential_mode": "0600"
+  },
+  "logs": {
+    "stdout_sha256": "6c8e6f5e86880d1e881bc8e60007db801b93f77068c1023958191b1899afb6b7",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "containment": {
+    "direct_claude_cli_commands": 0,
+    "direct_claude_audit": false,
+    "gooi_modified": false,
+    "snapshot_modified": false,
+    "model_or_worker_reference_access": false,
+    "unrelated_seat_restarted": false,
+    "seq123_touched": false,
+    "seq124_touched": false,
+    "commit_created": false
+  }
+}
