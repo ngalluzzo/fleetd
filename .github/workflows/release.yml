@@ -41,6 +41,9 @@ jobs:
           -p fleetd
           -p fleetd-harness-opencode
           -p fleetd-harness-codex
+          -p fleetd-harness-deepseek
+          -p fleetd-inference-mlx-vlm
+          -p fleetd-inference-llama-cpp
           -p fleetd-acp-reference
       - name: Assemble release archive
         shell: bash
@@ -50,10 +53,13 @@ jobs:
           cp target/release/fleetd "dist/${archive_root}/bin/"
           cp target/release/fleetd-harness-opencode "dist/${archive_root}/bin/"
           cp target/release/fleetd-harness-codex "dist/${archive_root}/bin/"
+          cp target/release/fleetd-harness-deepseek "dist/${archive_root}/bin/"
+          cp target/release/fleetd-inference-mlx-vlm "dist/${archive_root}/bin/"
+          cp target/release/fleetd-inference-llama-cpp "dist/${archive_root}/bin/"
           cp target/release/fleetd-acp-reference "dist/${archive_root}/bin/"
           cp README.md LICENSE "dist/${archive_root}/"
           cp docs/GETTING_STARTED.md docs/OPERATIONS.md "dist/${archive_root}/docs/"
-          cp examples/worker.opencode.example.json examples/worker.acp.example.json "dist/${archive_root}/examples/"
+          cp examples/worker.opencode.example.json examples/worker.deepseek.example.json examples/worker.acp.example.json examples/worker-profiles.example.json "dist/${archive_root}/examples/"
           cp examples/restart-demo/run.sh examples/restart-demo/mock-acp-agent.py "dist/${archive_root}/examples/restart-demo/"
           chmod +x "dist/${archive_root}/bin/"* "dist/${archive_root}/examples/restart-demo/run.sh"
           tar -C dist -czf "dist/${archive_root}.tar.gz" "${archive_root}"

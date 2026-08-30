@@ -6,19 +6,17 @@ import {
 } from "../src/ui/composer.ts";
 
 describe("conversation composer interaction model", () => {
-  test("enables only a non-empty live targeted send", () => {
+  test("enables only a non-empty live channel send", () => {
     expect(
       composerAvailability({
         phase: "live",
         selectedChannelId: "channel-1",
-        targetId: "agent-1",
         draft: " hello ",
         pendingSends: 0,
         sending: false,
       }),
     ).toEqual({
       textareaDisabled: false,
-      targetDisabled: false,
       sendDisabled: false,
       sending: false,
     });
@@ -26,7 +24,6 @@ describe("conversation composer interaction model", () => {
       composerAvailability({
         phase: "live",
         selectedChannelId: "channel-1",
-        targetId: "agent-1",
         draft: "  \n ",
         pendingSends: 0,
         sending: false,
@@ -39,7 +36,6 @@ describe("conversation composer interaction model", () => {
       const state = composerAvailability({
         phase,
         selectedChannelId: "channel-1",
-        targetId: "agent-1",
         draft: "hello",
         pendingSends: 0,
         sending: false,
@@ -51,14 +47,12 @@ describe("conversation composer interaction model", () => {
       composerAvailability({
         phase: "live",
         selectedChannelId: "channel-1",
-        targetId: "agent-1",
         draft: "hello",
         pendingSends: 1,
         sending: false,
       }),
     ).toEqual({
       textareaDisabled: false,
-      targetDisabled: false,
       sendDisabled: true,
       sending: true,
     });

@@ -2,8 +2,8 @@ use fleetd::execution::settlement;
 use fleetd::{
     error::FleetError,
     model::{
-        ClaimDeliveries, CreateAgent, CreateChannel, CreateChannelMember, CreateMessage,
-        MembershipDeliveryMode,
+        ClaimDeliveries, ConversationAttention, CreateAgent, CreateChannel, CreateChannelMember,
+        CreateMessage, MembershipDeliveryMode,
     },
     store::Store,
 };
@@ -12,6 +12,150 @@ use serde_json::json;
 mod common;
 
 use fleetd_conversation as conversation;
+
+#[tokio::test]
+async fn participant_attention_is_exact_monotonic_and_durable() {
+    let temporary = common::temp_store().await;
+    let database_path = temporary.database_path.clone();
+    let store = temporary.store;
+    let sender = agent(&store, "attention-sender").await;
+    let reader = agent(&store, "attention-reader").await;
+    let channel = store
+        .create_channel(CreateChannel {
+            name: "attention-channel".to_owned(),
+            metadata: json!({}),
+            member_ids: vec![sender.id.clone(), reader.id.clone()],
+            members: Vec::new(),
+        })
+        .await
+        .expect("create attention channel");
+    let addressed = append_text(
+        &store,
+        &channel.id,
+        &sender.id,
+        Some(&reader.id),
+        "please look",
+    )
+    .await;
+    let other_channel = store
+        .create_channel(CreateChannel {
+            name: "attention-gap-channel".to_owned(),
+            metadata: json!({}),
+            member_ids: vec![sender.id.clone()],
+            members: Vec::new(),
+        })
+        .await
+        .expect("create interleaved channel");
+    let interleaved = append_text(
+        &store,
+        &other_channel.id,
+        &sender.id,
+        None,
+        "unrelated global sequence",
+    )
+    .await;
+    let broadcast = append_text(&store, &channel.id, &sender.id, None, "shared update").await;
+
+    assert_initial_attention(
+        &store,
+        &channel.id,
+        &sender.id,
+        &reader.id,
+        addressed.seq,
+        broadcast.seq,
+    )
+    .await;
+
+    assert_eq!(
+        store
+            .advance_member_read_cursor(&channel.id, &reader.id, addressed.seq)
+            .await
+            .expect("advance cursor"),
+        addressed.seq
+    );
+    assert_eq!(
+        store
+            .advance_member_read_cursor(&channel.id, &reader.id, 0)
+            .await
+            .expect("stale cursor replay"),
+        addressed.seq,
+        "a stale client cannot rewind another client's progress"
+    );
+    let future = store
+        .advance_member_read_cursor(&channel.id, &reader.id, broadcast.seq + 1)
+        .await
+        .expect_err("future cursor must fail");
+    assert!(matches!(future, FleetError::Invalid(_)));
+    let other_channel_cursor = store
+        .advance_member_read_cursor(&channel.id, &reader.id, interleaved.seq)
+        .await
+        .expect_err("another channel's global cursor must fail");
+    assert!(matches!(other_channel_cursor, FleetError::Invalid(_)));
+
+    drop(store);
+    let reopened = Store::open(&database_path).await.expect("reopen store");
+    assert_eq!(
+        conversation::attention_for(&reopened, &reader.id, &channel.id)
+            .await
+            .expect("durable attention"),
+        ConversationAttention {
+            channel_id: channel.id,
+            read_through_seq: addressed.seq,
+            latest_message_seq: Some(broadcast.seq),
+            unread_count: 1,
+            addressed_unread_count: 0,
+            first_unread_seq: Some(broadcast.seq),
+            first_addressed_unread_seq: None,
+        }
+    );
+}
+
+async fn assert_initial_attention(
+    store: &Store,
+    channel_id: &str,
+    sender_id: &str,
+    reader_id: &str,
+    addressed_seq: i64,
+    latest_seq: i64,
+) {
+    assert_eq!(
+        conversation::attention_for(store, reader_id, channel_id)
+            .await
+            .expect("initial attention"),
+        ConversationAttention {
+            channel_id: channel_id.to_owned(),
+            read_through_seq: 0,
+            latest_message_seq: Some(latest_seq),
+            unread_count: 2,
+            addressed_unread_count: 1,
+            first_unread_seq: Some(addressed_seq),
+            first_addressed_unread_seq: Some(addressed_seq),
+        }
+    );
+    assert_eq!(
+        conversation::attention_for(store, sender_id, channel_id)
+            .await
+            .expect("sender attention")
+            .unread_count,
+        0,
+        "a participant's own messages are not unread work"
+    );
+    let late_member = agent(store, "attention-late-member").await;
+    store
+        .add_member_with_mode(
+            channel_id,
+            &late_member.id,
+            MembershipDeliveryMode::StreamOnly,
+        )
+        .await
+        .expect("add late member");
+    let late_attention = conversation::attention_for(store, &late_member.id, channel_id)
+        .await
+        .expect("late member attention");
+    assert_eq!(late_attention.read_through_seq, latest_seq);
+    assert_eq!(late_attention.latest_message_seq, Some(latest_seq));
+    assert_eq!(late_attention.unread_count, 0);
+}
 
 async fn test_store() -> (tempfile::TempDir, Store) {
     let common::TempStore {
@@ -329,6 +473,26 @@ async fn addressed_messages_stay_visible_to_the_whole_channel() {
         walked.extend(step.messages);
     }
     assert_eq!(walked, whole_log);
+
+    // Execution context can ask for the newest bounded prefix without
+    // replaying the channel from sequence zero. The boundary is exclusive and
+    // the returned slice is restored to durable ascending order.
+    let recent = store
+        .list_recent_messages_before(&channel.id, later_broadcast.seq, 2)
+        .await
+        .expect("read recent shared context");
+    assert_eq!(recent, vec![inbound, outbound.clone()]);
+    let through_end = store
+        .list_recent_messages_before(&channel.id, later_broadcast.seq + 1, 2)
+        .await
+        .expect("read history through the newest message");
+    assert_eq!(through_end, vec![outbound, later_broadcast]);
+    assert!(
+        store
+            .list_recent_messages_before(&channel.id, 0, 2)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]

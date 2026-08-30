@@ -42,6 +42,19 @@ function message(seq, channelId = "alpha", overrides = {}) {
   };
 }
 
+function attention(channelId, overrides = {}) {
+  return {
+    channel_id: channelId,
+    read_through_seq: 0,
+    latest_message_seq: null,
+    unread_count: 0,
+    addressed_unread_count: 0,
+    first_unread_seq: null,
+    first_addressed_unread_seq: null,
+    ...overrides,
+  };
+}
+
 class FakeStream {
   cursor;
   status = "connecting";
@@ -85,12 +98,17 @@ class FakeTransport {
     ["alpha", [member("alpha"), member("alpha", "worker-1")]],
     ["beta", [member("beta"), member("beta", "worker-2")]],
   ]);
+  attention = [attention("alpha"), attention("beta")];
   streams = [];
   sends = [];
   closed = false;
 
   async listChannels() {
     return this.channels;
+  }
+
+  async listAttention() {
+    return this.attention;
   }
 
   async listMembers(channelId) {
@@ -112,6 +130,25 @@ class FakeTransport {
       correlation_id: body.correlation_id,
       causation_id: body.causation_id,
     });
+  }
+
+  async advanceRead(channelId, throughSeq) {
+    const current = this.attention.find(
+      (item) => item.channel_id === channelId,
+    ) ?? attention(channelId);
+    const next = {
+      ...current,
+      read_through_seq: Math.max(current.read_through_seq, throughSeq),
+      unread_count: 0,
+      addressed_unread_count: 0,
+      first_unread_seq: null,
+      first_addressed_unread_seq: null,
+    };
+    this.attention = [
+      ...this.attention.filter((item) => item.channel_id !== channelId),
+      next,
+    ];
+    return next;
   }
 
   close() {
@@ -167,6 +204,40 @@ test("projects replay and converges an attributed send with its stream echo", as
   session.close();
   assert.equal(session.snapshot.phase, "closed");
   assert.equal(transport.closed, true);
+});
+
+test("refreshes and monotonically advances participant attention", async () => {
+  const transport = new FakeTransport();
+  transport.attention = [
+    attention("alpha", {
+      latest_message_seq: 4,
+      unread_count: 4,
+      addressed_unread_count: 2,
+      first_unread_seq: 1,
+      first_addressed_unread_seq: 1,
+    }),
+  ];
+  const session = new ConversationSession(transport);
+  await session.start();
+  assert.equal(session.snapshot.attention[0].addressed_unread_count, 2);
+
+  await session.markRead("alpha", 4);
+  assert.equal(session.snapshot.attention[0].read_through_seq, 4);
+  assert.equal(session.snapshot.attention[0].unread_count, 0);
+
+  transport.attention = [
+    attention("alpha", {
+      read_through_seq: 4,
+      latest_message_seq: 7,
+      unread_count: 3,
+      addressed_unread_count: 1,
+      first_unread_seq: 5,
+      first_addressed_unread_seq: 6,
+    }),
+  ];
+  await session.refreshAttention();
+  assert.equal(session.snapshot.attention[0].first_unread_seq, 5);
+  session.close();
 });
 
 test("fences abandoned channel selection and resumes each retained cursor", async () => {
@@ -353,7 +424,9 @@ test("browser transport keeps discovery authority separate from participant oper
   const fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const body =
-      request.method === "POST" ? await request.clone().json() : null;
+      request.method === "POST" || request.method === "PUT"
+        ? await request.clone().json()
+        : null;
     requests.push({
       path: new URL(request.url).pathname,
       method: request.method,
@@ -362,6 +435,12 @@ test("browser transport keeps discovery authority separate from participant oper
     });
     const path = new URL(request.url).pathname;
     if (path === "/v1/channels") return json([channel("alpha")]);
+    if (path === "/v1/conversations/attention") {
+      return json([attention("alpha")]);
+    }
+    if (path.endsWith("/read-cursor")) {
+      return json(attention("alpha", { read_through_seq: body.through_seq }));
+    }
     if (path.endsWith("/members")) {
       return json([member("alpha"), member("alpha", "worker-1")]);
     }
@@ -395,8 +474,10 @@ test("browser transport keeps discovery authority separate from participant oper
   });
 
   await transport.listChannels();
+  await transport.listAttention();
   await transport.listMembers("alpha");
   await transport.send("alpha", { kind: "opaque", payload: null });
+  await transport.advanceRead("alpha", 1);
   const stream = transport.openStream({
     channelId: "alpha",
     after: 0,
@@ -416,8 +497,10 @@ test("browser transport keeps discovery authority separate from participant oper
     requests.map(({ path, authorization }) => [path, authorization]),
     [
       ["/v1/channels", "Bearer operator-secret"],
+      ["/v1/conversations/attention", "Bearer participant-secret"],
       ["/v1/channels/alpha/members", "Bearer participant-secret"],
       ["/v1/channels/alpha/messages", "Bearer participant-secret"],
+      ["/v1/channels/alpha/read-cursor", "Bearer participant-secret"],
       ["/v1/channels/alpha/stream-grants", "Bearer participant-secret"],
     ],
   );

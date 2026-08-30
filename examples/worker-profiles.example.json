@@ -1,0 +1,140 @@
+{
+  "schema_version": 2,
+  "inference_backends": [
+    {
+      "id": "mlx-qwen-local",
+      "label": "MLX-VLM · local Qwen",
+      "plugin": {
+        "id": "fleetd.inference.mlx-vlm",
+        "executable": "/absolute/path/to/fleetd-inference-mlx-vlm",
+        "config": {
+          "python_executable": "/absolute/path/to/python-in-mlx-vlm-environment",
+          "expected_version": "replace-with-exact-mlx-vlm-version",
+          "home": "/absolute/private/inference-home",
+          "tmpdir": "/absolute/private/tmp",
+          "model": "/absolute/path/to/mlx-model",
+          "model_id": "/absolute/path/to/mlx-model",
+          "model_name": "Local Qwen",
+          "port": 18082,
+          "max_kv_size": 262144,
+          "max_tokens": 8192,
+          "max_num_seqs": 1,
+          "enable_thinking": true,
+          "thinking_budget": 4096,
+          "apc_num_blocks": 4096,
+          "startup_timeout_ms": 900000
+        },
+        "initialize_timeout_ms": 960000,
+        "request_timeout_ms": 10000,
+        "shutdown_timeout_ms": 10000
+      }
+    },
+    {
+      "id": "llama-qwen-local",
+      "label": "llama.cpp · local Qwen",
+      "plugin": {
+        "id": "fleetd.inference.llama-cpp",
+        "executable": "/absolute/path/to/fleetd-inference-llama-cpp",
+        "config": {
+          "executable": "/absolute/path/to/llama-server",
+          "expected_version": "replace-with-exact-llama.cpp-version",
+          "model": "/absolute/path/to/model.gguf",
+          "model_id": "qwen-local",
+          "model_name": "Local Qwen GGUF",
+          "port": 18083,
+          "context_size": 131072,
+          "parallel": 1,
+          "jinja": true,
+          "metrics": true,
+          "startup_timeout_ms": 600000
+        },
+        "initialize_timeout_ms": 660000,
+        "request_timeout_ms": 10000,
+        "shutdown_timeout_ms": 10000
+      }
+    }
+  ],
+  "profiles": [
+    {
+      "id": "opencode-mlx-qwen",
+      "label": "OpenCode · MLX Qwen",
+      "description": "Local coding agent backed by the shared MLX-VLM Qwen resource.",
+      "inference_backend": "mlx-qwen-local",
+      "worker": {
+        "schema_version": 2,
+        "working_directory": "/absolute/path/to/your/project",
+        "mcp_grants": ["fleet.messaging.send"],
+        "sandbox": {
+          "kind": "macos_seatbelt",
+          "read_only_directories": [
+            "/absolute/path/to/fleetd-runtime-directory",
+            "/absolute/path/to/opencode-install-directory"
+          ],
+          "writable_directories": [],
+          "network": "allow_outbound"
+        },
+        "adapter": {
+          "kind": "envelope",
+          "inbound": {
+            "schema_version": 1,
+            "message_kinds": ["conversation.prompt/phase-c-v1"]
+          }
+        },
+        "result_kind": "conversation.result/phase-c-v1",
+        "turn": {
+          "interrupt_on_new_message": true,
+          "interrupt_poll_interval_ms": 250,
+          "permission_policy": "allow_once"
+        },
+        "plugin": {
+          "id": "fleetd.harness.opencode",
+          "executable": "/absolute/path/to/fleetd-harness-opencode",
+          "config": {
+            "executable": "/absolute/path/to/opencode",
+            "expected_version": "replace-with-exact-opencode-version",
+            "home": "/absolute/private/opencode-home",
+            "path": "/explicit/non-secret/path",
+            "term": "xterm-256color",
+            "tmpdir": "/absolute/private/tmp",
+            "reasoning_effort": "xhigh"
+          }
+        }
+      }
+    },
+    {
+      "id": "opencode-llama-qwen",
+      "label": "OpenCode · llama.cpp Qwen",
+      "description": "Local coding agent backed by the shared llama.cpp Qwen resource.",
+      "inference_backend": "llama-qwen-local",
+      "worker": {
+        "schema_version": 2,
+        "working_directory": "/absolute/path/to/your/project",
+        "mcp_grants": ["fleet.messaging.send"],
+        "adapter": {
+          "kind": "envelope",
+          "inbound": {
+            "schema_version": 1,
+            "message_kinds": ["conversation.prompt/phase-c-v1"]
+          }
+        },
+        "result_kind": "conversation.result/phase-c-v1",
+        "turn": {
+          "interrupt_on_new_message": true,
+          "interrupt_poll_interval_ms": 250
+        },
+        "plugin": {
+          "id": "fleetd.harness.opencode",
+          "executable": "/absolute/path/to/fleetd-harness-opencode",
+          "config": {
+            "executable": "/absolute/path/to/opencode",
+            "expected_version": "replace-with-exact-opencode-version",
+            "home": "/absolute/private/opencode-home",
+            "path": "/explicit/non-secret/path",
+            "term": "xterm-256color",
+            "tmpdir": "/absolute/private/tmp"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -37,6 +37,12 @@ impl ApiClient {
             .post(format!("{}{path}", self.server))
             .bearer_auth(&self.token)
     }
+
+    pub(super) fn put(&self, path: &str) -> reqwest::RequestBuilder {
+        self.client
+            .put(format!("{}{path}", self.server))
+            .bearer_auth(&self.token)
+    }
 }
 
 pub(super) async fn print_response(response: reqwest::Response) -> MainResult<()> {

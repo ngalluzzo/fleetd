@@ -11,6 +11,7 @@ use crate::{
         PluginManifest, PluginNotification, ShutdownResult, validate_identifier,
     },
     rpc::RpcPeer,
+    sandbox::{MacOsSeatbeltPosture, MacOsSeatbeltSandbox},
 };
 
 const DEFAULT_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -66,6 +67,7 @@ pub struct PluginSpec {
     initialize_timeout: Duration,
     request_timeout: Duration,
     shutdown_timeout: Duration,
+    sandbox: Option<MacOsSeatbeltSandbox>,
 }
 
 impl PluginSpec {
@@ -81,6 +83,7 @@ impl PluginSpec {
             initialize_timeout: DEFAULT_INITIALIZE_TIMEOUT,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
+            sandbox: None,
         }
     }
 
@@ -126,6 +129,36 @@ impl PluginSpec {
         self
     }
 
+    /// Wraps the complete plugin process group in a declared macOS Seatbelt
+    /// boundary.
+    #[must_use]
+    pub fn with_macos_seatbelt(mut self, sandbox: MacOsSeatbeltSandbox) -> Self {
+        self.sandbox = Some(sandbox);
+        self
+    }
+
+    /// Returns the effective sandbox profile identity when one is declared.
+    #[must_use]
+    pub fn sandbox_profile_digest(&self) -> Option<&str> {
+        self.sandbox
+            .as_ref()
+            .map(MacOsSeatbeltSandbox::profile_digest)
+    }
+
+    /// Returns the stable named sandbox posture when one is declared.
+    #[must_use]
+    pub fn sandbox_posture(&self) -> Option<MacOsSeatbeltPosture> {
+        self.sandbox.as_ref().map(MacOsSeatbeltSandbox::posture)
+    }
+
+    /// Returns the honest scope of the declared sandbox boundary.
+    #[must_use]
+    pub fn sandbox_security_scope(&self) -> Option<&'static str> {
+        self.sandbox
+            .as_ref()
+            .map(MacOsSeatbeltSandbox::security_scope)
+    }
+
     fn validate(&self) -> Result<(), PluginError> {
         validate_identifier("plugin", &self.id).map_err(PluginError::InvalidSpec)?;
         if !self.executable.is_absolute() {
@@ -166,6 +199,7 @@ impl fmt::Debug for PluginSpec {
             .field("initialize_timeout", &self.initialize_timeout)
             .field("request_timeout", &self.request_timeout)
             .field("shutdown_timeout", &self.shutdown_timeout)
+            .field("sandbox", &self.sandbox)
             .finish()
     }
 }
@@ -206,9 +240,13 @@ impl PluginProcess {
     /// protocol violation, identity mismatch, or missing interface.
     pub async fn start(spec: PluginSpec) -> Result<Self, PluginError> {
         spec.validate()?;
-        let mut command = Command::new(&spec.executable);
+        let (launch_executable, launch_arguments) = spec.sandbox.as_ref().map_or_else(
+            || (spec.executable.clone(), spec.args.clone()),
+            |sandbox| sandbox.launch_command(&spec.executable, &spec.args),
+        );
+        let mut command = Command::new(launch_executable);
         command
-            .args(&spec.args)
+            .args(launch_arguments)
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -288,6 +326,16 @@ impl PluginProcess {
     /// Returns an error when the process did not negotiate `harness.acp` v1.
     pub fn into_harness_acp(self) -> Result<super::HarnessAcpClient, PluginError> {
         super::HarnessAcpClient::new(self)
+    }
+
+    /// Converts this process into the typed experimental inference client.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the process did not negotiate the exact
+    /// `fleetd.inference-openai` interface.
+    pub fn into_inference_openai(self) -> Result<super::InferenceOpenAiClient, PluginError> {
+        super::InferenceOpenAiClient::new(self)
     }
 
     pub(crate) async fn protocol_call<P, R>(

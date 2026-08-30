@@ -12,6 +12,13 @@ values, only absolute paths to two distinct owner-only credential files:
 - the human participant credential for membership, streaming, and attributed
   sends.
 
+Profile schema 2 also names three absolute local paths: the Fleetd
+configuration, the `fleetd` executable, and a private approved worker-profile
+catalog. The host starts `fleetd worker supervise` beside the window and passes
+only each profile's ID, label, and description into the webview. The catalog's
+worker and inference-backend blocks — executables, arguments, models, tools,
+directories, and plugin configuration — never enter page memory.
+
 Copy [`conversation-profile.example.json`](conversation-profile.example.json)
 to the default location and restrict it before editing:
 
@@ -20,7 +27,8 @@ mkdir -p ~/.fleetd
 cp apps/conversation-desktop/conversation-profile.example.json \
   ~/.fleetd/conversation-desktop.json
 chmod 600 ~/.fleetd/conversation-desktop.json \
-  ~/.fleetd/operator.token ~/.fleetd/human.token
+  ~/.fleetd/operator.token ~/.fleetd/human.token \
+  ~/.fleetd/worker-profiles.json
 ```
 
 Every configured path must be absolute. The origin must be an exact loopback
@@ -56,4 +64,5 @@ host uses Electrobun's native renderer and does not bundle CEF. It restricts
 navigation to the configured Fleetd conversation URL, injects the credentials
 once after DOM readiness, clears its copies, and never logs them. Closing or
 reloading the page does not create another protocol implementation inside the
-host.
+host. The supervisor uses a database-adjacent process lock, so opening another
+window cannot create a second local reconciler for the same fleet.

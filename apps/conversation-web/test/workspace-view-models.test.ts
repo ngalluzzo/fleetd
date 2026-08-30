@@ -45,7 +45,7 @@ describe("workspace agent directory projection", () => {
 
     const absent = agentDirectoryItem(piler);
     expect(absent.health).toBe("unmanaged");
-    expect(absent.status).toBe("No worker observed");
+    expect(absent.status).toBe("Not configured");
   });
 
   test("uses the latest exact records and omits the connected participant", () => {

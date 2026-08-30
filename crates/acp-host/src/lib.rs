@@ -105,7 +105,7 @@ pub async fn serve(definition: PluginDefinition) -> Result<(), DriverError> {
                 DriverError::InvalidConfig(format!("plugin version is not valid SemVer: {error}"))
             })?,
         },
-        interfaces: fleetd_proto::harness_acp::declared_interfaces(),
+        interfaces: runtime.declared_interfaces(),
     };
     write_result(&mut writer, request.id, serde_json::to_value(manifest)?).await?;
 

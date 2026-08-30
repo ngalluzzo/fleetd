@@ -1,9 +1,12 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "origin": "http://127.0.0.1:4317",
   "participant_id": "replace-with-the-human-participant-id",
   "operator_credential_file": "/absolute/path/to/.fleetd/operator.token",
   "participant_credential_file": "/absolute/path/to/.fleetd/human.token",
+  "fleet_config_file": "/absolute/path/to/.fleetd/config.json",
+  "fleetd_executable": "/absolute/path/to/fleetd",
+  "worker_profiles_file": "/absolute/path/to/.fleetd/worker-profiles.json",
   "request_kind": "conversation.prompt/phase-c-v1",
   "result_kind": "conversation.result/phase-c-v1",
   "channel_id": "replace-with-an-optional-initial-channel-id"

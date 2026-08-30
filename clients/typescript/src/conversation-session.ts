@@ -1,6 +1,7 @@
 import type {
   Channel,
   ChannelMember,
+  ConversationAttention,
   Message,
   SendMessage,
 } from "./generated/types.gen.ts";
@@ -41,6 +42,7 @@ export interface ConversationSnapshot {
   readonly phase: ConversationSessionPhase;
   readonly participantId: string;
   readonly channels: readonly Channel[];
+  readonly attention: readonly ConversationAttention[];
   readonly selectedChannelId: string | null;
   readonly members: readonly ChannelMember[];
   readonly messages: readonly Message[];
@@ -84,6 +86,7 @@ export class ConversationSession {
   #revision = 0;
   #phase: ConversationSessionPhase = "idle";
   #channels: readonly Channel[] = [];
+  #attention: readonly ConversationAttention[] = [];
   #selectedChannelId: string | null = null;
   #selectionGeneration = 0;
   #cancelSelection?: () => void;
@@ -115,6 +118,7 @@ export class ConversationSession {
       phase: this.#phase,
       participantId: this.#transport.participantId,
       channels: this.#channels,
+      attention: this.#attention,
       selectedChannelId: this.#selectedChannelId,
       members: lane?.members ?? [],
       messages: lane?.messages ?? [],
@@ -136,10 +140,18 @@ export class ConversationSession {
     this.#error = null;
     this.#publish();
     try {
-      this.#channels = [...(await this.#transport.listChannels())];
+      const [channels, attention] = await Promise.all([
+        this.#transport.listChannels(),
+        this.#transport.listAttention(),
+      ]);
+      this.#channels = [...channels];
+      this.#attention = checkedAttention(attention);
     } catch {
-      this.#fail("channel_discovery_failed", "Fleetd channel discovery failed");
-      throw new Error("Fleetd channel discovery failed");
+      this.#fail(
+        "channel_discovery_failed",
+        "Fleetd conversation discovery failed",
+      );
+      throw new Error("Fleetd conversation discovery failed");
     }
     if (this.#closed) return;
     this.#phase = "ready";
@@ -149,13 +161,57 @@ export class ConversationSession {
   async refreshChannels(): Promise<void> {
     this.#assertOpen();
     try {
-      this.#channels = [...(await this.#transport.listChannels())];
+      const [channels, attention] = await Promise.all([
+        this.#transport.listChannels(),
+        this.#transport.listAttention(),
+      ]);
+      this.#channels = [...channels];
+      this.#attention = checkedAttention(attention);
       this.#error = null;
       this.#publish();
     } catch {
       this.#fail("channel_discovery_failed", "Fleetd channel discovery failed");
       throw new Error("Fleetd channel discovery failed");
     }
+  }
+
+  /** Refreshes participant-owned attention without disturbing the live lane. */
+  async refreshAttention(): Promise<void> {
+    this.#assertOpen();
+    try {
+      this.#attention = checkedAttention(
+        await this.#transport.listAttention(),
+      );
+      this.#publish();
+    } catch {
+      throw new Error("Fleetd conversation attention refresh failed");
+    }
+  }
+
+  /** Monotonically acknowledges messages observed by this participant. */
+  async markRead(channelId: string, throughSeq: number): Promise<void> {
+    this.#assertOpen();
+    if (!Number.isSafeInteger(throughSeq) || throughSeq < 0) {
+      throw this.#invalidState("read cursor must be a non-negative safe integer");
+    }
+    const updated = checkedAttention([
+      await this.#transport.advanceRead(channelId, throughSeq),
+    ])[0];
+    if (
+      updated.channel_id !== channelId ||
+      updated.read_through_seq < throughSeq
+    ) {
+      throw this.#invalidState(
+        "Fleetd returned attention outside the acknowledged participant lane",
+      );
+    }
+    this.#attention = [
+      ...this.#attention.filter(
+        (attention) => attention.channel_id !== updated.channel_id,
+      ),
+      updated,
+    ];
+    this.#publish();
   }
 
   async selectChannel(channelId: string): Promise<void> {
@@ -479,4 +535,51 @@ function jsonEqual(left: unknown, right: unknown): boolean {
         jsonEqual(leftRecord[key], rightRecord[key]),
     )
   );
+}
+
+function checkedAttention(
+  values: readonly ConversationAttention[],
+): readonly ConversationAttention[] {
+  const seen = new Set<string>();
+  for (const value of values) {
+    const latest = value.latest_message_seq;
+    const firstUnread = value.first_unread_seq;
+    const firstAddressed = value.first_addressed_unread_seq;
+    if (
+      typeof value.channel_id !== "string" ||
+      value.channel_id.length === 0 ||
+      seen.has(value.channel_id) ||
+      !Number.isSafeInteger(value.read_through_seq) ||
+      value.read_through_seq < 0 ||
+      (latest !== null &&
+        (typeof latest !== "number" ||
+          !Number.isSafeInteger(latest) ||
+          latest < value.read_through_seq)) ||
+      !Number.isSafeInteger(value.unread_count) ||
+      value.unread_count < 0 ||
+      !Number.isSafeInteger(value.addressed_unread_count) ||
+      value.addressed_unread_count < 0 ||
+      value.addressed_unread_count > value.unread_count ||
+      (value.unread_count === 0) !== (firstUnread === null) ||
+      (value.addressed_unread_count === 0) !== (firstAddressed === null) ||
+      (firstUnread !== null &&
+        (typeof firstUnread !== "number" ||
+          !Number.isSafeInteger(firstUnread) ||
+          firstUnread <= value.read_through_seq ||
+          latest === null ||
+          typeof latest !== "number" ||
+          firstUnread > latest)) ||
+      (firstAddressed !== null &&
+        (typeof firstAddressed !== "number" ||
+          !Number.isSafeInteger(firstAddressed) ||
+          firstAddressed <= value.read_through_seq ||
+          latest === null ||
+          typeof latest !== "number" ||
+          firstAddressed > latest))
+    ) {
+      throw new Error("Fleetd returned invalid conversation attention");
+    }
+    seen.add(value.channel_id);
+  }
+  return [...values];
 }

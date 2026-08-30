@@ -18,6 +18,8 @@ pub mod health;
 pub mod invocation;
 pub mod message_grant;
 pub mod operations;
+pub mod permission;
+pub mod seat_configuration;
 pub mod session_binding;
 pub mod settlement;
 pub mod trajectory;

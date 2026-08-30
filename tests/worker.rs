@@ -1,6 +1,10 @@
 #![cfg(unix)]
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use fleetd::execution::invocation;
 use fleetd::execution::operations;
@@ -11,16 +15,17 @@ use fleetd::{
         PluginGenerationDisposition, PluginGenerationHealth, PluginGenerationState,
         PluginShutdownOutcome,
     },
+    execution::permission::PermissionPolicy,
     execution::session_binding::SessionBindingState,
     execution::worker::{
-        ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError,
+        ChannelTurnContext, ContinuousHarnessWorker, ContinuousWorkerConfig, ContinuousWorkerError,
         EnvelopeTurnAdapter, InboundAcceptance, PreparedTurn, TurnAdapter,
     },
     model::{
         ClaimDeliveries, CreateAgent, CreateChannel, CreateMessage, ExecutionCertainty,
         InvocationState,
     },
-    plugin::{PluginSpec, ToolBudget, TurnPolicy, harness_acp_interface},
+    plugin::{PluginSpec, PromptBlock, ToolBudget, TurnPolicy, harness_acp_interface},
     store::Store,
 };
 use serde_json::json;
@@ -86,9 +91,12 @@ fn worker_config(agent_id: &str, mode: &str, working_directory: PathBuf) -> Cont
         compatibility_digest: None,
         lease_duration: Duration::from_secs(70),
         poll_interval: Duration::from_millis(10),
+        interrupt_on_new_message: true,
+        interrupt_poll_interval: Duration::from_millis(10),
         restart_backoff: Duration::from_millis(10),
         pre_arm_retry_delay: Duration::ZERO,
         turn_policy: policy(),
+        permission_policy: PermissionPolicy::Deny,
         trajectory_sink: None,
     }
 }
@@ -293,6 +301,7 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
         .expect("drain two turns");
 
     assert_eq!(report.completed, 2);
+    assert_eq!(report.interrupted, 0);
     assert_eq!(report.blocked, 0);
     assert_eq!(report.plugin_generations, 1);
     assert_eq!(report.reservations, 2);
@@ -359,6 +368,90 @@ async fn continuous_worker_drains_multiple_turns_on_one_session_lane() {
 }
 
 #[tokio::test]
+async fn newer_accepted_message_interrupts_and_rotates_the_native_session() {
+    let fixture = fixture(1).await;
+    let first = fixture
+        .store
+        .list_messages(&fixture.channel_id, 0, 10)
+        .await
+        .expect("list initial message")
+        .messages
+        .pop()
+        .expect("one initial message");
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(
+            &fixture.receiver_id,
+            "cancel-first",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        ),
+        envelope_adapter(),
+    )
+    .expect("valid interruptible worker");
+
+    let run = worker.run_until(CancellationToken::new(), Some(2));
+    let append_newer = async {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let active =
+                    invocation::list_invocations(&fixture.store, Some(&fixture.receiver_id))
+                        .await
+                        .expect("inspect active invocation")
+                        .into_iter()
+                        .any(|invocation| invocation.state == InvocationState::DispatchArmed);
+                if active {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("first turn becomes active");
+        append_direct_kind(&fixture, "work.request/v1", 1).await
+    };
+    let (report, newer) = tokio::join!(run, append_newer);
+    let report = report.expect("interrupt and resume both turns");
+
+    assert_eq!(report.interrupted, 1);
+    assert_eq!(report.completed, 1);
+    assert_eq!(report.blocked, 0);
+    assert_eq!(report.plugin_generations, 1);
+    let history = fixture
+        .store
+        .list_messages(&fixture.channel_id, 0, 20)
+        .await
+        .expect("list interrupted conversation")
+        .messages;
+    let first_result = history
+        .iter()
+        .find(|message| message.causation_id.as_deref() == Some(first.id.as_str()))
+        .expect("first turn settled visibly");
+    assert_eq!(first_result.payload["status"], "interrupted");
+    assert_eq!(first_result.payload["stop_reason"], "host_newer_message");
+    assert_eq!(first_result.payload["interrupted_by_message_id"], newer.id);
+    let newer_result = history
+        .iter()
+        .find(|message| message.causation_id.as_deref() == Some(newer.id.as_str()))
+        .expect("newer turn completed");
+    assert_eq!(newer_result.payload["status"], "completed");
+    let sessions =
+        session_binding::list_session_bindings(&fixture.store, Some(&fixture.receiver_id))
+            .await
+            .expect("list resumed channel session");
+    assert_eq!(sessions.len(), 2);
+    let retired = sessions
+        .iter()
+        .find(|session| session.binding.binding_generation == 1)
+        .expect("interrupted native session was retained as durable evidence");
+    assert_eq!(retired.state, SessionBindingState::Retired);
+    let replacement = sessions
+        .iter()
+        .find(|session| session.binding.binding_generation == 2)
+        .expect("follow-up opened a fresh native session");
+    assert_eq!(replacement.state, SessionBindingState::Ready);
+}
+
+#[tokio::test]
 async fn worker_skips_earlier_unaccepted_delivery_without_leasing_it() {
     let fixture = fixture(0).await;
     let skipped = append_direct_kind(&fixture, "work.result/v1", 0).await;
@@ -401,6 +494,120 @@ async fn worker_skips_earlier_unaccepted_delivery_without_leasing_it() {
     assert_eq!(skipped_claim.deliveries.len(), 1);
     assert_eq!(skipped_claim.deliveries[0].message.id, skipped.id);
     assert_eq!(skipped_claim.deliveries[0].attempt, 1);
+}
+
+struct ContextCapturingAdapter {
+    delegate: EnvelopeTurnAdapter,
+    captured: Arc<Mutex<Option<(ChannelTurnContext, String)>>>,
+}
+
+impl TurnAdapter for ContextCapturingAdapter {
+    fn inbound_acceptance(&self) -> &InboundAcceptance {
+        self.delegate.inbound_acceptance()
+    }
+
+    fn prepare(&self, invocation: &fleetd::model::Invocation) -> Result<PreparedTurn, String> {
+        self.delegate.prepare(invocation)
+    }
+
+    fn prepare_with_channel_context(
+        &self,
+        invocation: &fleetd::model::Invocation,
+        context: &ChannelTurnContext,
+    ) -> Result<PreparedTurn, String> {
+        let prepared = self
+            .delegate
+            .prepare_with_channel_context(invocation, context)?;
+        let Some(PromptBlock::Text { text }) = prepared.prompt.first() else {
+            return Err("envelope adapter did not produce one text prompt".to_owned());
+        };
+        *self.captured.lock().expect("capture channel context") =
+            Some((context.clone(), text.clone()));
+        Ok(prepared)
+    }
+}
+
+#[tokio::test]
+async fn envelope_turn_receives_members_and_recent_shared_history() {
+    let fixture = fixture(0).await;
+    let earlier = append_direct_kind(&fixture, "work.result/v1", 0).await;
+    let latest = append_direct_kind(&fixture, "work.result/v1", 1).await;
+    let accepted = append_direct_kind(&fixture, "work.request/v1", 2).await;
+    let captured = Arc::new(Mutex::new(None));
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(
+            &fixture.receiver_id,
+            "healthy",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        ),
+        ContextCapturingAdapter {
+            delegate: envelope_adapter(),
+            captured: Arc::clone(&captured),
+        },
+    )
+    .expect("valid context worker");
+
+    worker
+        .run_until(CancellationToken::new(), Some(1))
+        .await
+        .expect("execute context turn");
+
+    let (context, prompt) = captured
+        .lock()
+        .expect("read captured context")
+        .clone()
+        .expect("one captured context");
+    assert_eq!(context.members.len(), 2);
+    assert_eq!(context.members[0].agent_id, fixture.receiver_id);
+    assert_eq!(context.members[1].agent_id, fixture.sender_id);
+    assert_eq!(context.recent_history, vec![earlier, latest]);
+    assert!(!context.members_truncated);
+    assert!(!context.recent_history_truncated);
+    assert!(prompt.contains(&fixture.receiver_id));
+    assert!(prompt.contains(&fixture.sender_id));
+    assert!(prompt.contains(&accepted.id));
+    assert!(prompt.contains("recent_history"));
+}
+
+#[tokio::test]
+async fn envelope_turn_context_keeps_the_newest_bounded_history_suffix() {
+    let fixture = fixture(0).await;
+    let mut earlier = Vec::new();
+    for sequence in 0..34 {
+        earlier.push(append_direct_kind(&fixture, "work.result/v1", sequence).await);
+    }
+    append_direct_kind(&fixture, "work.request/v1", 34).await;
+    let captured = Arc::new(Mutex::new(None));
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(
+            &fixture.receiver_id,
+            "healthy",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        ),
+        ContextCapturingAdapter {
+            delegate: envelope_adapter(),
+            captured: Arc::clone(&captured),
+        },
+    )
+    .expect("valid bounded-context worker");
+
+    worker
+        .run_until(CancellationToken::new(), Some(1))
+        .await
+        .expect("execute bounded-context turn");
+
+    let (context, prompt) = captured
+        .lock()
+        .expect("read bounded context")
+        .clone()
+        .expect("one bounded context");
+    assert_eq!(context.recent_history.len(), 32);
+    assert_eq!(context.recent_history.first(), earlier.get(2));
+    assert_eq!(context.recent_history.last(), earlier.last());
+    assert!(context.recent_history_truncated);
+    assert!(prompt.contains("\"recent_history_truncated\": true"));
 }
 
 #[tokio::test]
@@ -544,6 +751,67 @@ async fn cancellation_during_idle_poll_shuts_down_cleanly() {
     assert_eq!(report.completed, 0);
     assert_eq!(report.reservations, 0);
     assert!(report.idle_polls > 0);
+}
+
+#[tokio::test]
+async fn cancellation_during_an_active_turn_drains_and_shuts_down_cleanly() {
+    let fixture = fixture(1).await;
+    let source = fixture
+        .store
+        .list_messages(&fixture.channel_id, 0, 10)
+        .await
+        .expect("list source message")
+        .messages
+        .pop()
+        .expect("one source message");
+    let worker = ContinuousHarnessWorker::new(
+        &fixture.store,
+        worker_config(
+            &fixture.receiver_id,
+            "cancel-end-turn",
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        ),
+        envelope_adapter(),
+    )
+    .expect("valid cancellable worker");
+    let cancellation = CancellationToken::new();
+    let run = worker.run(cancellation.clone());
+    let cancel_active = async {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let active =
+                    invocation::list_invocations(&fixture.store, Some(&fixture.receiver_id))
+                        .await
+                        .expect("inspect active invocation")
+                        .into_iter()
+                        .any(|invocation| invocation.state == InvocationState::DispatchArmed);
+                if active {
+                    cancellation.cancel();
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("turn becomes active before shutdown");
+    };
+    let (report, ()) = tokio::join!(run, cancel_active);
+    let report = report.expect("active turn drains during shutdown");
+
+    assert_eq!(report.interrupted, 1);
+    assert_eq!(report.completed, 0);
+    assert_eq!(report.blocked, 0);
+    let result = fixture
+        .store
+        .list_messages(&fixture.channel_id, source.seq, 10)
+        .await
+        .expect("list shutdown result")
+        .messages
+        .into_iter()
+        .find(|message| message.causation_id.as_deref() == Some(source.id.as_str()))
+        .expect("shutdown interruption settles visibly");
+    assert_eq!(result.payload["status"], "interrupted");
+    assert_eq!(result.payload["stop_reason"], "host_worker_shutdown");
 }
 
 struct CancellingAdapter {
@@ -723,4 +991,21 @@ async fn worker_rejects_unknown_or_duplicate_mcp_grants_before_startup() {
         .err()
         .expect("duplicate grant must fail");
     assert!(matches!(error, ContinuousWorkerError::InvalidConfig(_)));
+}
+
+#[tokio::test]
+async fn worker_rejects_allow_once_without_an_os_sandbox() {
+    let fixture = fixture(0).await;
+    let mut config = worker_config(
+        &fixture.receiver_id,
+        "healthy",
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+    );
+    config.permission_policy = PermissionPolicy::AllowOnce;
+    let error = ContinuousHarnessWorker::new(&fixture.store, config, envelope_adapter())
+        .err()
+        .expect("consent without containment must fail");
+    assert!(
+        matches!(error, ContinuousWorkerError::InvalidConfig(message) if message.contains("requires an OS-sandboxed plugin process"))
+    );
 }

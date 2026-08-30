@@ -2,7 +2,7 @@
 name = "fleetd-plugin-host"
 version = "0.1.0"
 edition = "2024"
-description = "Out-of-process plugin lifecycle and the typed fleetd.harness-acp client"
+description = "Out-of-process plugin lifecycle and typed fleetd operational-interface clients"
 license = "MIT"
 
 # The host launches and drives plugin processes. It owns no durable state, so

@@ -14,7 +14,7 @@
 
 pub use fleetd_kernel::{auth, delivery, error, message_commit_hint, store};
 pub use fleetd_plugin_host as plugin;
-pub use fleetd_proto::{model, trigger};
+pub use fleetd_proto::{model, operations, trigger};
 
 pub use fleetd_execution as execution;
 pub use fleetd_http as http;

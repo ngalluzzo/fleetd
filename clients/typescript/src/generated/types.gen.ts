@@ -20,6 +20,16 @@ export type AddMember = {
 };
 
 /**
+ * Advances the authenticated participant's durable read cursor.
+ */
+export type AdvanceConversationRead = {
+    /**
+     * Highest channel message sequence the participant has observed.
+     */
+    through_seq: number;
+};
+
+/**
  * An addressable participant in the fleet.
  */
 export type Agent = {
@@ -55,6 +65,27 @@ export type AgentSeat = {
     state: AgentSeatState;
     unresolved_block_id?: number | null;
 };
+
+/**
+ * Operator-selected execution for one stable agent identity.
+ *
+ * `profile_id` is only a reference. Executable paths, arguments, environment,
+ * tool grants, and harness credentials stay in a private catalog on the host.
+ */
+export type AgentSeatConfiguration = {
+    agent_id: string;
+    created_at_ms: number;
+    desired_state: AgentSeatDesiredState;
+    instructions: string;
+    profile_id: string;
+    revision: number;
+    updated_at_ms: number;
+};
+
+/**
+ * Whether the machine hosting an approved runtime should keep an agent active.
+ */
+export type AgentSeatDesiredState = 'running' | 'stopped';
 
 /**
  * The exact durable evidence responsible for a projected seat state.
@@ -224,6 +255,34 @@ export type CompleteInvocation = {
     kind?: string;
     lease_token: string;
     payload: unknown;
+};
+
+/**
+ * Bounded operator request to configure one agent's approved local runtime.
+ */
+export type ConfigureAgentSeat = {
+    desired_state: AgentSeatDesiredState;
+    instructions?: string;
+    profile_id: string;
+};
+
+/**
+ * Exact unread state for one authenticated participant in one conversation.
+ *
+ * The projection is derived only from the participant's durable membership
+ * cursor and immutable message envelopes. The participant's own messages are
+ * not unread. `addressed_unread_count` counts messages from another
+ * participant whose exact `recipient_id` is the reader; it does not infer
+ * urgency from message content.
+ */
+export type ConversationAttention = {
+    addressed_unread_count: number;
+    channel_id: string;
+    first_addressed_unread_seq?: number | null;
+    first_unread_seq?: number | null;
+    latest_message_seq?: number | null;
+    read_through_seq: number;
+    unread_count: number;
 };
 
 /**
@@ -803,6 +862,39 @@ export type GetOpenApiDocumentResponses = {
     200: unknown;
 };
 
+export type ListAgentSeatConfigurationsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/agent-seat-configurations';
+};
+
+export type ListAgentSeatConfigurationsErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ListAgentSeatConfigurationsError = ListAgentSeatConfigurationsErrors[keyof ListAgentSeatConfigurationsErrors];
+
+export type ListAgentSeatConfigurationsResponses = {
+    /**
+     * Durable desired execution
+     */
+    200: Array<AgentSeatConfiguration>;
+};
+
+export type ListAgentSeatConfigurationsResponse = ListAgentSeatConfigurationsResponses[keyof ListAgentSeatConfigurationsResponses];
+
 export type ListAgentSeatsData = {
     body?: never;
     path?: never;
@@ -1327,6 +1419,98 @@ export type CompleteInvocationResponses = {
 
 export type CompleteInvocationResponse = CompleteInvocationResponses[keyof CompleteInvocationResponses];
 
+export type ConfigureAgentSeatData = {
+    body: ConfigureAgentSeat;
+    path: {
+        /**
+         * Stable agent ID
+         */
+        agent_id: string;
+    };
+    query?: never;
+    url: '/v1/agents/{agent_id}/seat-configuration';
+};
+
+export type ConfigureAgentSeatErrors = {
+    /**
+     * Invalid profile or instructions
+     */
+    400: ErrorResponse;
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Agent not found
+     */
+    404: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ConfigureAgentSeatError = ConfigureAgentSeatErrors[keyof ConfigureAgentSeatErrors];
+
+export type ConfigureAgentSeatResponses = {
+    /**
+     * Current durable configuration
+     */
+    200: AgentSeatConfiguration;
+};
+
+export type ConfigureAgentSeatResponse = ConfigureAgentSeatResponses[keyof ConfigureAgentSeatResponses];
+
+export type RestartAgentSeatData = {
+    body?: never;
+    path: {
+        /**
+         * Stable agent ID
+         */
+        agent_id: string;
+    };
+    query?: never;
+    url: '/v1/agents/{agent_id}/seat-restart';
+};
+
+export type RestartAgentSeatErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Operator credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Seat configuration not found
+     */
+    404: ErrorResponse;
+    /**
+     * Stopped seats cannot be restarted
+     */
+    409: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type RestartAgentSeatError = RestartAgentSeatErrors[keyof RestartAgentSeatErrors];
+
+export type RestartAgentSeatResponses = {
+    /**
+     * Configuration with advanced revision
+     */
+    200: AgentSeatConfiguration;
+};
+
+export type RestartAgentSeatResponse = RestartAgentSeatResponses[keyof RestartAgentSeatResponses];
+
 export type ListChannelsData = {
     body?: never;
     path?: never;
@@ -1698,6 +1882,52 @@ export type CreateChannelMessageResponses = {
 
 export type CreateChannelMessageResponse = CreateChannelMessageResponses[keyof CreateChannelMessageResponses];
 
+export type AdvanceConversationReadData = {
+    body: AdvanceConversationRead;
+    path: {
+        /**
+         * Channel ID
+         */
+        channel_id: string;
+    };
+    query?: never;
+    url: '/v1/channels/{channel_id}/read-cursor';
+};
+
+export type AdvanceConversationReadErrors = {
+    /**
+     * Negative or future read cursor
+     */
+    400: ErrorResponse;
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Agent credential and channel membership required
+     */
+    403: ErrorResponse;
+    /**
+     * Channel not found
+     */
+    404: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type AdvanceConversationReadError = AdvanceConversationReadErrors[keyof AdvanceConversationReadErrors];
+
+export type AdvanceConversationReadResponses = {
+    /**
+     * Updated personal attention state
+     */
+    200: ConversationAttention;
+};
+
+export type AdvanceConversationReadResponse = AdvanceConversationReadResponses[keyof AdvanceConversationReadResponses];
+
 export type CreateBrowserChannelStreamGrantData = {
     body: BrowserStreamGrantIssueRequest;
     path: {
@@ -1785,6 +2015,39 @@ export type ListConversationsResponses = {
 };
 
 export type ListConversationsResponse = ListConversationsResponses[keyof ListConversationsResponses];
+
+export type ListConversationAttentionData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/conversations/attention';
+};
+
+export type ListConversationAttentionErrors = {
+    /**
+     * Missing or invalid credential
+     */
+    401: ErrorResponse;
+    /**
+     * Agent credential required
+     */
+    403: ErrorResponse;
+    /**
+     * Internal failure
+     */
+    500: ErrorResponse;
+};
+
+export type ListConversationAttentionError = ListConversationAttentionErrors[keyof ListConversationAttentionErrors];
+
+export type ListConversationAttentionResponses = {
+    /**
+     * Personal attention state
+     */
+    200: Array<ConversationAttention>;
+};
+
+export type ListConversationAttentionResponse = ListConversationAttentionResponses[keyof ListConversationAttentionResponses];
 
 export type ListDeliveriesData = {
     body?: never;

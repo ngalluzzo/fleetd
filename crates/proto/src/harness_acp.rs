@@ -35,14 +35,19 @@ pub fn interface_v2() -> PluginInterface {
     PluginInterface::new(HARNESS_ACP_INTERFACE_ID, semver::Version::new(0, 2, 0))
 }
 
-/// Every generation an ACP harness plugin currently implements.
+/// Every generation an ACP harness plugin can truthfully implement.
 ///
-/// Both are declared so a host requiring either negotiates successfully; per
-/// this repository's rule, `0.2.0` stays unstable until two independent
-/// integrations have qualified against it.
+/// The base turn interface is always present. `0.2.0` is declared only when
+/// the initialized runtime advertises `session/load`, because transcript
+/// retrieval is the sole addition in that generation and ACP assigns replay
+/// semantics only to that method.
 #[must_use]
-pub fn declared_interfaces() -> Vec<PluginInterface> {
-    vec![interface(), interface_v2()]
+pub fn declared_interfaces(supports_transcript_replay: bool) -> Vec<PluginInterface> {
+    let mut interfaces = vec![interface()];
+    if supports_transcript_replay {
+        interfaces.push(interface_v2());
+    }
+    interfaces
 }
 
 /// Fleet-owned identity for one logical session lane.
@@ -612,7 +617,16 @@ mod transcript_tests {
 mod tests {
     use serde_json::Value;
 
-    use super::{ExecutionCertainty, HarnessExecutionCertainty, SessionPersistence};
+    use super::{
+        ExecutionCertainty, HarnessExecutionCertainty, SessionPersistence, declared_interfaces,
+        interface, interface_v2,
+    };
+
+    #[test]
+    fn transcript_interface_is_declared_only_when_replay_is_available() {
+        assert_eq!(declared_interfaces(false), vec![interface()]);
+        assert_eq!(declared_interfaces(true), vec![interface(), interface_v2()]);
+    }
 
     #[test]
     fn stored_spelling_matches_the_wire_spelling() {

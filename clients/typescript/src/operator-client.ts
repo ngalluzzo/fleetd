@@ -1,20 +1,27 @@
 import {
   addChannelMember,
   archiveChannel,
+  configureAgentSeat,
   createChannel,
+  listAgentSeatConfigurations,
+  listAgentSeats,
   listAgents,
   listConversations,
   listPluginGenerations,
   listSessionBindings,
   openDirectConversation,
   renameChannel,
+  restartAgentSeat,
 } from "./generated/sdk.gen.ts";
 import { createClient } from "./generated/client/index.ts";
 import type {
   AddMember,
   Agent,
+  AgentSeat,
+  AgentSeatConfiguration,
   Channel,
   ConversationSummary,
+  ConfigureAgentSeat,
   CreateChannel,
   ErrorResponse,
   ListConversationsData,
@@ -51,6 +58,8 @@ export type ListSessionBindingsOptions = NonNullable<
  */
 export interface FleetdOperatorClient {
   listAgents(): Promise<readonly Agent[]>;
+  listAgentSeats(): Promise<readonly AgentSeat[]>;
+  listAgentSeatConfigurations(): Promise<readonly AgentSeatConfiguration[]>;
   listConversations(
     options?: ListConversationsOptions,
   ): Promise<readonly ConversationSummary[]>;
@@ -70,6 +79,11 @@ export interface FleetdOperatorClient {
   listSessionBindings(
     options?: ListSessionBindingsOptions,
   ): Promise<readonly SessionBinding[]>;
+  configureAgentSeat(
+    agentId: string,
+    input: ConfigureAgentSeat,
+  ): Promise<AgentSeatConfiguration>;
+  restartAgentSeat(agentId: string): Promise<AgentSeatConfiguration>;
   close(): void;
 }
 
@@ -165,6 +179,14 @@ export function createFleetdOperatorClient(
       execute<Agent[]>("list agents", (signal) =>
         listAgents({ client: wireClient, signal }),
       ),
+    listAgentSeats: () =>
+      execute<AgentSeat[]>("list agent seats", (signal) =>
+        listAgentSeats({ client: wireClient, signal }),
+      ),
+    listAgentSeatConfigurations: () =>
+      execute<AgentSeatConfiguration[]>("list agent seat configurations", (signal) =>
+        listAgentSeatConfigurations({ client: wireClient, signal }),
+      ),
     listConversations: (query) =>
       execute<ConversationSummary[]>("list conversations", (signal) =>
         listConversations({ client: wireClient, query, signal }),
@@ -210,6 +232,23 @@ export function createFleetdOperatorClient(
     listSessionBindings: (query) =>
       execute<SessionBinding[]>("list session bindings", (signal) =>
         listSessionBindings({ client: wireClient, query, signal }),
+      ),
+    configureAgentSeat: (agentId, body) =>
+      execute<AgentSeatConfiguration>("configure agent seat", (signal) =>
+        configureAgentSeat({
+          body,
+          client: wireClient,
+          path: { agent_id: agentId },
+          signal,
+        }),
+      ),
+    restartAgentSeat: (agentId) =>
+      execute<AgentSeatConfiguration>("restart agent seat", (signal) =>
+        restartAgentSeat({
+          client: wireClient,
+          path: { agent_id: agentId },
+          signal,
+        }),
       ),
     close() {
       if (closed) return;

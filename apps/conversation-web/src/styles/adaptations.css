@@ -54,10 +54,6 @@
       gap: var(--fd-space-5);
     }
 
-    .target-control {
-      min-width: min(13rem, 32vw);
-    }
-
     .message {
       width: min(39rem, 90%);
     }
@@ -235,19 +231,6 @@
       margin-left: 2.75rem;
     }
 
-    .recipient-field {
-      min-width: 11rem;
-      align-content: center;
-    }
-
-    .recipient-field .target-description {
-      display: none;
-    }
-
-    .target-control {
-      min-width: 0;
-    }
-
     .message-list {
       padding: var(--fd-space-5) var(--fd-space-4) var(--fd-space-8);
     }
@@ -358,24 +341,9 @@
       margin-left: 0;
     }
 
-    .recipient-field {
-      min-width: 0;
-      flex: 1 1 auto;
-    }
-
     .conversation-header-actions {
       align-items: end;
       gap: var(--fd-space-2);
-    }
-
-    .target-control {
-      grid-template-columns: auto minmax(0, 1fr);
-      align-items: center;
-      gap: var(--fd-space-3);
-    }
-
-    .target-control select {
-      min-height: 2.25rem;
     }
 
     .message-list {
@@ -418,15 +386,11 @@
       padding: 0 var(--fd-space-2) var(--fd-space-2) var(--fd-space-4);
     }
 
-    .composer-hint {
-      overflow: hidden;
-      max-width: 11rem;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    .composer-context {
+      gap: var(--fd-space-2);
     }
 
-    .composer-hint .keyboard-key:nth-of-type(2),
-    .composer-hint .keyboard-key:nth-of-type(2) ~ * {
+    .composer-hint {
       display: none;
     }
 
@@ -464,8 +428,10 @@
       grid-template-columns: auto minmax(0, 1fr);
     }
 
-    .agent-card > .button {
+    .agent-card__actions {
       grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
     }
   }
 

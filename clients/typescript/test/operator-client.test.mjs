@@ -44,7 +44,7 @@ test("uses generated operations for the complete collaboration lifecycle", async
   const fetch = async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
-    const requestText = ["POST", "PATCH"].includes(request.method)
+    const requestText = ["POST", "PUT", "PATCH"].includes(request.method)
       ? await request.clone().text()
       : "";
     const body = requestText.length > 0 ? JSON.parse(requestText) : null;
@@ -93,6 +93,22 @@ test("uses generated operations for the complete collaboration lifecycle", async
     }
     if (url.pathname === "/v1/plugin-generations") return json([]);
     if (url.pathname === "/v1/session-bindings") return json([]);
+    if (url.pathname === "/v1/agent-seats") return json([]);
+    if (url.pathname === "/v1/agent-seat-configurations") return json([]);
+    if (url.pathname === "/v1/agents/worker-1/seat-configuration") {
+      return json({ agent_id: "worker-1", ...body, revision: 1, created_at_ms: 1, updated_at_ms: 1 });
+    }
+    if (url.pathname === "/v1/agents/worker-1/seat-restart") {
+      return json({
+        agent_id: "worker-1",
+        profile_id: "opencode-default",
+        instructions: "Build with peers.",
+        desired_state: "running",
+        revision: 2,
+        created_at_ms: 1,
+        updated_at_ms: 2,
+      });
+    }
     return json({ error: "not found" }, 404);
   };
   const client = createFleetdOperatorClient({
@@ -132,6 +148,14 @@ test("uses generated operations for the complete collaboration lifecycle", async
   });
   await client.listPluginGenerations({ agent: "worker-1" });
   await client.listSessionBindings({ agent: "worker-1" });
+  await client.listAgentSeats();
+  await client.listAgentSeatConfigurations();
+  await client.configureAgentSeat("worker-1", {
+    profile_id: "opencode-default",
+    instructions: "Build with peers.",
+    desired_state: "running",
+  });
+  await client.restartAgentSeat("worker-1");
 
   assert.equal(conversations[0].kind, "shared");
   assert.equal(direct.kind, "direct");
@@ -149,6 +173,10 @@ test("uses generated operations for the complete collaboration lifecycle", async
       ["POST", "/v1/direct-conversations", ""],
       ["GET", "/v1/plugin-generations", "?agent=worker-1"],
       ["GET", "/v1/session-bindings", "?agent=worker-1"],
+      ["GET", "/v1/agent-seats", ""],
+      ["GET", "/v1/agent-seat-configurations", ""],
+      ["PUT", "/v1/agents/worker-1/seat-configuration", ""],
+      ["POST", "/v1/agents/worker-1/seat-restart", ""],
     ],
   );
   assert.ok(

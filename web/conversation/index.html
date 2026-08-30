@@ -158,10 +158,6 @@
           </div>
           <div class="conversation-header-actions">
             <button class="icon-button conversation-info-button" id="open-conversation-details" type="button" aria-label="Open conversation details" title="Conversation details" disabled><span aria-hidden="true">···</span></button>
-          <div class="recipient-field">
-            <label class="target-control" for="message-target"><span>Talking to</span><select id="message-target" aria-label="Message recipient" aria-describedby="target-description"><option value="">Choose a conversation first</option></select></label>
-            <p class="target-description" id="target-description">Replies stay in this conversation.</p>
-          </div>
           </div>
         </header>
 
@@ -176,12 +172,16 @@
         </section>
 
         <form class="composer composer-shell" id="composer" aria-label="Write a message">
+          <div class="mention-suggestions" id="mention-suggestions" role="listbox" aria-label="Channel members" hidden></div>
           <div class="composer-input">
             <label class="sr-only" for="composer-text">Message</label>
-            <textarea id="composer-text" name="message" rows="1" placeholder="Write a message…" aria-describedby="composer-hint" disabled></textarea>
+            <textarea id="composer-text" name="message" rows="1" placeholder="Write a message…" aria-describedby="composer-audience composer-hint" aria-controls="mention-suggestions" aria-expanded="false" aria-autocomplete="list" disabled></textarea>
           </div>
           <div class="composer-footer">
-            <p class="composer-hint" id="composer-hint"><span class="keyboard-key">Enter</span> to send <span aria-hidden="true">·</span> <span class="keyboard-key">Shift + Enter</span> for a new line</p>
+            <div class="composer-context">
+              <div class="composer-audience" id="composer-audience" aria-live="polite" data-recipient-id=""><span class="composer-audience-label">Select a conversation</span><button class="composer-audience-clear" id="clear-mention" type="button" aria-label="Notify everyone instead" title="Notify everyone instead" hidden>×</button></div>
+              <p class="composer-hint" id="composer-hint">Type <span class="keyboard-key">@</span> to notify one member <span aria-hidden="true">·</span> <span class="keyboard-key">Enter</span> to send</p>
+            </div>
             <button class="send-button" id="send-message" type="submit" disabled><span class="send-button-label">Send</span><span class="ui-icon ui-icon-send" aria-hidden="true">↑</span></button>
           </div>
         </form>
@@ -197,6 +197,21 @@
         <div class="dialog-state" id="agent-directory-state" role="status" aria-live="polite" hidden></div>
         <div class="agent-list" id="agent-list" aria-busy="false"></div>
       </div>
+    </dialog>
+
+    <dialog class="workspace-dialog agent-seat-dialog" id="agent-seat-dialog" aria-labelledby="agent-seat-title">
+      <form class="dialog-shell" id="agent-seat-form">
+        <header class="dialog-header">
+          <div><p class="eyebrow">Agent execution</p><h2 id="agent-seat-title">Configure agent</h2><p id="agent-seat-copy">Choose how this machine should host this agent identity.</p></div>
+          <button class="icon-button dialog-close" type="button" data-close-dialog="agent-seat-dialog" aria-label="Close agent configuration"><span aria-hidden="true">×</span></button>
+        </header>
+        <div class="agent-seat-profile-summary" id="agent-seat-profile-summary" role="status"></div>
+        <div class="field"><label for="agent-seat-profile">Runtime profile</label><select id="agent-seat-profile" required></select><p class="field-hint">Profiles are approved locally. Executables, tools, and credentials are never exposed to this page.</p></div>
+        <div class="field"><label for="agent-seat-instructions">Standing instructions</label><textarea id="agent-seat-instructions" maxlength="32768" rows="7" placeholder="Describe this agent’s role, judgment, and how it should collaborate."></textarea><p class="field-hint">These instructions apply wherever this agent participates; its harness session remains separate per channel.</p></div>
+        <div class="field"><label for="agent-seat-desired-state">Desired state</label><select id="agent-seat-desired-state"><option value="running">Running</option><option value="stopped">Stopped</option></select></div>
+        <p class="form-error" id="agent-seat-error" role="alert" hidden></p>
+        <footer class="dialog-actions agent-seat-actions"><button class="button" id="restart-agent-seat" type="button">Restart now</button><button class="primary-button" id="save-agent-seat" type="submit">Save and apply</button></footer>
+      </form>
     </dialog>
 
     <dialog class="workspace-dialog" id="channel-dialog" aria-labelledby="channel-dialog-title">

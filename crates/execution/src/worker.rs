@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use futures_util::future::BoxFuture;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -23,21 +24,22 @@ use crate::trajectory::TrajectorySink;
 use crate::{
     controller::{
         ManagedHarnessController, ManagedTurn, ManagedTurnError, ManagedTurnGrant,
-        ManagedTurnOutcome, TurnResultCapture,
+        ManagedTurnInterruption, ManagedTurnOutcome, TurnResultCapture,
     },
     message_grant::PUBLISH_DURABLE_MESSAGE_GRANT,
     operations::{
         NewPluginGeneration, PluginGenerationDisposition, PluginShutdownOutcome,
         StopPluginGeneration,
     },
+    permission::PermissionPolicy,
     session_binding::{AcquireSessionBinding, SessionAcquisitionMode},
 };
 use fleetd_kernel::{error::FleetError, store::Store};
 use fleetd_plugin_host::{
-    Binding, HarnessAcpClient, OpenSession, OpenSessionMode, PluginError, PluginProcess,
-    PluginSpec, PromptBlock, ResolvedMcpGrant, ShutdownOutcome, TurnPolicy,
+    Binding, CloseSession, HarnessAcpClient, OpenSession, OpenSessionMode, PluginError,
+    PluginProcess, PluginSpec, PromptBlock, ResolvedMcpGrant, ShutdownOutcome, TurnPolicy,
 };
-use fleetd_proto::model::{Invocation, RetryDelivery};
+use fleetd_proto::model::{ChannelMember, Invocation, Message, RetryDelivery};
 
 const MAX_LEASE_DURATION_MS: u64 = 3_600_000;
 const MAX_POLL_INTERVAL_MS: u64 = 60_000;
@@ -47,6 +49,10 @@ const LEASE_MARGIN_MS: u64 = 60_000;
 const MAX_ACCEPTED_MESSAGE_KINDS: usize = 128;
 const MAX_MESSAGE_KIND_BYTES: usize = 256;
 const GENERATION_HEARTBEAT_INTERVAL_MS: u64 = 5_000;
+const MAX_CHANNEL_CONTEXT_MEMBERS: usize = 64;
+const MAX_CHANNEL_CONTEXT_MESSAGES: usize = 32;
+const MAX_CHANNEL_CONTEXT_HISTORY_BYTES: usize = 64 * 1024;
+const MAX_STANDING_INSTRUCTIONS_BYTES: usize = 32 * 1024;
 
 /// Versioned, adapter-owned declaration of which immutable message envelopes
 /// one worker seat may reserve.
@@ -121,6 +127,19 @@ pub struct PreparedTurn {
     pub result_context: Value,
 }
 
+/// Bounded shared-channel context projected for one reserved turn.
+///
+/// The members and messages remain ordinary kernel records. This value merely
+/// gives an adapter enough context to present them to a harness without adding
+/// workflow state or copying them into a new durable concept.
+#[derive(Clone, Debug, Serialize)]
+pub struct ChannelTurnContext {
+    pub members: Vec<ChannelMember>,
+    pub members_truncated: bool,
+    pub recent_history: Vec<Message>,
+    pub recent_history_truncated: bool,
+}
+
 /// Converts an immutable inbox message into harness-controller input.
 pub trait TurnAdapter: Send + Sync {
     /// Declares the exact message contracts this adapter is eligible to
@@ -135,6 +154,24 @@ pub trait TurnAdapter: Send + Sync {
     /// message. The worker safely releases the unarmed reservation before
     /// stopping so an operator can correct the adapter and restart it.
     fn prepare(&self, invocation: &Invocation) -> Result<PreparedTurn, String>;
+
+    /// Prepares a turn with a bounded projection of its shared channel.
+    ///
+    /// Existing adapters retain their exact behavior through this default.
+    /// Adapters that present ordinary Fleetd envelopes may override it without
+    /// teaching the worker or kernel any product semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns the adapter's bounded diagnostic when it cannot represent the
+    /// invocation and supplied channel context.
+    fn prepare_with_channel_context(
+        &self,
+        invocation: &Invocation,
+        _context: &ChannelTurnContext,
+    ) -> Result<PreparedTurn, String> {
+        self.prepare(invocation)
+    }
 }
 
 /// Semantic-neutral bridge that supplies the complete fleetd envelope as JSON
@@ -143,6 +180,7 @@ pub trait TurnAdapter: Send + Sync {
 pub struct EnvelopeTurnAdapter {
     result_kind: String,
     inbound_acceptance: InboundAcceptance,
+    standing_instructions: Option<String>,
 }
 
 impl EnvelopeTurnAdapter {
@@ -165,7 +203,28 @@ impl EnvelopeTurnAdapter {
         Ok(Self {
             result_kind,
             inbound_acceptance: InboundAcceptance::exact_v1(message_kinds)?,
+            standing_instructions: None,
         })
+    }
+
+    /// Adds bounded standing instructions supplied by the operator configuring
+    /// this stable agent identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the instruction block exceeds its wire bound.
+    pub fn with_standing_instructions(
+        mut self,
+        instructions: impl Into<String>,
+    ) -> Result<Self, String> {
+        let instructions = instructions.into();
+        if instructions.len() > MAX_STANDING_INSTRUCTIONS_BYTES {
+            return Err(format!(
+                "standing instructions must not exceed {MAX_STANDING_INSTRUCTIONS_BYTES} bytes"
+            ));
+        }
+        self.standing_instructions = (!instructions.trim().is_empty()).then_some(instructions);
+        Ok(self)
     }
 }
 
@@ -175,10 +234,43 @@ impl TurnAdapter for EnvelopeTurnAdapter {
     }
 
     fn prepare(&self, invocation: &Invocation) -> Result<PreparedTurn, String> {
+        self.prepare_envelope(
+            invocation,
+            &ChannelTurnContext {
+                members: Vec::new(),
+                members_truncated: false,
+                recent_history: Vec::new(),
+                recent_history_truncated: false,
+            },
+        )
+    }
+
+    fn prepare_with_channel_context(
+        &self,
+        invocation: &Invocation,
+        context: &ChannelTurnContext,
+    ) -> Result<PreparedTurn, String> {
+        self.prepare_envelope(invocation, context)
+    }
+}
+
+impl EnvelopeTurnAdapter {
+    fn prepare_envelope(
+        &self,
+        invocation: &Invocation,
+        context: &ChannelTurnContext,
+    ) -> Result<PreparedTurn, String> {
         let envelope = serde_json::json!({
             "invocation": {
                 "id": invocation.id,
                 "delivery_attempt": invocation.delivery_attempt,
+            },
+            "channel": {
+                "id": invocation.message.channel_id,
+                "members": &context.members,
+                "members_truncated": context.members_truncated,
+                "recent_history": &context.recent_history,
+                "recent_history_truncated": context.recent_history_truncated,
             },
             "message": {
                 "seq": invocation.message.seq,
@@ -195,14 +287,27 @@ impl TurnAdapter for EnvelopeTurnAdapter {
         });
         let encoded = serde_json::to_string_pretty(&envelope)
             .map_err(|error| format!("message envelope could not be encoded: {error}"))?;
+        let standing = self.standing_instructions.as_deref().map_or_else(
+            String::new,
+            |instructions| {
+                format!(
+                    "\n\nYour standing instructions for this agent identity are:\n{instructions}"
+                )
+            },
+        );
         Ok(PreparedTurn {
             lane_policy: "per-channel".to_owned(),
             lane_key: invocation.message.channel_id.clone(),
             prompt: vec![PromptBlock::Text {
                 text: format!(
-                    "You received the following durable fleetd message. Act on its request and \
-                     make your final response suitable to return to the sending agent. Preserve \
-                     the message's intent; do not invent authority not present in the request.\n\n\
+                    "You are participating in a durable Fleetd channel. The channel members and \
+                     recent shared history below are context; the message field is the exact \
+                     message that woke you. Act on its request and make your final response \
+                     suitable to return to the sending member. When another member should act \
+                     and a Fleetd messaging tool is available, address a durable message using \
+                     that member's exact agent_id from channel.members. Do not claim a peer \
+                     response you have not received, and do not invent authority absent from the \
+                     request.{standing}\n\n\
                      {encoded}"
                 ),
             }],
@@ -248,9 +353,17 @@ pub struct ContinuousWorkerConfig {
     pub compatibility_digest: Option<String>,
     pub lease_duration: Duration,
     pub poll_interval: Duration,
+    /// Whether a newer accepted message in the active channel lane asks the
+    /// harness to stop and resume from that newer durable input.
+    pub interrupt_on_new_message: bool,
+    /// Reconciliation cadence for authoritative newer-message checks.
+    pub interrupt_poll_interval: Duration,
     pub restart_backoff: Duration,
     pub pre_arm_retry_delay: Duration,
     pub turn_policy: TurnPolicy,
+    /// Controller consent for harness-routed side effects. `AllowOnce` is
+    /// invalid unless the plugin process is OS-sandboxed.
+    pub permission_policy: PermissionPolicy,
     /// Optional lossy trajectory egress, provisioned by whoever started this
     /// seat. `None` means no exporter and no queue exist.
     pub trajectory_sink: Option<Arc<dyn TrajectorySink>>,
@@ -263,6 +376,7 @@ pub struct WorkerReport {
     pub operational_restarts: u64,
     pub reservations: u64,
     pub completed: u64,
+    pub interrupted: u64,
     pub blocked: u64,
     pub pre_arm_retries: u64,
     pub idle_polls: u64,
@@ -271,7 +385,9 @@ pub struct WorkerReport {
 impl WorkerReport {
     #[must_use]
     pub const fn settled_turns(&self) -> u64 {
-        self.completed.saturating_add(self.blocked)
+        self.completed
+            .saturating_add(self.interrupted)
+            .saturating_add(self.blocked)
     }
 }
 
@@ -423,6 +539,8 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 .unwrap_or(&description.profile_digest),
             &self.config.mcp_grants,
             self.adapter.inbound_acceptance(),
+            self.config.plugin.sandbox_profile_digest(),
+            self.config.permission_policy,
         );
         let generation = GenerationIdentity {
             owner_instance_id: generation_id.clone(),
@@ -530,7 +648,14 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 key: prepared.lane_key.clone(),
             };
             let opened = match self
-                .resolve_lane(harness, &invocation, lane, context, sessions, report)
+                .resolve_lane(
+                    harness,
+                    &invocation,
+                    lane.clone(),
+                    context,
+                    sessions,
+                    report,
+                )
                 .await
             {
                 Ok(Some(opened)) => opened,
@@ -541,6 +666,7 @@ impl<'store> ContinuousHarnessWorker<'store> {
                 return self.stop_unarmed(&invocation, report).await;
             }
             let opened_turn = OpenedTurn {
+                lane,
                 session: opened,
                 generation_id: context.identity.owner_instance_id.clone(),
                 grants: self
@@ -550,18 +676,25 @@ impl<'store> ContinuousHarnessWorker<'store> {
                     .map(|grant| Arc::clone(&grant.authority))
                     .collect(),
             };
-            if let Some(exit) = self
+            match self
                 .execute_turn(
                     &controller,
                     harness,
-                    invocation,
-                    prepared,
-                    opened_turn,
+                    TurnExecution {
+                        invocation,
+                        prepared,
+                        opened: opened_turn,
+                    },
+                    cancellation,
                     report,
                 )
                 .await
             {
-                return exit;
+                TurnControl::Continue => {}
+                TurnControl::ForgetLane(lane) => {
+                    sessions.remove(&lane);
+                }
+                TurnControl::Exit(exit) => return exit,
             }
         }
     }
@@ -571,12 +704,24 @@ impl<'store> ContinuousHarnessWorker<'store> {
         invocation: &Invocation,
         report: &mut WorkerReport,
     ) -> Result<PreparedTurn, GenerationExit> {
-        let prepared = self.adapter.prepare(invocation).map_err(|error| {
-            (
-                format!("adapter rejected message: {error}"),
-                ContinuousWorkerError::Adapter(error),
-            )
-        });
+        let channel_context = match self.channel_turn_context(invocation).await {
+            Ok(context) => context,
+            Err(error) => {
+                let reason = format!("channel context could not be read before arm: {error}");
+                self.release_or_exit(invocation, reason.clone(), report)
+                    .await?;
+                return Err(GenerationExit::Restart(reason));
+            }
+        };
+        let prepared = self
+            .adapter
+            .prepare_with_channel_context(invocation, &channel_context)
+            .map_err(|error| {
+                (
+                    format!("adapter rejected message: {error}"),
+                    ContinuousWorkerError::Adapter(error),
+                )
+            });
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err((reason, error)) => {
@@ -594,6 +739,34 @@ impl<'store> ContinuousHarnessWorker<'store> {
             return Err(GenerationExit::Fatal(ContinuousWorkerError::Adapter(error)));
         }
         Ok(prepared)
+    }
+
+    async fn channel_turn_context(
+        &self,
+        invocation: &Invocation,
+    ) -> Result<ChannelTurnContext, FleetError> {
+        let members = self
+            .store
+            .list_channel_members(&invocation.message.channel_id)
+            .await?;
+        let (members, members_truncated) = bounded_context_members(&members, invocation);
+        let history_limit = u32::try_from(MAX_CHANNEL_CONTEXT_MESSAGES + 1)
+            .expect("channel context history limit fits u32");
+        let history = self
+            .store
+            .list_recent_messages_before(
+                &invocation.message.channel_id,
+                invocation.message.seq,
+                history_limit,
+            )
+            .await?;
+        let (recent_history, recent_history_truncated) = bounded_context_history(history);
+        Ok(ChannelTurnContext {
+            members,
+            members_truncated,
+            recent_history,
+            recent_history_truncated,
+        })
     }
 
     async fn resolve_lane(
@@ -636,11 +809,35 @@ impl<'store> ContinuousHarnessWorker<'store> {
         &self,
         controller: &ManagedHarnessController<'_>,
         harness: &mut HarnessAcpClient,
-        invocation: Invocation,
-        prepared: PreparedTurn,
-        opened: OpenedTurn,
+        execution: TurnExecution,
+        cancellation: &CancellationToken,
         report: &mut WorkerReport,
-    ) -> Option<GenerationExit> {
+    ) -> TurnControl {
+        let TurnExecution {
+            invocation,
+            prepared,
+            opened,
+        } = execution;
+        let interrupt_after_seq = match self
+            .store
+            .latest_channel_message_seq(&invocation.message.channel_id)
+            .await
+        {
+            Ok(sequence) => sequence,
+            Err(error) => {
+                let reason = format!("turn interruption baseline could not be read: {error}");
+                return match self
+                    .release_or_exit(&invocation, reason.clone(), report)
+                    .await
+                {
+                    Ok(()) => TurnControl::Exit(GenerationExit::Restart(reason)),
+                    Err(exit) => TurnControl::Exit(exit),
+                };
+            }
+        };
+        let interrupted_lane = opened.lane.clone();
+        let interrupted_session = opened.session.clone();
+        let interruption = self.turn_interruption(&invocation, interrupt_after_seq, cancellation);
         let result = controller
             .run(
                 harness,
@@ -655,6 +852,8 @@ impl<'store> ContinuousHarnessWorker<'store> {
                     result_kind: prepared.result_kind,
                     result_capture: prepared.result_capture,
                     result_context: prepared.result_context,
+                    permission_policy: self.config.permission_policy,
+                    interruption: Some(interruption),
                 },
             )
             .await;
@@ -667,17 +866,139 @@ impl<'store> ContinuousHarnessWorker<'store> {
                     result_message_id = %completion.result.id,
                     "worker completed invocation"
                 );
-                None
+                TurnControl::Continue
+            }
+            Ok(ManagedTurnOutcome::Interrupted {
+                completion,
+                interruption,
+            }) => {
+                report.interrupted = report.interrupted.saturating_add(1);
+                tracing::info!(
+                    agent_id = %self.config.agent_id,
+                    invocation_id = %completion.invocation.id,
+                    result_message_id = %completion.result.id,
+                    stop_reason = completion.result.payload["stop_reason"].as_str(),
+                    "worker interrupted invocation"
+                );
+                match interruption {
+                    ManagedTurnInterruption::WorkerShutdown => TurnControl::Continue,
+                    ManagedTurnInterruption::NewerMessage { .. } => {
+                        self.rotate_interrupted_lane(harness, interrupted_lane, interrupted_session)
+                            .await
+                    }
+                }
             }
             Ok(ManagedTurnOutcome::Blocked(blocked)) => {
                 report.blocked = report.blocked.saturating_add(1);
-                Some(GenerationExit::Restart(format!(
+                TurnControl::Exit(GenerationExit::Restart(format!(
                     "invocation {} was conservatively blocked: {}",
                     invocation.id, blocked.reason
                 )))
             }
-            Err(error) => self.managed_error(invocation, error, report).await,
+            Err(error) => self
+                .managed_error(invocation, error, report)
+                .await
+                .map_or(TurnControl::Continue, TurnControl::Exit),
         }
+    }
+
+    async fn rotate_interrupted_lane(
+        &self,
+        harness: &mut HarnessAcpClient,
+        lane: LaneIdentity,
+        session: OpenedSession,
+    ) -> TurnControl {
+        const REASON: &str = "newer channel message interrupted quiescent turn";
+        if let Err(source) = session_binding::retire_session_binding(
+            self.store,
+            &self.config.agent_id,
+            &session.binding,
+            REASON,
+        )
+        .await
+        {
+            return TurnControl::Exit(GenerationExit::Fatal(
+                ContinuousWorkerError::OperationalEvidence {
+                    context: format!(
+                        "retire interrupted session binding {} generation {}",
+                        session.binding.binding_id, session.binding.binding_generation
+                    ),
+                    source: Box::new(source),
+                },
+            ));
+        }
+        let close = harness
+            .close_session(&CloseSession {
+                binding_id: session.binding.binding_id.clone(),
+                binding_generation: session.binding.binding_generation,
+                owner_epoch: session.binding.owner_epoch,
+                session_ref: session.session_ref,
+                reason: "newer_message".to_owned(),
+            })
+            .await;
+        match close {
+            Ok(result) if result.ownership_retired => TurnControl::ForgetLane(lane),
+            Ok(_) => TurnControl::Exit(GenerationExit::Restart(
+                "harness did not retire the interrupted native session".to_owned(),
+            )),
+            Err(error) => TurnControl::Exit(GenerationExit::Restart(format!(
+                "interrupted native session could not be closed: {error}"
+            ))),
+        }
+    }
+
+    fn turn_interruption(
+        &self,
+        invocation: &Invocation,
+        interrupt_after_seq: i64,
+        cancellation: &CancellationToken,
+    ) -> BoxFuture<'static, ManagedTurnInterruption> {
+        let store = self.store.clone();
+        let agent_id = invocation.agent_id.clone();
+        let channel_id = invocation.message.channel_id.clone();
+        let accepted_kinds = self.adapter.inbound_acceptance().message_kinds().clone();
+        let watch_new_messages = self.config.interrupt_on_new_message;
+        let poll_interval = self.config.interrupt_poll_interval;
+        let cancellation = cancellation.clone();
+        Box::pin(async move {
+            loop {
+                if cancellation.is_cancelled() {
+                    return ManagedTurnInterruption::WorkerShutdown;
+                }
+                if watch_new_messages {
+                    match store
+                        .newest_claimable_delivery_message_after(
+                            &agent_id,
+                            &channel_id,
+                            interrupt_after_seq,
+                            &accepted_kinds,
+                        )
+                        .await
+                    {
+                        Ok(Some(message)) => {
+                            return ManagedTurnInterruption::NewerMessage {
+                                message_id: message.id,
+                            };
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                %agent_id,
+                                %channel_id,
+                                %error,
+                                "newer-message reconciliation failed"
+                            );
+                        }
+                    }
+                }
+                tokio::select! {
+                    () = cancellation.cancelled() => {
+                        return ManagedTurnInterruption::WorkerShutdown;
+                    }
+                    () = tokio::time::sleep(poll_interval) => {}
+                }
+            }
+        })
     }
 
     async fn managed_error(
@@ -854,9 +1175,16 @@ struct OpenedSession {
 }
 
 struct OpenedTurn {
+    lane: LaneIdentity,
     session: OpenedSession,
     generation_id: String,
     grants: Vec<Arc<dyn ManagedTurnGrant>>,
+}
+
+struct TurnExecution {
+    invocation: Invocation,
+    prepared: PreparedTurn,
+    opened: OpenedTurn,
 }
 
 struct GenerationIdentity {
@@ -873,6 +1201,12 @@ enum GenerationExit {
     Stopped,
     Restart(String),
     Fatal(ContinuousWorkerError),
+}
+
+enum TurnControl {
+    Continue,
+    ForgetLane(LaneIdentity),
+    Exit(GenerationExit),
 }
 
 enum LaneOpenError {
@@ -1004,6 +1338,64 @@ impl Drop for GenerationHeartbeat {
     }
 }
 
+fn bounded_context_members(
+    members: &[ChannelMember],
+    invocation: &Invocation,
+) -> (Vec<ChannelMember>, bool) {
+    let mut included = BTreeSet::new();
+    let mut bounded = Vec::with_capacity(members.len().min(MAX_CHANNEL_CONTEXT_MEMBERS));
+    for priority_id in [
+        Some(invocation.agent_id.as_str()),
+        Some(invocation.message.sender_id.as_str()),
+        invocation.message.recipient_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let Some(member) = members.iter().find(|member| member.agent_id == priority_id) else {
+            continue;
+        };
+        if included.insert(member.agent_id.clone()) {
+            bounded.push(member.clone());
+        }
+    }
+    for member in members {
+        if bounded.len() == MAX_CHANNEL_CONTEXT_MEMBERS {
+            break;
+        }
+        if included.insert(member.agent_id.clone()) {
+            bounded.push(member.clone());
+        }
+    }
+    let truncated = bounded.len() < members.len();
+    (bounded, truncated)
+}
+
+fn bounded_context_history(history: Vec<Message>) -> (Vec<Message>, bool) {
+    let mut truncated = history.len() > MAX_CHANNEL_CONTEXT_MESSAGES;
+    let start = history.len().saturating_sub(MAX_CHANNEL_CONTEXT_MESSAGES);
+    let mut retained_reversed = Vec::new();
+    let mut encoded_bytes = 0usize;
+    for message in history.into_iter().skip(start).rev() {
+        let message_bytes = serde_json::to_vec(&message).map_or(
+            MAX_CHANNEL_CONTEXT_HISTORY_BYTES.saturating_add(1),
+            |value| value.len(),
+        );
+        let Some(next_bytes) = encoded_bytes.checked_add(message_bytes) else {
+            truncated = true;
+            break;
+        };
+        if next_bytes > MAX_CHANNEL_CONTEXT_HISTORY_BYTES {
+            truncated = true;
+            break;
+        }
+        encoded_bytes = next_bytes;
+        retained_reversed.push(message);
+    }
+    retained_reversed.reverse();
+    (retained_reversed, truncated)
+}
+
 fn validate_config(config: &ContinuousWorkerConfig) -> Result<(), ContinuousWorkerError> {
     if config.agent_id.trim().is_empty() || config.agent_id.len() > 256 {
         return invalid("agent ID must contain between 1 and 256 bytes");
@@ -1028,8 +1420,18 @@ fn validate_config(config: &ContinuousWorkerConfig) -> Result<(), ContinuousWork
     {
         return invalid("compatibility digest must not be empty when supplied");
     }
-    if config.poll_interval.is_zero() || config.restart_backoff.is_zero() {
-        return invalid("poll interval and restart backoff must be greater than zero");
+    if config.permission_policy == PermissionPolicy::AllowOnce
+        && config.plugin.sandbox_profile_digest().is_none()
+    {
+        return invalid("allow_once permission policy requires an OS-sandboxed plugin process");
+    }
+    if config.poll_interval.is_zero()
+        || config.interrupt_poll_interval.is_zero()
+        || config.restart_backoff.is_zero()
+    {
+        return invalid(
+            "poll interval, interruption poll interval, and restart backoff must be greater than zero",
+        );
     }
     let poll_ms = duration_ms(config.poll_interval).ok_or_else(|| {
         ContinuousWorkerError::InvalidConfig("poll interval is too large".to_owned())
@@ -1037,8 +1439,14 @@ fn validate_config(config: &ContinuousWorkerConfig) -> Result<(), ContinuousWork
     let restart_ms = duration_ms(config.restart_backoff).ok_or_else(|| {
         ContinuousWorkerError::InvalidConfig("restart backoff is too large".to_owned())
     })?;
+    let interrupt_poll_ms = duration_ms(config.interrupt_poll_interval).ok_or_else(|| {
+        ContinuousWorkerError::InvalidConfig("interruption poll interval is too large".to_owned())
+    })?;
     if poll_ms > MAX_POLL_INTERVAL_MS {
         return invalid("poll interval must not exceed 60,000 milliseconds");
+    }
+    if interrupt_poll_ms > MAX_POLL_INTERVAL_MS {
+        return invalid("interruption poll interval must not exceed 60,000 milliseconds");
     }
     if restart_ms > MAX_RETRY_DELAY_MS {
         return invalid("restart backoff must not exceed 86,400,000 milliseconds");
@@ -1120,10 +1528,16 @@ fn worker_compatibility_digest(
     base: &str,
     mcp_grants: &[String],
     inbound_acceptance: &InboundAcceptance,
+    sandbox_profile_digest: Option<&str>,
+    permission_policy: PermissionPolicy,
 ) -> String {
     let mut digest = Sha256::new();
-    digest.update(b"fleetd-worker-compatibility-v2\0");
+    digest.update(b"fleetd-worker-compatibility-v4\0");
     digest.update(base.as_bytes());
+    digest.update(b"\0sandbox\0");
+    digest.update(sandbox_profile_digest.unwrap_or("unsandboxed").as_bytes());
+    digest.update(b"\0permission-policy\0");
+    digest.update(permission_policy.as_str().as_bytes());
     for grant in mcp_grants {
         digest.update(b"\0");
         digest.update(grant.as_bytes());

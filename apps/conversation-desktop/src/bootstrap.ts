@@ -5,6 +5,11 @@ export interface ConversationBootstrapProfile {
   requestKind: string;
   resultKind: string;
   channelId?: string;
+  runtimeProfiles?: readonly {
+    id: string;
+    label: string;
+    description: string;
+  }[];
 }
 
 /** Builds one fire-and-forget handoff to the same-origin presentation. */

@@ -14,6 +14,13 @@ describe("conversation bootstrap", () => {
       requestKind: "conversation.prompt/v1",
       resultKind: "conversation.result/v1",
       channelId: "channel-id",
+      runtimeProfiles: [
+        {
+          id: "opencode-default",
+          label: "OpenCode",
+          description: "Approved runtime",
+        },
+      ],
     });
     expect(source).not.toContain("operator-secret");
     expect(source).not.toContain("participant-secret");
@@ -50,6 +57,13 @@ describe("conversation bootstrap", () => {
         requestKind: "conversation.prompt/v1",
         resultKind: "conversation.result/v1",
         channelId: "channel-id",
+        runtimeProfiles: [
+          {
+            id: "opencode-default",
+            label: "OpenCode",
+            description: "Approved runtime",
+          },
+        ],
       },
     ]);
     expect(dataset["fleetdConversationHost"]).toBe("connected");

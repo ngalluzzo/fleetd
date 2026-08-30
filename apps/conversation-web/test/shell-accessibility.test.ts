@@ -33,8 +33,10 @@ describe("conversation shell accessibility and information architecture", () => 
       "participant-credential",
       "request-kind",
       "result-kind",
-      "message-target",
       "composer-text",
+      "agent-seat-profile",
+      "agent-seat-instructions",
+      "agent-seat-desired-state",
     ]) {
       expect(html).toContain(`for="${id}"`);
     }
@@ -42,11 +44,15 @@ describe("conversation shell accessibility and information architecture", () => 
       "participant-id",
       "operator-credential",
       "participant-credential",
-      "message-target",
       "composer-text",
     ]) {
       expect(openingTag(id)).toMatch(/aria-describedby="[^"]+"/);
     }
+    expect(openingTag("composer-text")).toContain(
+      'aria-controls="mention-suggestions"',
+    );
+    expect(openingTag("composer-text")).toContain('aria-expanded="false"');
+    expect(openingTag("mention-suggestions")).toContain('role="listbox"');
   });
 
   test("announces connection, empty, and message updates without stealing focus", () => {
@@ -78,11 +84,15 @@ describe("conversation shell accessibility and information architecture", () => 
     expect(openingTag("archive-channel-dialog")).toContain(
       'aria-labelledby="archive-channel-title"',
     );
+    expect(openingTag("agent-seat-dialog")).toContain(
+      'aria-labelledby="agent-seat-title"',
+    );
     expect(html).toContain('for="channel-name"');
     expect(html).toContain('for="rename-channel-name"');
     expect(html).toContain('for="add-member-agent"');
     expect(openingTag("channel-form-error")).toContain('role="alert"');
     expect(openingTag("conversation-details-error")).toContain('role="alert"');
+    expect(openingTag("agent-seat-error")).toContain('role="alert"');
   });
 
   test("uses product language instead of internal implementation language", () => {

@@ -2,7 +2,7 @@
 
 import { client } from './client.gen.js';
 import type { Client, Options as Options2, TDataShape } from './client/index.js';
-import type { AcknowledgeDeliveryData, AcknowledgeDeliveryErrors, AcknowledgeDeliveryResponses, AddChannelMemberData, AddChannelMemberErrors, AddChannelMemberResponses, ArchiveChannelData, ArchiveChannelErrors, ArchiveChannelResponses, ArmInvocationData, ArmInvocationErrors, ArmInvocationResponses, BlockDeliveryData, BlockDeliveryErrors, BlockDeliveryResponses, ClaimDeliveriesData, ClaimDeliveriesErrors, ClaimDeliveriesResponses, CompleteInvocationData, CompleteInvocationErrors, CompleteInvocationResponses, CreateAgentData, CreateAgentErrors, CreateAgentResponses, CreateBrowserChannelStreamGrantData, CreateBrowserChannelStreamGrantErrors, CreateBrowserChannelStreamGrantResponses, CreateChannelData, CreateChannelErrors, CreateChannelMessageData, CreateChannelMessageErrors, CreateChannelMessageResponses, CreateChannelResponses, FireTriggerData, FireTriggerErrors, FireTriggerResponses, GetHealthData, GetHealthResponses, GetOpenApiDocumentData, GetOpenApiDocumentResponses, GetTriggerData, GetTriggerErrors, GetTriggerResponses, ListAgentsData, ListAgentSeatsData, ListAgentSeatsErrors, ListAgentSeatsResponses, ListAgentsErrors, ListAgentsResponses, ListChannelMembersData, ListChannelMembersErrors, ListChannelMembersResponses, ListChannelMessagesData, ListChannelMessagesErrors, ListChannelMessagesResponses, ListChannelsData, ListChannelsErrors, ListChannelsResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListDeliveriesData, ListDeliveriesErrors, ListDeliveriesResponses, ListDeliveryBlocksData, ListDeliveryBlocksErrors, ListDeliveryBlocksResponses, ListInvocationObservationsData, ListInvocationObservationsErrors, ListInvocationObservationsResponses, ListInvocationsData, ListInvocationsErrors, ListInvocationsResponses, ListPluginGenerationsData, ListPluginGenerationsErrors, ListPluginGenerationsResponses, ListSessionBindingsData, ListSessionBindingsErrors, ListSessionBindingsResponses, ListTriggersData, ListTriggersErrors, ListTriggersResponses, OpenDirectConversationData, OpenDirectConversationErrors, OpenDirectConversationResponses, ReadFleetHealthData, ReadFleetHealthErrors, ReadFleetHealthResponses, RegisterTriggerData, RegisterTriggerErrors, RegisterTriggerResponses, RenameChannelData, RenameChannelErrors, RenameChannelResponses, ReserveInvocationsData, ReserveInvocationsErrors, ReserveInvocationsResponses, ResolveDeliveryBlockData, ResolveDeliveryBlockErrors, ResolveDeliveryBlockResponses, RetireTriggerData, RetireTriggerErrors, RetireTriggerResponses, RetryDeliveryData, RetryDeliveryErrors, RetryDeliveryResponses, RotateAgentCredentialData, RotateAgentCredentialErrors, RotateAgentCredentialResponses, RotateTriggerCredentialData, RotateTriggerCredentialErrors, RotateTriggerCredentialResponses, TraceInvocationData, TraceInvocationErrors, TraceInvocationResponses } from './types.gen.js';
+import type { AcknowledgeDeliveryData, AcknowledgeDeliveryErrors, AcknowledgeDeliveryResponses, AddChannelMemberData, AddChannelMemberErrors, AddChannelMemberResponses, AdvanceConversationReadData, AdvanceConversationReadErrors, AdvanceConversationReadResponses, ArchiveChannelData, ArchiveChannelErrors, ArchiveChannelResponses, ArmInvocationData, ArmInvocationErrors, ArmInvocationResponses, BlockDeliveryData, BlockDeliveryErrors, BlockDeliveryResponses, ClaimDeliveriesData, ClaimDeliveriesErrors, ClaimDeliveriesResponses, CompleteInvocationData, CompleteInvocationErrors, CompleteInvocationResponses, ConfigureAgentSeatData, ConfigureAgentSeatErrors, ConfigureAgentSeatResponses, CreateAgentData, CreateAgentErrors, CreateAgentResponses, CreateBrowserChannelStreamGrantData, CreateBrowserChannelStreamGrantErrors, CreateBrowserChannelStreamGrantResponses, CreateChannelData, CreateChannelErrors, CreateChannelMessageData, CreateChannelMessageErrors, CreateChannelMessageResponses, CreateChannelResponses, FireTriggerData, FireTriggerErrors, FireTriggerResponses, GetHealthData, GetHealthResponses, GetOpenApiDocumentData, GetOpenApiDocumentResponses, GetTriggerData, GetTriggerErrors, GetTriggerResponses, ListAgentsData, ListAgentSeatConfigurationsData, ListAgentSeatConfigurationsErrors, ListAgentSeatConfigurationsResponses, ListAgentSeatsData, ListAgentSeatsErrors, ListAgentSeatsResponses, ListAgentsErrors, ListAgentsResponses, ListChannelMembersData, ListChannelMembersErrors, ListChannelMembersResponses, ListChannelMessagesData, ListChannelMessagesErrors, ListChannelMessagesResponses, ListChannelsData, ListChannelsErrors, ListChannelsResponses, ListConversationAttentionData, ListConversationAttentionErrors, ListConversationAttentionResponses, ListConversationsData, ListConversationsErrors, ListConversationsResponses, ListDeliveriesData, ListDeliveriesErrors, ListDeliveriesResponses, ListDeliveryBlocksData, ListDeliveryBlocksErrors, ListDeliveryBlocksResponses, ListInvocationObservationsData, ListInvocationObservationsErrors, ListInvocationObservationsResponses, ListInvocationsData, ListInvocationsErrors, ListInvocationsResponses, ListPluginGenerationsData, ListPluginGenerationsErrors, ListPluginGenerationsResponses, ListSessionBindingsData, ListSessionBindingsErrors, ListSessionBindingsResponses, ListTriggersData, ListTriggersErrors, ListTriggersResponses, OpenDirectConversationData, OpenDirectConversationErrors, OpenDirectConversationResponses, ReadFleetHealthData, ReadFleetHealthErrors, ReadFleetHealthResponses, RegisterTriggerData, RegisterTriggerErrors, RegisterTriggerResponses, RenameChannelData, RenameChannelErrors, RenameChannelResponses, ReserveInvocationsData, ReserveInvocationsErrors, ReserveInvocationsResponses, ResolveDeliveryBlockData, ResolveDeliveryBlockErrors, ResolveDeliveryBlockResponses, RestartAgentSeatData, RestartAgentSeatErrors, RestartAgentSeatResponses, RetireTriggerData, RetireTriggerErrors, RetireTriggerResponses, RetryDeliveryData, RetryDeliveryErrors, RetryDeliveryResponses, RotateAgentCredentialData, RotateAgentCredentialErrors, RotateAgentCredentialResponses, RotateTriggerCredentialData, RotateTriggerCredentialErrors, RotateTriggerCredentialResponses, TraceInvocationData, TraceInvocationErrors, TraceInvocationResponses } from './types.gen.js';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -27,6 +27,17 @@ export const getHealth = <ThrowOnError extends boolean = false>(options?: Option
  * Read the API contract
  */
 export const getOpenApiDocument = <ThrowOnError extends boolean = false>(options?: Options<GetOpenApiDocumentData, ThrowOnError>) => (options?.client ?? client).get<GetOpenApiDocumentResponses, unknown, ThrowOnError>({ url: '/openapi.json', ...options });
+
+/**
+ * List desired agent execution
+ *
+ * Operator-only. Lists profile references, standing instructions, desired state, and restart revisions. Executables, arguments, tool grants, environment, and harness credentials are private to the machine-local profile catalog and never cross this boundary.
+ */
+export const listAgentSeatConfigurations = <ThrowOnError extends boolean = false>(options?: Options<ListAgentSeatConfigurationsData, ThrowOnError>) => (options?.client ?? client).get<ListAgentSeatConfigurationsResponses, ListAgentSeatConfigurationsErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/agent-seat-configurations',
+    ...options
+});
 
 /**
  * List current agent-seat state
@@ -182,6 +193,32 @@ export const completeInvocation = <ThrowOnError extends boolean = false>(options
 });
 
 /**
+ * Configure desired execution for an agent
+ *
+ * Operator-only. Selects one machine-approved runtime profile and standing instructions, then starts or stops the stable agent identity. An exact replay is idempotent; an actual change advances its restart revision.
+ */
+export const configureAgentSeat = <ThrowOnError extends boolean = false>(options: Options<ConfigureAgentSeatData, ThrowOnError>) => (options.client ?? client).put<ConfigureAgentSeatResponses, ConfigureAgentSeatErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/agents/{agent_id}/seat-configuration',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Restart a running agent
+ *
+ * Operator-only. Advances the durable revision of a running seat so the machine-local supervisor replaces its runtime. It does not expose or change executable details.
+ */
+export const restartAgentSeat = <ThrowOnError extends boolean = false>(options: Options<RestartAgentSeatData, ThrowOnError>) => (options.client ?? client).post<RestartAgentSeatResponses, RestartAgentSeatErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/agents/{agent_id}/seat-restart',
+    ...options
+});
+
+/**
  * List channels
  *
  * Operator-only.
@@ -286,6 +323,21 @@ export const createChannelMessage = <ThrowOnError extends boolean = false>(optio
 });
 
 /**
+ * Advance a personal conversation read cursor
+ *
+ * Agent-only and monotonic. The authenticated participant may acknowledge only a cursor already committed in this channel; stale retries cannot move the cursor backwards.
+ */
+export const advanceConversationRead = <ThrowOnError extends boolean = false>(options: Options<AdvanceConversationReadData, ThrowOnError>) => (options.client ?? client).put<AdvanceConversationReadResponses, AdvanceConversationReadErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/channels/{channel_id}/read-cursor',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
  * Mint a single-use browser channel-stream grant
  *
  * Operators or exact channel members. The grant is process-local, expires after 15 seconds, and is returned once with Cache-Control: no-store.
@@ -308,6 +360,17 @@ export const createBrowserChannelStreamGrant = <ThrowOnError extends boolean = f
 export const listConversations = <ThrowOnError extends boolean = false>(options?: Options<ListConversationsData, ThrowOnError>) => (options?.client ?? client).get<ListConversationsResponses, ListConversationsErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/v1/conversations',
+    ...options
+});
+
+/**
+ * List personal conversation attention
+ *
+ * Agent-only. Returns exact unread and explicitly addressed counts derived from the authenticated participant's durable membership cursors and immutable channel messages.
+ */
+export const listConversationAttention = <ThrowOnError extends boolean = false>(options?: Options<ListConversationAttentionData, ThrowOnError>) => (options?.client ?? client).get<ListConversationAttentionResponses, ListConversationAttentionErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/v1/conversations/attention',
     ...options
 });
 

@@ -3,7 +3,6 @@ import type { ConversationSessionPhase } from "@fleetd/client/conversation";
 export interface ComposerAvailabilityInput {
   readonly phase: ConversationSessionPhase;
   readonly selectedChannelId: string | null;
-  readonly targetId: string;
   readonly draft: string;
   readonly pendingSends: number;
   readonly sending: boolean;
@@ -11,7 +10,6 @@ export interface ComposerAvailabilityInput {
 
 export interface ComposerAvailability {
   readonly textareaDisabled: boolean;
-  readonly targetDisabled: boolean;
   readonly sendDisabled: boolean;
   readonly sending: boolean;
 }
@@ -21,12 +19,10 @@ export function composerAvailability(
 ): ComposerAvailability {
   const channelReady =
     input.phase === "live" && input.selectedChannelId !== null;
-  const targetReady = channelReady && input.targetId !== "";
   const sending = input.sending || input.pendingSends > 0;
   return {
-    textareaDisabled: !targetReady,
-    targetDisabled: !channelReady,
-    sendDisabled: !targetReady || input.draft.trim() === "" || sending,
+    textareaDisabled: !channelReady,
+    sendDisabled: !channelReady || input.draft.trim() === "" || sending,
     sending,
   };
 }
@@ -64,12 +60,10 @@ export function applyComposerAvailability(
   elements: {
     readonly form: HTMLFormElement;
     readonly textarea: HTMLTextAreaElement;
-    readonly target: HTMLSelectElement;
     readonly send: HTMLButtonElement;
   },
 ): void {
   elements.textarea.disabled = availability.textareaDisabled;
-  elements.target.disabled = availability.targetDisabled;
   elements.send.disabled = availability.sendDisabled;
   elements.form.setAttribute("aria-busy", String(availability.sending));
   elements.send.setAttribute("aria-busy", String(availability.sending));

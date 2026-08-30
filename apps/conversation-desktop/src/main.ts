@@ -18,6 +18,30 @@ try {
     configuredProfilePath,
   );
   const profile = await loadDesktopProfile(profilePath);
+  const supervisor =
+    profile.schemaVersion === 2 &&
+    profile.fleetdExecutable &&
+    profile.fleetConfigFile &&
+    profile.workerProfilesFile
+      ? Bun.spawn({
+          cmd: [
+            profile.fleetdExecutable,
+            "--fleet-config",
+            profile.fleetConfigFile,
+            "worker",
+            "supervise",
+            "--profiles",
+            profile.workerProfilesFile,
+          ],
+          stdin: "ignore",
+          stdout: "inherit",
+          stderr: "inherit",
+          env: {},
+        })
+      : undefined;
+  if (supervisor) {
+    process.once("exit", () => supervisor.kill());
+  }
   const conversationUrl = `${profile.origin}/conversation/`;
   let bootstrap = buildConversationBootstrap({
     participantId: profile.participantId,
@@ -25,6 +49,7 @@ try {
     participantCredential: profile.participantCredential,
     requestKind: profile.requestKind,
     resultKind: profile.resultKind,
+    runtimeProfiles: profile.runtimeProfiles,
     ...(profile.channelId === undefined ? {} : { channelId: profile.channelId }),
   });
   profile.operatorCredential = "";

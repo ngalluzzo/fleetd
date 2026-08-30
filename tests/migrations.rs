@@ -74,6 +74,86 @@ fn migration_versions_cannot_be_picked_twice() {
 }
 
 #[tokio::test]
+async fn membership_read_cursor_migrations_preserve_members_and_settle_existing_history() {
+    let mut connection = sqlx::SqliteConnection::connect(":memory:")
+        .await
+        .expect("open in-memory database");
+    sqlx::raw_sql(
+        r"
+        CREATE TABLE channel_members (
+            channel_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            joined_at_ms INTEGER NOT NULL,
+            delivery_mode TEXT NOT NULL,
+            PRIMARY KEY (channel_id, agent_id)
+        );
+        CREATE TABLE messages (
+            seq INTEGER PRIMARY KEY,
+            channel_id TEXT NOT NULL
+        );
+        INSERT INTO channel_members (
+            channel_id, agent_id, joined_at_ms, delivery_mode
+        ) VALUES ('channel-1', 'agent-1', 11, 'stream_only');
+        INSERT INTO messages (seq, channel_id) VALUES (7, 'channel-1');
+        ",
+    )
+    .execute(&mut connection)
+    .await
+    .expect("create pre-cursor membership");
+
+    sqlx::raw_sql(include_str!(
+        "../crates/kernel/migrations/20260828193632_membership_read_cursor.sql"
+    ))
+    .execute(&mut connection)
+    .await
+    .expect("apply membership cursor migration");
+
+    let migrated: (String, String, i64, String, i64) = sqlx::query_as(
+        r"
+        SELECT channel_id, agent_id, joined_at_ms, delivery_mode, read_through_seq
+        FROM channel_members
+        ",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .expect("read migrated membership");
+    assert_eq!(
+        migrated,
+        (
+            "channel-1".to_owned(),
+            "agent-1".to_owned(),
+            11,
+            "stream_only".to_owned(),
+            0,
+        )
+    );
+
+    sqlx::raw_sql(include_str!(
+        "../crates/kernel/migrations/20260828195608_backfill_membership_read_cursor.sql"
+    ))
+    .execute(&mut connection)
+    .await
+    .expect("backfill membership cursor");
+    let read_through_seq: i64 = sqlx::query_scalar(
+        "SELECT read_through_seq FROM channel_members WHERE channel_id = 'channel-1'",
+    )
+    .fetch_one(&mut connection)
+    .await
+    .expect("read backfilled cursor");
+    assert_eq!(read_through_seq, 7);
+
+    let negative = sqlx::query(
+        "UPDATE channel_members SET read_through_seq = -1 WHERE channel_id = 'channel-1'",
+    )
+    .execute(&mut connection)
+    .await;
+    assert!(
+        negative.is_err(),
+        "membership cursor must remain non-negative"
+    );
+}
+
+#[tokio::test]
 async fn conversation_lifecycle_migration_preserves_channels_as_active_shared_conversations() {
     let mut connection = sqlx::SqliteConnection::connect(":memory:")
         .await

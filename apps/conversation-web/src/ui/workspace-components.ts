@@ -36,13 +36,22 @@ export function renderAgentDirectory(
     status.textContent = `${item.status} · ${item.description}`;
     content.append(name, status);
 
+    const actions = document.createElement("div");
+    actions.className = "agent-card__actions";
+    const manage = document.createElement("button");
+    manage.type = "button";
+    manage.className = "button";
+    manage.dataset.manageAgentId = item.id;
+    manage.textContent = item.configured ? "Manage" : "Set up";
+    manage.setAttribute("aria-label", `${item.configured ? "Manage" : "Set up"} ${item.name}`);
     const message = document.createElement("button");
     message.type = "button";
     message.className = "button";
     message.dataset.directAgentId = item.id;
     message.textContent = "Message";
     message.setAttribute("aria-label", `Message ${item.name}`);
-    article.append(avatar, content, message);
+    actions.append(manage, message);
+    article.append(avatar, content, actions);
     return article;
   });
   container.replaceChildren(...rows);

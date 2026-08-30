@@ -7,7 +7,7 @@
       "name": "MIT",
       "identifier": "MIT"
     },
-    "version": "1.9.0"
+    "version": "1.10.0"
   },
   "paths": {
     "/health": {
@@ -48,6 +48,66 @@
             }
           }
         }
+      }
+    },
+    "/v1/agent-seat-configurations": {
+      "get": {
+        "tags": [
+          "seats"
+        ],
+        "summary": "List desired agent execution",
+        "description": "Operator-only. Lists profile references, standing instructions, desired state, and restart revisions. Executables, arguments, tool grants, environment, and harness credentials are private to the machine-local profile catalog and never cross this boundary.",
+        "operationId": "listAgentSeatConfigurations",
+        "responses": {
+          "200": {
+            "description": "Durable desired execution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AgentSeatConfiguration"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/v1/agent-seats": {
@@ -1131,6 +1191,192 @@
         ]
       }
     },
+    "/v1/agents/{agent_id}/seat-configuration": {
+      "put": {
+        "tags": [
+          "seats"
+        ],
+        "summary": "Configure desired execution for an agent",
+        "description": "Operator-only. Selects one machine-approved runtime profile and standing instructions, then starts or stops the stable agent identity. An exact replay is idempotent; an actual change advances its restart revision.",
+        "operationId": "configureAgentSeat",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "description": "Stable agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureAgentSeat"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Current durable configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSeatConfiguration"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid profile or instructions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Agent not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/seat-restart": {
+      "post": {
+        "tags": [
+          "seats"
+        ],
+        "summary": "Restart a running agent",
+        "description": "Operator-only. Advances the durable revision of a running seat so the machine-local supervisor replaces its runtime. It does not expose or change executable details.",
+        "operationId": "restartAgentSeat",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "description": "Stable agent ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configuration with advanced revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSeatConfiguration"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Seat configuration not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stopped seats cannot be restarted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1/browser/channel-stream": {
       "get": {
         "tags": [
@@ -1947,6 +2193,104 @@
         ]
       }
     },
+    "/v1/channels/{channel_id}/read-cursor": {
+      "put": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "Advance a personal conversation read cursor",
+        "description": "Agent-only and monotonic. The authenticated participant may acknowledge only a cursor already committed in this channel; stale retries cannot move the cursor backwards.",
+        "operationId": "advanceConversationRead",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "Channel ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdvanceConversationRead"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated personal attention state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationAttention"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Negative or future read cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Agent credential and channel membership required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Channel not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/v1/channels/{channel_id}/stream": {
       "get": {
         "tags": [
@@ -2210,6 +2554,66 @@
           },
           "403": {
             "description": "Operator credential required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/v1/conversations/attention": {
+      "get": {
+        "tags": [
+          "channels"
+        ],
+        "summary": "List personal conversation attention",
+        "description": "Agent-only. Returns exact unread and explicitly addressed counts derived from the authenticated participant's durable membership cursors and immutable channel messages.",
+        "operationId": "listConversationAttention",
+        "responses": {
+          "200": {
+            "description": "Personal attention state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConversationAttention"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Agent credential required",
             "content": {
               "application/json": {
                 "schema": {
@@ -3778,6 +4182,22 @@
         },
         "additionalProperties": false
       },
+      "AdvanceConversationRead": {
+        "type": "object",
+        "description": "Advances the authenticated participant's durable read cursor.",
+        "required": [
+          "through_seq"
+        ],
+        "properties": {
+          "through_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Highest channel message sequence the participant has observed.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "Agent": {
         "type": "object",
         "description": "An addressable participant in the fleet.",
@@ -3925,6 +4345,54 @@
             "format": "int64"
           }
         }
+      },
+      "AgentSeatConfiguration": {
+        "type": "object",
+        "description": "Operator-selected execution for one stable agent identity.\n\n`profile_id` is only a reference. Executable paths, arguments, environment,\ntool grants, and harness credentials stay in a private catalog on the host.",
+        "required": [
+          "agent_id",
+          "profile_id",
+          "instructions",
+          "desired_state",
+          "revision",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "desired_state": {
+            "$ref": "#/components/schemas/AgentSeatDesiredState"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "updated_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AgentSeatDesiredState": {
+        "type": "string",
+        "description": "Whether the machine hosting an approved runtime should keep an agent active.",
+        "enum": [
+          "running",
+          "stopped"
+        ]
       },
       "AgentSeatReason": {
         "type": "string",
@@ -4324,6 +4792,74 @@
           "payload": {}
         },
         "additionalProperties": false
+      },
+      "ConfigureAgentSeat": {
+        "type": "object",
+        "description": "Bounded operator request to configure one agent's approved local runtime.",
+        "required": [
+          "profile_id",
+          "desired_state"
+        ],
+        "properties": {
+          "desired_state": {
+            "$ref": "#/components/schemas/AgentSeatDesiredState"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConversationAttention": {
+        "type": "object",
+        "description": "Exact unread state for one authenticated participant in one conversation.\n\nThe projection is derived only from the participant's durable membership\ncursor and immutable message envelopes. The participant's own messages are\nnot unread. `addressed_unread_count` counts messages from another\nparticipant whose exact `recipient_id` is the reader; it does not infer\nurgency from message content.",
+        "required": [
+          "channel_id",
+          "read_through_seq",
+          "unread_count",
+          "addressed_unread_count"
+        ],
+        "properties": {
+          "addressed_unread_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "channel_id": {
+            "type": "string"
+          },
+          "first_addressed_unread_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "first_unread_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "latest_message_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "read_through_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "unread_count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
       },
       "ConversationKind": {
         "type": "string",
@@ -5863,6 +6399,10 @@
     {
       "name": "triggers",
       "description": "Inbound triggers that create work on their own"
+    },
+    {
+      "name": "seats",
+      "description": "Desired execution for stable agent identities"
     }
   ]
 }

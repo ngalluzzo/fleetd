@@ -11,12 +11,14 @@ use utoipa::IntoParams;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use fleetd_kernel::{auth::Principal, error::ErrorResponse};
-use fleetd_proto::model::{AddMember, CreateChannel, OpenDirectConversation, RenameChannel};
+use fleetd_proto::model::{
+    AddMember, AdvanceConversationRead, CreateChannel, OpenDirectConversation, RenameChannel,
+};
 
 use super::{
     AppState,
     error::ApiError,
-    guard::{require_channel_access, require_operator},
+    guard::{require_agent, require_channel_access, require_operator},
 };
 
 pub(super) fn routes() -> OpenApiRouter<AppState> {
@@ -25,6 +27,7 @@ pub(super) fn routes() -> OpenApiRouter<AppState> {
         .routes(routes!(list_conversations, open_direct_conversation))
         .routes(routes!(rename_channel, archive_channel))
         .routes(routes!(add_member, list_channel_members))
+        .routes(routes!(list_conversation_attention, advance_conversation_read))
 }
 
 #[utoipa::path(
@@ -268,4 +271,62 @@ async fn list_channel_members(
 ) -> Result<Json<Vec<fleetd_proto::model::ChannelMember>>, ApiError> {
     require_channel_access(&state, &principal, &channel_id).await?;
     Ok(Json(state.store.list_channel_members(&channel_id).await?))
+}
+
+#[utoipa::path(
+    get,
+    path = "/v1/conversations/attention",
+    operation_id = "listConversationAttention",
+    tag = "channels",
+    summary = "List personal conversation attention",
+    description = "Agent-only. Returns exact unread and explicitly addressed counts derived from the authenticated participant's durable membership cursors and immutable channel messages.",
+    security(("bearerAuth" = [])),
+    responses(
+        (status = 200, description = "Personal attention state", body = [fleetd_proto::model::ConversationAttention]),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Agent credential required", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn list_conversation_attention(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+) -> Result<Json<Vec<fleetd_proto::model::ConversationAttention>>, ApiError> {
+    let agent_id = require_agent(&principal)?;
+    Ok(Json(conversation::attention(&state.store, agent_id).await?))
+}
+
+#[utoipa::path(
+    put,
+    path = "/v1/channels/{channel_id}/read-cursor",
+    operation_id = "advanceConversationRead",
+    tag = "channels",
+    summary = "Advance a personal conversation read cursor",
+    description = "Agent-only and monotonic. The authenticated participant may acknowledge only a cursor already committed in this channel; stale retries cannot move the cursor backwards.",
+    security(("bearerAuth" = [])),
+    params(("channel_id" = String, Path, description = "Channel ID")),
+    request_body = AdvanceConversationRead,
+    responses(
+        (status = 200, description = "Updated personal attention state", body = fleetd_proto::model::ConversationAttention),
+        (status = 400, description = "Negative or future read cursor", body = ErrorResponse),
+        (status = 401, description = "Missing or invalid credential", body = ErrorResponse),
+        (status = 403, description = "Agent credential and channel membership required", body = ErrorResponse),
+        (status = 404, description = "Channel not found", body = ErrorResponse),
+        (status = 500, description = "Internal failure", body = ErrorResponse)
+    )
+)]
+async fn advance_conversation_read(
+    State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
+    Path(channel_id): Path<String>,
+    Json(input): Json<AdvanceConversationRead>,
+) -> Result<Json<fleetd_proto::model::ConversationAttention>, ApiError> {
+    let agent_id = require_agent(&principal)?;
+    state
+        .store
+        .advance_member_read_cursor(&channel_id, agent_id, input.through_seq)
+        .await?;
+    Ok(Json(
+        conversation::attention_for(&state.store, agent_id, &channel_id).await?,
+    ))
 }

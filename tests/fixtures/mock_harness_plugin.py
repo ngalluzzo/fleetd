@@ -6,6 +6,7 @@ from pathlib import Path
 mode = sys.argv[1] if len(sys.argv) > 1 else "healthy"
 marker_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
 active_fence = None
+turn_count = 0
 
 
 def send(payload):
@@ -94,6 +95,7 @@ for line in sys.stdin:
             },
         )
     elif method == "harness.acp.turn.start":
+        turn_count += 1
         wall_enforcement = "soft" if mode == "weak-enforcement" else "hard"
         assistant_text = "done"
         result(
@@ -111,8 +113,45 @@ for line in sys.stdin:
             },
         )
         fence = dict(params["fence"])
-        if mode == "cancel-end-turn":
+        if mode == "cancel-end-turn" or (mode == "cancel-first" and turn_count == 1):
             active_fence = fence
+            continue
+        if mode == "permission":
+            active_fence = fence
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "harness.acp.permission.requested",
+                    "params": {
+                        "fence": fence,
+                        "permission_id": "mock-permission",
+                        "event_seq": 1,
+                        "tool_call": {
+                            "toolCallId": "call-1",
+                            "title": "model-authored title must not grant authority",
+                            "rawInput": {"path": "/outside/claimed/by/model"},
+                        },
+                        "options": [
+                            {
+                                "kind": "allow_always",
+                                "name": "Always Allow",
+                                "optionId": "persistent",
+                            },
+                            {
+                                "kind": "allow_once",
+                                "name": "Allow",
+                                "optionId": "one-turn-only",
+                            },
+                            {
+                                "kind": "reject_once",
+                                "name": "Reject",
+                                "optionId": "reject",
+                            },
+                        ],
+                        "expires_at_ms": 9_999_999_999_999,
+                    },
+                }
+            )
             continue
         if mode == "wrong-fence":
             fence["owner_epoch"] += 1
@@ -165,7 +204,7 @@ for line in sys.stdin:
         )
     elif method == "harness.acp.turn.cancel":
         result(request, {"accepted": True})
-        if mode == "cancel-end-turn":
+        if active_fence is not None:
             send(
                 {
                     "jsonrpc": "2.0",
@@ -183,6 +222,7 @@ for line in sys.stdin:
                     },
                 }
             )
+            active_fence = None
     elif method == "harness.acp.session.transcript.start":
         if mode == "no-transcript":
             send({
@@ -232,6 +272,55 @@ for line in sys.stdin:
             })
     elif method == "harness.acp.permission.resolve":
         result(request, {"accepted": True})
+        if mode == "permission" and active_fence is not None:
+            outcome = params["outcome"]
+            selected = (
+                outcome.get("kind") == "selected"
+                and outcome.get("option_id") == "one-turn-only"
+            )
+            assistant_text = "permission:allow_once" if selected else "permission:cancelled"
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "harness.acp.turn.event",
+                    "params": {
+                        "fence": active_fence,
+                        "event_seq": 2,
+                        "observed_at_ms": 2,
+                        "classification": "agent_message_content",
+                        "raw_update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": assistant_text},
+                        },
+                    },
+                }
+            )
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "harness.acp.turn.terminal",
+                    "params": {
+                        "fence": active_fence,
+                        "last_event_seq": 2,
+                        "stop_reason": "end_turn",
+                        "execution_certainty": "outcome_known",
+                        "session_quiescent": True,
+                        "session_persistence": "runtime_claimed",
+                        "assistant_messages": [
+                            {
+                                "message_id": None,
+                                "content": [{"type": "text", "text": assistant_text}],
+                                "complete": True,
+                                "first_event_seq": 2,
+                                "last_event_seq": 2,
+                            }
+                        ],
+                        "usage": {},
+                        "raw_prompt_response": {"stopReason": "end_turn"},
+                    },
+                }
+            )
+            active_fence = None
     elif method == "harness.acp.session.close":
         result(
             request,

@@ -217,6 +217,62 @@ pub struct AgentSeat {
     pub unresolved_block_id: Option<i64>,
 }
 
+/// Whether the machine hosting an approved runtime should keep an agent active.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSeatDesiredState {
+    Running,
+    Stopped,
+}
+
+impl AgentSeatDesiredState {
+    /// Every durable spelling, used to keep storage and wire vocabularies exact.
+    pub const ALL: [Self; 2] = [Self::Running, Self::Stopped];
+
+    /// Returns the stable stored representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+        }
+    }
+
+    /// Reads a value previously returned by [`Self::as_str`].
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.as_str() == value)
+    }
+}
+
+/// Operator-selected execution for one stable agent identity.
+///
+/// `profile_id` is only a reference. Executable paths, arguments, environment,
+/// tool grants, and harness credentials stay in a private catalog on the host.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+pub struct AgentSeatConfiguration {
+    pub agent_id: String,
+    pub profile_id: String,
+    pub instructions: String,
+    pub desired_state: AgentSeatDesiredState,
+    pub revision: u64,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+/// Bounded operator request to configure one agent's approved local runtime.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigureAgentSeat {
+    pub profile_id: String,
+    #[serde(default)]
+    pub instructions: String,
+    pub desired_state: AgentSeatDesiredState,
+}
+
 /// Which counter one observed harness update advances.
 ///
 /// The wire carries finer classifications than the counters keep -- `tool_call`
@@ -422,7 +478,8 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        EventClass, InvocationEventCounts, PluginGenerationDisposition, PluginShutdownOutcome,
+        AgentSeatDesiredState, EventClass, InvocationEventCounts, PluginGenerationDisposition,
+        PluginShutdownOutcome,
     };
 
     #[test]
@@ -483,6 +540,17 @@ mod tests {
                 Some(variant)
             );
         }
+        for variant in AgentSeatDesiredState::ALL {
+            assert_eq!(
+                serde_json::to_value(variant).expect("serialize desired state"),
+                Value::String(variant.as_str().to_owned()),
+                "the stored and wire spellings of {variant:?} diverged",
+            );
+            assert_eq!(
+                AgentSeatDesiredState::parse(variant.as_str()),
+                Some(variant)
+            );
+        }
     }
 
     #[test]
@@ -491,6 +559,7 @@ mod tests {
         assert_eq!(PluginGenerationDisposition::parse("graceful"), None);
         assert_eq!(PluginShutdownOutcome::parse("Forced"), None);
         assert_eq!(PluginShutdownOutcome::parse(""), None);
+        assert_eq!(AgentSeatDesiredState::parse("Running"), None);
     }
 
     #[test]
@@ -511,7 +580,13 @@ mod tests {
                 | PluginShutdownOutcome::Failed => {}
             }
         }
+        for variant in AgentSeatDesiredState::ALL {
+            match variant {
+                AgentSeatDesiredState::Running | AgentSeatDesiredState::Stopped => {}
+            }
+        }
         assert_eq!(PluginGenerationDisposition::ALL.len(), 3);
         assert_eq!(PluginShutdownOutcome::ALL.len(), 3);
+        assert_eq!(AgentSeatDesiredState::ALL.len(), 2);
     }
 }

@@ -2,11 +2,12 @@ import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 
 const MAX_PROFILE_BYTES = 32 * 1024;
+const MAX_RUNTIME_PROFILE_CATALOG_BYTES = 1024 * 1024;
 const MAX_CREDENTIAL_BYTES = 8 * 1024;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]"]);
 
 export interface DesktopProfile {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
   readonly origin: string;
   readonly participantId: string;
   readonly requestKind: string;
@@ -14,11 +15,21 @@ export interface DesktopProfile {
   readonly channelId?: string;
   readonly operatorCredentialFile: string;
   readonly participantCredentialFile: string;
+  readonly fleetConfigFile?: string;
+  readonly fleetdExecutable?: string;
+  readonly workerProfilesFile?: string;
 }
 
 export interface LoadedDesktopProfile extends DesktopProfile {
   operatorCredential: string;
   participantCredential: string;
+  runtimeProfiles: readonly RuntimeProfileDescriptor[];
+}
+
+export interface RuntimeProfileDescriptor {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
 }
 
 export function parseProfilePath(
@@ -63,21 +74,22 @@ export async function loadDesktopProfile(
     throw new Error("desktop profile must contain valid JSON");
   }
   const profile = validateDesktopProfile(parsed);
-  const [operatorCredential, participantCredential] = await Promise.all([
+  const [operatorCredential, participantCredential, runtimeProfiles] = await Promise.all([
     readCredential(profile.operatorCredentialFile, "operator credential"),
     readCredential(profile.participantCredentialFile, "participant credential"),
+    profile.workerProfilesFile === undefined
+      ? Promise.resolve([])
+      : loadRuntimeProfiles(profile.workerProfilesFile),
   ]);
   if (operatorCredential === participantCredential) {
     throw new Error("operator and participant credentials must be distinct");
   }
-  return { ...profile, operatorCredential, participantCredential };
+  return { ...profile, operatorCredential, participantCredential, runtimeProfiles };
 }
 
 export function validateDesktopProfile(value: unknown): DesktopProfile {
   const object = record(value, "desktop profile");
-  exactKeys(
-    object,
-    [
+  const common = [
       "schema_version",
       "origin",
       "participant_id",
@@ -85,12 +97,19 @@ export function validateDesktopProfile(value: unknown): DesktopProfile {
       "participant_credential_file",
       "request_kind",
       "result_kind",
-    ],
-    ["channel_id"],
-    "desktop profile",
-  );
-  if (object["schema_version"] !== 1) {
-    throw new Error("desktop profile must use schema_version 1");
+  ];
+  const schemaVersion = object["schema_version"];
+  if (schemaVersion === 1) {
+    exactKeys(object, common, ["channel_id"], "desktop profile");
+  } else if (schemaVersion === 2) {
+    exactKeys(
+      object,
+      [...common, "fleet_config_file", "fleetd_executable", "worker_profiles_file"],
+      ["channel_id"],
+      "desktop profile",
+    );
+  } else {
+    throw new Error("desktop profile must use schema_version 1 or 2");
   }
   const origin = loopbackOrigin(object["origin"]);
   const participantId = boundedString(
@@ -117,7 +136,7 @@ export function validateDesktopProfile(value: unknown): DesktopProfile {
     throw new Error("credential files must be distinct");
   }
   return {
-    schemaVersion: 1,
+    schemaVersion,
     origin,
     participantId,
     requestKind,
@@ -125,7 +144,79 @@ export function validateDesktopProfile(value: unknown): DesktopProfile {
     ...(channelId === undefined ? {} : { channelId }),
     operatorCredentialFile,
     participantCredentialFile,
+    ...(schemaVersion === 1
+      ? {}
+      : {
+          fleetConfigFile: absolutePath(object["fleet_config_file"], "fleet_config_file"),
+          fleetdExecutable: absolutePath(object["fleetd_executable"], "fleetd_executable"),
+          workerProfilesFile: absolutePath(object["worker_profiles_file"], "worker_profiles_file"),
+        }),
   };
+}
+
+async function loadRuntimeProfiles(
+  path: string,
+): Promise<readonly RuntimeProfileDescriptor[]> {
+  await requirePrivateRegularFile(path, "worker profile catalog");
+  const source = await readBoundedFile(
+    path,
+    MAX_RUNTIME_PROFILE_CATALOG_BYTES,
+    "worker profile catalog",
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new Error("worker profile catalog must contain valid JSON");
+  }
+  const catalog = record(parsed, "worker profile catalog");
+  const schemaVersion = catalog["schema_version"];
+  if (schemaVersion === 1) {
+    exactKeys(catalog, ["schema_version", "profiles"], [], "worker profile catalog");
+  } else if (schemaVersion === 2) {
+    exactKeys(
+      catalog,
+      ["schema_version", "inference_backends", "profiles"],
+      [],
+      "worker profile catalog",
+    );
+    if (!Array.isArray(catalog["inference_backends"])) {
+      throw new Error("worker profile catalog inference_backends must be an array");
+    }
+  } else {
+    throw new Error("worker profile catalog must use schema_version 1 or 2");
+  }
+  if (!Array.isArray(catalog["profiles"])) {
+    throw new Error("worker profile catalog must contain profiles");
+  }
+  if (catalog["profiles"].length === 0 || catalog["profiles"].length > 128) {
+    throw new Error("worker profile catalog must contain between 1 and 128 profiles");
+  }
+  const seen = new Set<string>();
+  return catalog["profiles"].map((entry, index) => {
+    const profile = record(entry, `worker profile ${index + 1}`);
+    exactKeys(
+      profile,
+      ["id", "label", "description", "worker"],
+      schemaVersion === 2 ? ["inference_backend"] : [],
+      `worker profile ${index + 1}`,
+    );
+    const id = boundedString(profile["id"], "worker profile id", 128);
+    if (!/^[A-Za-z0-9._-]+$/u.test(id) || seen.has(id)) {
+      throw new Error("worker profile IDs must be unique ASCII identifiers");
+    }
+    seen.add(id);
+    record(profile["worker"], `worker profile ${id} worker`);
+    return {
+      id,
+      label: boundedString(profile["label"], "worker profile label", 256),
+      description: boundedString(
+        profile["description"],
+        "worker profile description",
+        2_048,
+      ),
+    };
+  });
 }
 
 async function readCredential(path: string, label: string): Promise<string> {

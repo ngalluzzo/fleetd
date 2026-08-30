@@ -115,7 +115,6 @@
   }
 
   .field-hint,
-  .target-description,
   .composer-hint {
     margin: 0;
     color: var(--fd-color-text-tertiary);
@@ -248,8 +247,7 @@
  */
 @layer components {
   .field > input,
-  .field > select,
-  .target-control > select {
+  .field > select {
     min-height: var(--fd-control-md);
     border: 1px solid var(--fd-color-border);
     border-radius: var(--fd-radius-md);
@@ -264,15 +262,13 @@
   }
 
   .field > input:hover:not(:disabled),
-  .field > select:hover:not(:disabled),
-  .target-control > select:hover:not(:disabled) {
+  .field > select:hover:not(:disabled) {
     border-color: var(--fd-color-border-strong);
     background: var(--fd-color-surface-1);
   }
 
   .field > input:focus,
-  .field > select:focus,
-  .target-control > select:focus {
+  .field > select:focus {
     border-color: var(--fd-color-accent);
     outline: none;
     box-shadow: var(--fd-shadow-focus);

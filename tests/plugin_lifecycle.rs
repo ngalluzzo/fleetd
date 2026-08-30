@@ -5,7 +5,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use fleetd::plugin::{PluginError, PluginInterface, PluginProcess, PluginSpec, ShutdownOutcome};
+use fleetd::plugin::{
+    MacOsSeatbeltPosture, MacOsSeatbeltSandbox, PluginError, PluginInterface, PluginProcess,
+    PluginSpec, SandboxNetwork, ShutdownOutcome,
+};
 use semver::Version;
 use serde_json::json;
 
@@ -212,6 +215,119 @@ async fn plugin_executables_must_be_absolute() {
     )
     .await;
     assert!(matches!(identifier, PluginError::InvalidSpec(_)));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn seatbelt_allows_declared_writes_and_denies_sibling_escape() {
+    let directory = tempfile::tempdir().expect("create sandbox fixture");
+    let writable = directory.path().join("writable");
+    std::fs::create_dir(&writable).expect("create writable root");
+    let allowed = writable.join("allowed.txt");
+    let denied = directory.path().join("denied.txt");
+    let fixture = fixture_path();
+    let sandbox = MacOsSeatbeltSandbox::new(
+        [writable],
+        [fixture
+            .parent()
+            .expect("fixture has a parent")
+            .to_path_buf()],
+        SandboxNetwork::Deny,
+    )
+    .expect("build Seatbelt policy");
+    let spec = PluginSpec::new("mock.plugin", "/bin/sh")
+        .with_arg(fixture)
+        .with_arg("sandbox-write")
+        .with_arg(&allowed)
+        .with_arg(&denied)
+        .with_config(json!({}))
+        .require_interface(PluginInterface::new(
+            "fleetd.test.echo",
+            Version::new(1, 0, 0),
+        ))
+        .with_macos_seatbelt(sandbox)
+        .with_initialize_timeout(Duration::from_secs(2));
+
+    let plugin = PluginProcess::start(spec)
+        .await
+        .expect("sandboxed plugin starts after contained denial");
+    assert_eq!(
+        std::fs::read_to_string(allowed).expect("read allowed marker"),
+        "allowed\n"
+    );
+    assert!(!denied.exists());
+    plugin.shutdown().await.expect("shutdown sandboxed plugin");
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn write_scoped_reads_runtime_binds_loopback_and_confines_descendant_writes() {
+    let directory = tempfile::tempdir().expect("create sandbox fixture");
+    let workspace = directory.path().join("workspace");
+    let state = directory.path().join("state");
+    let temp = directory.path().join("temp");
+    std::fs::create_dir(&workspace).expect("create workspace");
+    std::fs::create_dir(&state).expect("create state root");
+    std::fs::create_dir(&temp).expect("create temp root");
+    let workspace_file = workspace.join("workspace.txt");
+    let state_file = state.join("state.txt");
+    let temp_file = temp.join("temp.txt");
+    let descendant_file = workspace.join("descendant.txt");
+    let denial_evidence = workspace.join("denial-evidence.txt");
+    let denied = directory.path().join("denied.txt");
+    let runtime_fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/write_scoped_runtime.txt");
+    let sandbox = MacOsSeatbeltSandbox::write_scoped([workspace, state, temp])
+        .expect("build write-scoped policy");
+    assert_eq!(sandbox.posture(), MacOsSeatbeltPosture::WriteScoped);
+    assert_eq!(
+        sandbox.security_scope(),
+        "writes_scoped_reads_and_network_unrestricted"
+    );
+    let digest = sandbox.profile_digest().to_owned();
+    let spec = fixture_spec("sandbox-write-scoped")
+        .with_arg(&workspace_file)
+        .with_arg(&state_file)
+        .with_arg(&temp_file)
+        .with_arg(runtime_fixture)
+        .with_arg(&denied)
+        .with_arg(&descendant_file)
+        .with_arg(&denial_evidence)
+        .with_macos_seatbelt(sandbox);
+    assert_eq!(
+        spec.sandbox_posture(),
+        Some(MacOsSeatbeltPosture::WriteScoped)
+    );
+    assert_eq!(spec.sandbox_profile_digest(), Some(digest.as_str()));
+
+    let plugin = PluginProcess::start(spec)
+        .await
+        .expect("write-scoped plugin starts after bounded descendant denial and loopback bind");
+    assert_eq!(
+        std::fs::read_to_string(workspace_file).expect("read workspace marker"),
+        "workspace\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(state_file).expect("read state marker"),
+        "state\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(temp_file).expect("read temp marker"),
+        "temp\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(descendant_file).expect("read descendant marker"),
+        "descendant\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(denial_evidence).expect("read denial evidence"),
+        "os.open flags=O_WRONLY|O_CREAT|O_TRUNC errno=1 name=EPERM message=Operation not permitted\n"
+    );
+    assert!(!denied.exists());
+    plugin
+        .shutdown()
+        .await
+        .expect("shutdown write-scoped plugin");
 }
 
 fn process_exists(pid: i32) -> bool {

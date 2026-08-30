@@ -18,6 +18,7 @@ use fleetd::{
         TurnResultCapture,
     },
     execution::operations::NewPluginGeneration,
+    execution::permission::PermissionPolicy,
     execution::session_binding::{
         AcquireSessionBinding, SessionAcquisitionMode, SessionBindingState,
     },
@@ -256,6 +257,8 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
                 result_kind: "work.result/v1".to_owned(),
                 result_capture: TurnResultCapture::Transcript,
                 result_context: json!({"adapter": "fixture"}),
+                permission_policy: PermissionPolicy::Deny,
+                interruption: None,
             },
         )
         .await
@@ -319,6 +322,55 @@ async fn managed_controller_arms_before_turn_and_atomically_completes() {
 }
 
 #[tokio::test]
+async fn sandboxed_policy_selects_only_the_typed_allow_once_option() {
+    let (_directory, store, _sender, invocation) = fixture().await;
+    let agent_id = invocation.agent_id.clone();
+    let (mut harness, session_ref, binding, generation_id) =
+        open_harness(&store, &agent_id, "permission").await;
+    let outcome = ManagedHarnessController::new(&store)
+        .run(
+            &mut harness,
+            ManagedTurn {
+                invocation,
+                generation_id,
+                binding,
+                session_ref,
+                prompt: vec![PromptBlock::Text {
+                    text: "perform one bounded write".to_owned(),
+                }],
+                policy: policy(),
+                grants: Vec::new(),
+                result_kind: "work.result/v1".to_owned(),
+                result_capture: TurnResultCapture::Transcript,
+                result_context: Value::Null,
+                permission_policy: PermissionPolicy::AllowOnce,
+                interruption: None,
+            },
+        )
+        .await
+        .expect("resolve one-turn consent and settle");
+    let ManagedTurnOutcome::Completed(completion) = outcome else {
+        panic!("allow-once request should complete");
+    };
+    assert_eq!(
+        completion.result.payload["assistant_messages"][0]["content"][0]["text"],
+        "permission:allow_once"
+    );
+    let observation = operations::list_invocation_observations(
+        &store,
+        &operations::EvidencePage::newest(Some(&agent_id)),
+    )
+    .await
+    .expect("read permission evidence")
+    .pop()
+    .expect("one observation");
+    assert_eq!(observation.counts.permission, 1);
+    assert_eq!(observation.counts.assistant, 1);
+    assert_eq!(observation.event_count, 2);
+    harness.shutdown().await.expect("shutdown harness");
+}
+
+#[tokio::test]
 async fn managed_controller_marks_unavailable_structured_capture_failed() {
     let (_directory, store, _sender, invocation) = fixture().await;
     let agent_id = invocation.agent_id.clone();
@@ -340,6 +392,8 @@ async fn managed_controller_marks_unavailable_structured_capture_failed() {
                 result_kind: "work.attempt/v2".to_owned(),
                 result_capture: TurnResultCapture::FinalAssistantJson,
                 result_context: Value::Null,
+                permission_policy: PermissionPolicy::Deny,
+                interruption: None,
             },
         )
         .await
@@ -380,6 +434,8 @@ async fn managed_controller_preserves_host_cancellation_over_runtime_end_turn() 
                 result_kind: "work.attempt/v1".to_owned(),
                 result_capture: TurnResultCapture::Transcript,
                 result_context: Value::Null,
+                permission_policy: PermissionPolicy::Deny,
+                interruption: None,
             },
         )
         .await
@@ -420,6 +476,8 @@ async fn managed_controller_parks_post_arm_protocol_ambiguity() {
                 result_kind: "work.result/v1".to_owned(),
                 result_capture: TurnResultCapture::Transcript,
                 result_context: Value::Null,
+                permission_policy: PermissionPolicy::Deny,
+                interruption: None,
             },
         )
         .await

@@ -215,6 +215,33 @@ pub struct ConversationSummary {
     pub latest_message_at_ms: Option<i64>,
 }
 
+/// Exact unread state for one authenticated participant in one conversation.
+///
+/// The projection is derived only from the participant's durable membership
+/// cursor and immutable message envelopes. The participant's own messages are
+/// not unread. `addressed_unread_count` counts messages from another
+/// participant whose exact `recipient_id` is the reader; it does not infer
+/// urgency from message content.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+pub struct ConversationAttention {
+    pub channel_id: String,
+    pub read_through_seq: i64,
+    pub latest_message_seq: Option<i64>,
+    pub unread_count: i64,
+    pub addressed_unread_count: i64,
+    pub first_unread_seq: Option<i64>,
+    pub first_addressed_unread_seq: Option<i64>,
+}
+
+/// Advances the authenticated participant's durable read cursor.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdvanceConversationRead {
+    /// Highest channel message sequence the participant has observed.
+    #[schema(minimum = 0)]
+    pub through_seq: i64,
+}
+
 /// An immutable message envelope in the global event sequence.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize, ToSchema)]
 pub struct Message {

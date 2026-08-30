@@ -1013,6 +1013,27 @@ async function runPresentationBrowserTurn(
   after: number,
   phase: string,
 ): Promise<BrowserTurn> {
+  const attentionMessage = await postJson(
+    `/v1/channels/${encodeURIComponent(channelId)}/messages`,
+    workerCredential,
+    {
+      idempotency_key: `live-conversation/${runId}/${phase}/attention`,
+      recipient_id: humanId,
+      kind: "conversation.attention-qualification/v1",
+      payload: { text: `Unread boundary for ${phase}.` },
+      correlation_id: `${runId}/${phase}/attention`,
+      causation_id: null,
+    },
+    201,
+  );
+  if (
+    attentionMessage.sender_id !== workerId ||
+    attentionMessage.recipient_id !== humanId ||
+    attentionMessage.seq <= after
+  ) {
+    throw new Error(`${phase} attention fixture lost exact attribution`);
+  }
+
   await using view = new Bun.WebView({
     backend: "webkit",
     dataStore: "ephemeral",
@@ -1032,10 +1053,44 @@ async function runPresentationBrowserTurn(
   );
   await waitForPresentation(
     view,
-    (state) => state.phase === "ready" && state.channel_count === 1,
+    (state) => {
+      const attention = state.attention.find(
+        (item) => item.channel_id === channelId,
+      );
+      return (
+        state.phase === "ready" &&
+        state.channel_count === 1 &&
+        attention?.read_through_seq === after &&
+        attention.latest_message_seq === attentionMessage.seq &&
+        attention.unread_count === 1 &&
+        attention.addressed_unread_count === 1 &&
+        attention.first_unread_seq === attentionMessage.seq &&
+        attention.first_addressed_unread_seq === attentionMessage.seq
+      );
+    },
     15_000,
-    `${phase} presentation channel discovery`,
+    `${phase} presentation addressed attention`,
   );
+  const attentionBadge = await poll(
+    () => readAttentionDom(view, channelId),
+    (candidate) =>
+      candidate.unreadCount === "1" &&
+      candidate.addressedUnreadCount === "1" &&
+      candidate.badgeText === "@1" &&
+      candidate.ariaLabel.includes("1 unread, 1 addressed to you"),
+    5_000,
+    `${phase} presentation addressed badge`,
+  );
+  if (
+    attentionBadge.unreadCount !== "1" ||
+    attentionBadge.addressedUnreadCount !== "1" ||
+    attentionBadge.badgeText !== "@1" ||
+    !attentionBadge.ariaLabel.includes("1 unread, 1 addressed to you")
+  ) {
+    throw new Error(
+      `${phase} presentation did not render addressed attention: ${boundedTail(JSON.stringify(attentionBadge))}`,
+    );
+  }
 
   await view.click(`button[data-channel-id="${channelId}"]`);
   await waitForPresentation(
@@ -1044,21 +1099,57 @@ async function runPresentationBrowserTurn(
       state.phase === "live" &&
       state.selected_channel_id === channelId &&
       state.member_count === 2 &&
-      state.cursor >= after,
+      state.cursor >= attentionMessage.seq &&
+      state.first_unread_seq === attentionMessage.seq,
     15_000,
     `${phase} presentation live channel`,
   );
-  await waitForPresentationDom(view, workerId, phase);
+  await waitForPresentationDom(view, phase);
+  const unreadBoundary = await readUnreadBoundaryDom(view);
+  if (
+    unreadBoundary.seq !== attentionMessage.seq ||
+    unreadBoundary.label !== "New messages"
+  ) {
+    throw new Error(`${phase} presentation lost its exact unread boundary`);
+  }
 
-  const prompt = `Reply briefly to the human. Include the exact marker ${phase}.`;
   await view.evaluate("document.querySelector('#composer-text').focus()");
-  await view.type(prompt);
+  await view.type("@");
+  await poll(
+    () =>
+      view.evaluate(
+        `Boolean(document.querySelector(${JSON.stringify(
+          `#mention-suggestions button[data-recipient-id="${workerId}"]`,
+        )}))`,
+      ),
+    (ready) => ready === true,
+    5_000,
+    `${phase} presentation mention suggestions`,
+  );
+  await clickPresentationControl(
+    view,
+    `#mention-suggestions button[data-recipient-id="${workerId}"]`,
+    phase,
+  );
+  await waitForPresentation(
+    view,
+    (state) => state.composer_recipient_id === workerId,
+    5_000,
+    `${phase} presentation mention selection`,
+  );
+  const promptBody = `Reply briefly to the human. Include the exact marker ${phase}.`;
+  await view.type(promptBody);
   const typedPrompt = await view.evaluate(
     "document.querySelector('#composer-text').value",
   );
-  if (typedPrompt !== prompt) {
+  if (
+    typeof typedPrompt !== "string" ||
+    !typedPrompt.startsWith("@") ||
+    !typedPrompt.endsWith(promptBody)
+  ) {
     throw new Error(`${phase} presentation did not accept trusted text input`);
   }
+  const prompt = typedPrompt;
   await clickPresentationControl(view, "#send-message", phase);
 
   const requestHistory = await poll(
@@ -1122,14 +1213,42 @@ async function runPresentationBrowserTurn(
 
   const state = await waitForPresentation(
     view,
-    (candidate) =>
-      candidate.phase === "live" &&
-      candidate.cursor === result.seq &&
-      candidate.message_ids.includes(request.id) &&
-      candidate.message_ids.includes(result.id),
+    (candidate) => {
+      const attention = candidate.attention.find(
+        (item) => item.channel_id === channelId,
+      );
+      return (
+        candidate.phase === "live" &&
+        candidate.cursor === result.seq &&
+        candidate.message_ids.includes(attentionMessage.id) &&
+        candidate.message_ids.includes(request.id) &&
+        candidate.message_ids.includes(result.id) &&
+        candidate.first_unread_seq === attentionMessage.seq &&
+        attention?.read_through_seq === result.seq &&
+        attention.latest_message_seq === result.seq &&
+        attention.unread_count === 0 &&
+        attention.addressed_unread_count === 0 &&
+        attention.first_unread_seq === null &&
+        attention.first_addressed_unread_seq === null
+      );
+    },
     15_000,
-    `${phase} presentation result rendering`,
+    `${phase} presentation durable read advance`,
   );
+  const durableAttention = await getJson(
+    "/v1/conversations/attention",
+    humanCredential,
+  );
+  const durableChannelAttention = durableAttention.find(
+    (item: any) => item.channel_id === channelId,
+  );
+  if (
+    durableChannelAttention?.read_through_seq !== result.seq ||
+    durableChannelAttention.unread_count !== 0 ||
+    durableChannelAttention.addressed_unread_count !== 0
+  ) {
+    throw new Error(`${phase} presentation read cursor was not durable`);
+  }
   const expectedAssistant = assistantMessageText(result.payload?.assistant_messages);
   if (!expectedAssistant) {
     throw new Error(`${phase} presentation result had no assistant message`);
@@ -1195,11 +1314,14 @@ async function runPresentationBrowserTurn(
   await view.evaluate("globalThis.__fleetdConversation.disconnect()");
   return {
     cursor: result.seq,
+    attentionMessage,
     request,
     result,
     evidence: {
       phase,
       browser_after: after,
+      addressed_message_id: attentionMessage.id,
+      addressed_message_seq: attentionMessage.seq,
       request_id: request.id,
       request_seq: request.seq,
       result_id: result.id,
@@ -1213,6 +1335,9 @@ async function runPresentationBrowserTurn(
       rendered_request_exact: true,
       rendered_result_exact: true,
       inspectable_envelope_exact: true,
+      addressed_badge_exact: true,
+      first_unread_boundary_exact: true,
+      durable_read_through_seq: result.seq,
       trusted_browser_input: true,
       credential_persistence_absent: true,
       browser_history_poll_count: 0,
@@ -1228,6 +1353,17 @@ interface PresentationState {
   channel_count: number;
   member_count: number;
   message_ids: string[];
+  attention: Array<{
+    channel_id: string;
+    read_through_seq: number;
+    latest_message_seq: number | null;
+    unread_count: number;
+    addressed_unread_count: number;
+    first_unread_seq: number | null;
+    first_addressed_unread_seq: number | null;
+  }>;
+  first_unread_seq: number | null;
+  composer_recipient_id: string | null;
 }
 
 interface PresentationAudit {
@@ -1320,14 +1456,13 @@ async function waitForPresentation(
 
 async function waitForPresentationDom(
   view: Bun.WebView,
-  workerId: string,
   phase: string,
 ): Promise<void> {
   const deadline = performance.now() + 15_000;
   let state = await readPresentationDom(view);
   while (
     (state.composerDisabled ||
-      state.target !== workerId ||
+      state.audienceRecipientId !== "" ||
       (state.messageCount === 0 &&
         state.emptyTitle !== "Start the conversation")) &&
     performance.now() < deadline
@@ -1337,7 +1472,7 @@ async function waitForPresentationDom(
   }
   if (
     state.composerDisabled ||
-    state.target !== workerId ||
+    state.audienceRecipientId !== "" ||
     (state.messageCount === 0 && state.emptyTitle !== "Start the conversation")
   ) {
     throw new Error(`${phase} presentation DOM did not reach its live state`);
@@ -1395,16 +1530,53 @@ async function clickPresentationControl(
 
 async function readPresentationDom(view: Bun.WebView): Promise<{
   composerDisabled: boolean;
-  target: string;
+  audienceRecipientId: string;
   emptyTitle: string;
   messageCount: number;
 }> {
   return await view.evaluate(`({
     composerDisabled: document.querySelector("#composer-text").disabled,
-    target: document.querySelector("#message-target").value,
+    audienceRecipientId: document.querySelector("#composer-audience").dataset.recipientId,
     emptyTitle: document.querySelector("#empty-conversation-title").textContent,
     messageCount: document.querySelectorAll("[data-message-id]").length,
   })`);
+}
+
+async function readAttentionDom(
+  view: Bun.WebView,
+  channelId: string,
+): Promise<{
+  unreadCount: string | null;
+  addressedUnreadCount: string | null;
+  badgeText: string | null;
+  ariaLabel: string;
+}> {
+  return await view.evaluate(`(() => {
+    const button = document.querySelector(${JSON.stringify(
+      `button[data-channel-id="${channelId}"]`,
+    )});
+    return {
+      unreadCount: button?.getAttribute("data-unread-count") ?? null,
+      addressedUnreadCount: button?.getAttribute("data-addressed-unread-count") ?? null,
+      badgeText: button?.querySelector(".nav-item__attention")?.textContent ?? null,
+      ariaLabel: button?.getAttribute("aria-label") ?? "",
+    };
+  })()`);
+}
+
+async function readUnreadBoundaryDom(view: Bun.WebView): Promise<{
+  seq: number | null;
+  label: string | null;
+}> {
+  return await view.evaluate(`(() => {
+    const marker = document.querySelector('[data-unread-marker="true"]');
+    const nextMessage = marker?.nextElementSibling;
+    const value = nextMessage?.getAttribute("data-message-seq");
+    return {
+      seq: value === null || value === undefined ? null : Number(value),
+      label: marker?.getAttribute("aria-label") ?? null,
+    };
+  })()`);
 }
 
 async function readRenderedTurn(
@@ -1465,6 +1637,7 @@ function assistantMessageText(value: unknown): string {
 
 interface BrowserTurn {
   cursor: number;
+  attentionMessage?: any;
   request: any;
   result: any;
   evidence: Record<string, unknown>;
@@ -1522,7 +1695,11 @@ function assertHistory(history: any, turns: BrowserTurn[]): void {
   if (!history || !Array.isArray(history.messages)) {
     throw new Error("conversation history returned an unexpected body");
   }
-  const expectedMessages = turns.flatMap((turn) => [turn.request, turn.result]);
+  const expectedMessages = turns.flatMap((turn) => [
+    ...(turn.attentionMessage ? [turn.attentionMessage] : []),
+    turn.request,
+    turn.result,
+  ]);
   const expectedIds = expectedMessages.map((message) => message.id);
   const actualIds = history.messages.map((message: any) => message.id);
   if (JSON.stringify(actualIds) !== JSON.stringify(expectedIds)) {

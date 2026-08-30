@@ -58,14 +58,19 @@ impl Store {
         sqlx::query(
             r"
             INSERT INTO channel_members (
-                channel_id, agent_id, joined_at_ms, delivery_mode
-            ) VALUES (?, ?, ?, ?)
+                channel_id, agent_id, joined_at_ms, delivery_mode,
+                read_through_seq
+            ) VALUES (
+                ?, ?, ?, ?,
+                COALESCE((SELECT MAX(seq) FROM messages WHERE channel_id = ?), 0)
+            )
             ",
         )
         .bind(channel_id)
         .bind(agent_id)
         .bind(now_ms())
         .bind(delivery_mode.as_str())
+        .bind(channel_id)
         .execute(&mut *transaction)
         .await?;
         transaction.commit().await?;
@@ -131,6 +136,79 @@ impl Store {
         .fetch_one(&self.pool)
         .await?;
         Ok(membership == 1)
+    }
+
+    /// Monotonically advances one member's durable channel read cursor.
+    ///
+    /// A cursor may name zero or a message sequence that has already committed
+    /// in this channel. Concurrent and stale clients cannot move it backwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a negative or future cursor, an unknown channel,
+    /// non-membership, or a persistence failure.
+    pub async fn advance_member_read_cursor(
+        &self,
+        channel_id: &str,
+        agent_id: &str,
+        through_seq: i64,
+    ) -> Result<i64, FleetError> {
+        if through_seq < 0 {
+            return Err(FleetError::Invalid(
+                "read cursor must be zero or a committed message sequence".to_owned(),
+            ));
+        }
+
+        let mut transaction = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        ensure_exists(&mut transaction, "channels", "channel", channel_id).await?;
+        ensure_member(&mut transaction, channel_id, agent_id).await?;
+        let latest_message_seq: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(seq) FROM messages WHERE channel_id = ?")
+                .bind(channel_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+        if through_seq > latest_message_seq.unwrap_or(0) {
+            return Err(FleetError::Invalid(format!(
+                "read cursor {through_seq} is beyond the latest message in channel {channel_id}"
+            )));
+        }
+        if through_seq > 0 {
+            let belongs_to_channel: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM messages WHERE channel_id = ? AND seq = ?)",
+            )
+            .bind(channel_id)
+            .bind(through_seq)
+            .fetch_one(&mut *transaction)
+            .await?;
+            if !belongs_to_channel {
+                return Err(FleetError::Invalid(format!(
+                    "read cursor {through_seq} is not a committed message in channel {channel_id}"
+                )));
+            }
+        }
+
+        sqlx::query(
+            r"
+            UPDATE channel_members
+            SET read_through_seq = ?
+            WHERE channel_id = ? AND agent_id = ? AND read_through_seq < ?
+            ",
+        )
+        .bind(through_seq)
+        .bind(channel_id)
+        .bind(agent_id)
+        .bind(through_seq)
+        .execute(&mut *transaction)
+        .await?;
+        let read_through_seq: i64 = sqlx::query_scalar(
+            "SELECT read_through_seq FROM channel_members WHERE channel_id = ? AND agent_id = ?",
+        )
+        .bind(channel_id)
+        .bind(agent_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(read_through_seq)
     }
 }
 

@@ -10,6 +10,7 @@
     #revision = 0;
     #phase = "idle";
     #channels = [];
+    #attention = [];
     #selectedChannelId = null;
     #selectionGeneration = 0;
     #cancelSelection;
@@ -31,6 +32,7 @@
         phase: this.#phase,
         participantId: this.#transport.participantId,
         channels: this.#channels,
+        attention: this.#attention,
         selectedChannelId: this.#selectedChannelId,
         members: lane?.members ?? [],
         messages: lane?.messages ?? [],
@@ -50,10 +52,15 @@
       this.#error = null;
       this.#publish();
       try {
-        this.#channels = [...await this.#transport.listChannels()];
+        const [channels, attention] = await Promise.all([
+          this.#transport.listChannels(),
+          this.#transport.listAttention()
+        ]);
+        this.#channels = [...channels];
+        this.#attention = checkedAttention(attention);
       } catch {
-        this.#fail("channel_discovery_failed", "Fleetd channel discovery failed");
-        throw new Error("Fleetd channel discovery failed");
+        this.#fail("channel_discovery_failed", "Fleetd conversation discovery failed");
+        throw new Error("Fleetd conversation discovery failed");
       }
       if (this.#closed)
         return;
@@ -63,13 +70,44 @@
     async refreshChannels() {
       this.#assertOpen();
       try {
-        this.#channels = [...await this.#transport.listChannels()];
+        const [channels, attention] = await Promise.all([
+          this.#transport.listChannels(),
+          this.#transport.listAttention()
+        ]);
+        this.#channels = [...channels];
+        this.#attention = checkedAttention(attention);
         this.#error = null;
         this.#publish();
       } catch {
         this.#fail("channel_discovery_failed", "Fleetd channel discovery failed");
         throw new Error("Fleetd channel discovery failed");
       }
+    }
+    async refreshAttention() {
+      this.#assertOpen();
+      try {
+        this.#attention = checkedAttention(await this.#transport.listAttention());
+        this.#publish();
+      } catch {
+        throw new Error("Fleetd conversation attention refresh failed");
+      }
+    }
+    async markRead(channelId, throughSeq) {
+      this.#assertOpen();
+      if (!Number.isSafeInteger(throughSeq) || throughSeq < 0) {
+        throw this.#invalidState("read cursor must be a non-negative safe integer");
+      }
+      const updated = checkedAttention([
+        await this.#transport.advanceRead(channelId, throughSeq)
+      ])[0];
+      if (updated.channel_id !== channelId || updated.read_through_seq < throughSeq) {
+        throw this.#invalidState("Fleetd returned attention outside the acknowledged participant lane");
+      }
+      this.#attention = [
+        ...this.#attention.filter((attention) => attention.channel_id !== updated.channel_id),
+        updated
+      ];
+      this.#publish();
     }
     async selectChannel(channelId) {
       this.#assertOpen();
@@ -319,14 +357,167 @@
     const rightKeys = Object.keys(rightRecord).sort();
     return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => key === rightKeys[index] && jsonEqual(leftRecord[key], rightRecord[key]));
   }
+  function checkedAttention(values) {
+    const seen = new Set;
+    for (const value of values) {
+      const latest = value.latest_message_seq;
+      const firstUnread = value.first_unread_seq;
+      const firstAddressed = value.first_addressed_unread_seq;
+      if (typeof value.channel_id !== "string" || value.channel_id.length === 0 || seen.has(value.channel_id) || !Number.isSafeInteger(value.read_through_seq) || value.read_through_seq < 0 || latest !== null && (typeof latest !== "number" || !Number.isSafeInteger(latest) || latest < value.read_through_seq) || !Number.isSafeInteger(value.unread_count) || value.unread_count < 0 || !Number.isSafeInteger(value.addressed_unread_count) || value.addressed_unread_count < 0 || value.addressed_unread_count > value.unread_count || value.unread_count === 0 !== (firstUnread === null) || value.addressed_unread_count === 0 !== (firstAddressed === null) || firstUnread !== null && (typeof firstUnread !== "number" || !Number.isSafeInteger(firstUnread) || firstUnread <= value.read_through_seq || latest === null || typeof latest !== "number" || firstUnread > latest) || firstAddressed !== null && (typeof firstAddressed !== "number" || !Number.isSafeInteger(firstAddressed) || firstAddressed <= value.read_through_seq || latest === null || typeof latest !== "number" || firstAddressed > latest)) {
+        throw new Error("Fleetd returned invalid conversation attention");
+      }
+      seen.add(value.channel_id);
+    }
+    return [...values];
+  }
+
+  // ../../clients/typescript/src/channel-stream-core.ts
+  var DEFAULT_CHANNEL_STREAM_RECONNECT_DELAYS_MS = [
+    250,
+    1000,
+    2000
+  ];
+  var DEFAULT_CHANNEL_STREAM_MAX_PENDING_MESSAGES = 64;
+  var DEFAULT_CHANNEL_STREAM_READY_TIMEOUT_MS = 1e4;
+  var MAX_RETAINED_IDENTITIES = 4096;
+  function createAcceptedIdentityIndex() {
+    return {
+      bySequence: new Map,
+      byId: new Map,
+      order: []
+    };
+  }
+
+  class MessageAcceptanceQueue {
+    #options;
+    #pending = [];
+    #accepting = false;
+    #terminal = false;
+    constructor(options) {
+      this.#options = options;
+    }
+    get busy() {
+      return this.#accepting;
+    }
+    get pending() {
+      return this.#pending.length;
+    }
+    offer(message) {
+      if (this.#terminal)
+        return true;
+      if (this.#pending.length >= this.#options.maxPendingMessages)
+        return false;
+      this.#pending.push(message);
+      this.#drain();
+      return true;
+    }
+    clear() {
+      this.#pending.length = 0;
+    }
+    stop() {
+      this.#terminal = true;
+      this.clear();
+    }
+    async#drain() {
+      if (this.#accepting || this.#terminal)
+        return;
+      this.#accepting = true;
+      try {
+        while (!this.#terminal && this.#pending.length > 0) {
+          const message = this.#pending.shift();
+          if (!message)
+            break;
+          const duplicate = classifyDuplicate(message, this.#options.getCursor(), this.#options.acceptedIdentities);
+          if (duplicate === "conflict") {
+            this.#terminal = true;
+            this.clear();
+            this.#options.failed({ type: "identity_conflict" });
+            break;
+          }
+          if (duplicate === "duplicate")
+            continue;
+          try {
+            await this.#options.accept(message);
+          } catch (cause) {
+            this.#terminal = true;
+            this.clear();
+            this.#options.failed({ type: "consumer_rejected", cause });
+            break;
+          }
+          this.#options.setCursor(message.seq);
+          rememberIdentity(message, this.#options.acceptedIdentities);
+        }
+      } finally {
+        this.#accepting = false;
+        this.#options.idle();
+      }
+    }
+  }
+  function decodeChannelMessage(value, channelId) {
+    if (!isExactRecord(value, [
+      "causation_id",
+      "channel_id",
+      "correlation_id",
+      "created_at_ms",
+      "id",
+      "kind",
+      "payload",
+      "recipient_id",
+      "sender_id",
+      "seq"
+    ]) || !Number.isSafeInteger(value.seq) || value.seq <= 0 || typeof value.id !== "string" || value.id.length === 0 || value.channel_id !== channelId || typeof value.sender_id !== "string" || value.sender_id.length === 0 || !isNullableString(value.recipient_id) || typeof value.kind !== "string" || value.kind.length === 0 || !isNullableString(value.correlation_id) || !isNullableString(value.causation_id) || !Number.isSafeInteger(value.created_at_ms)) {
+      return { error: "invalid immutable message envelope" };
+    }
+    return value;
+  }
+  function isDecodeFailure(value) {
+    return "error" in value;
+  }
+  function isExactRecord(value, keys) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return false;
+    }
+    const actual = Object.keys(value).sort();
+    const expected = [...keys].sort();
+    return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+  }
+  function isChannelStreamCursor(value) {
+    return Number.isSafeInteger(value) && value >= 0;
+  }
+  function classifyDuplicate(message, cursor, identities) {
+    const sequenceForId = identities.byId.get(message.id);
+    if (sequenceForId !== undefined && sequenceForId !== message.seq) {
+      return "conflict";
+    }
+    const idForSequence = identities.bySequence.get(message.seq);
+    if (idForSequence !== undefined && idForSequence !== message.id) {
+      return "conflict";
+    }
+    if (message.seq <= cursor)
+      return "duplicate";
+    return "new";
+  }
+  function rememberIdentity(message, identities) {
+    identities.bySequence.set(message.seq, message.id);
+    identities.byId.set(message.id, message.seq);
+    identities.order.push(message.seq);
+    if (identities.order.length <= MAX_RETAINED_IDENTITIES)
+      return;
+    const expiredSequence = identities.order.shift();
+    if (expiredSequence === undefined)
+      return;
+    const expiredId = identities.bySequence.get(expiredSequence);
+    identities.bySequence.delete(expiredSequence);
+    if (expiredId !== undefined)
+      identities.byId.delete(expiredId);
+  }
+  function isNullableString(value) {
+    return value === null || typeof value === "string";
+  }
 
   // ../../clients/typescript/src/browser-channel-stream.ts
   var BROWSER_CHANNEL_STREAM_PROTOCOL = "fleetd.channel-stream.browser.v1";
   var BROWSER_CHANNEL_STREAM_PATH = "/v1/browser/channel-stream";
-  var DEFAULT_RECONNECT_DELAYS_MS = [250, 1000, 2000];
-  var DEFAULT_MAX_PENDING_MESSAGES = 64;
-  var DEFAULT_READY_TIMEOUT_MS = 1e4;
-  var MAX_RETAINED_IDENTITIES = 4096;
 
   class BrowserChannelStreamError extends Error {
     constructor(code, message, options) {
@@ -346,11 +537,7 @@
     let stopRequested = false;
     let activeSocket;
     let activeGrantRequest;
-    const acceptedIdentities = {
-      bySequence: new Map,
-      byId: new Map,
-      order: []
-    };
+    const acceptedIdentities = createAcceptedIdentityIndex();
     const setStatus = (next) => {
       if (status === next)
         return;
@@ -512,15 +699,15 @@
     if (!isCursor(initialCursor)) {
       throw invalidOptions("after must be a non-negative safe integer");
     }
-    const reconnectDelaysMs = options.reconnectDelaysMs ?? DEFAULT_RECONNECT_DELAYS_MS;
+    const reconnectDelaysMs = options.reconnectDelaysMs ?? DEFAULT_CHANNEL_STREAM_RECONNECT_DELAYS_MS;
     if (!Array.isArray(reconnectDelaysMs) || reconnectDelaysMs.some((delay2) => !Number.isSafeInteger(delay2) || delay2 < 0 || delay2 > 60000)) {
       throw invalidOptions("reconnect delays must be integers between zero and 60000 milliseconds");
     }
-    const maxPendingMessages = options.maxPendingMessages ?? DEFAULT_MAX_PENDING_MESSAGES;
+    const maxPendingMessages = options.maxPendingMessages ?? DEFAULT_CHANNEL_STREAM_MAX_PENDING_MESSAGES;
     if (!Number.isSafeInteger(maxPendingMessages) || maxPendingMessages < 1 || maxPendingMessages > 4096) {
       throw invalidOptions("maxPendingMessages must be between 1 and 4096");
     }
-    const readyTimeoutMs = options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS;
+    const readyTimeoutMs = options.readyTimeoutMs ?? DEFAULT_CHANNEL_STREAM_READY_TIMEOUT_MS;
     if (!Number.isSafeInteger(readyTimeoutMs) || readyTimeoutMs < 100 || readyTimeoutMs > 15000) {
       throw invalidOptions("readyTimeoutMs must be between 100 and 15000");
     }
@@ -595,11 +782,9 @@
   }
   function consumeSocketAttempt(options) {
     return new Promise((resolve, reject) => {
-      const pending = [];
       let grant = options.grant;
       let opened = false;
       let ready = false;
-      let accepting = false;
       let disconnected = false;
       let settled = false;
       let terminalError;
@@ -611,14 +796,15 @@
         options.signal.removeEventListener("abort", abortAttempt);
         grant = undefined;
       };
+      let lane;
       const settleIfPossible = () => {
-        if (settled || accepting)
+        if (settled || lane.busy)
           return;
         if (terminalError) {
           settled = true;
           detach();
           reject(terminalError);
-        } else if (disconnected && pending.length === 0) {
+        } else if (disconnected && lane.pending === 0) {
           settled = true;
           detach();
           resolve();
@@ -628,7 +814,7 @@
         if (settled || terminalError)
           return;
         terminalError = error;
-        pending.length = 0;
+        lane.stop();
         closeSocket(options.socket, "fleetd_client_error");
         settleIfPossible();
       };
@@ -639,36 +825,21 @@
         closeSocket(options.socket, reason);
         settleIfPossible();
       };
-      const drain = async () => {
-        if (accepting || settled || terminalError)
-          return;
-        accepting = true;
-        try {
-          while (!settled && !terminalError && pending.length > 0) {
-            const message = pending.shift();
-            if (!message)
-              break;
-            const duplicate = classifyDuplicate(message, options.getCursor(), options.acceptedIdentities);
-            if (duplicate === "conflict") {
-              fail(new BrowserChannelStreamError("server_protocol_error", "browser channel stream reused a stable message identity inconsistently"));
-              break;
-            }
-            if (duplicate === "duplicate")
-              continue;
-            try {
-              await options.accept(message);
-            } catch (cause) {
-              fail(new BrowserChannelStreamError("consumer_rejected", "browser channel stream consumer rejected a message", { cause }));
-              break;
-            }
-            options.setCursor(message.seq);
-            rememberIdentity(message, options.acceptedIdentities);
+      lane = new MessageAcceptanceQueue({
+        accept: options.accept,
+        maxPendingMessages: options.maxPendingMessages,
+        acceptedIdentities: options.acceptedIdentities,
+        getCursor: options.getCursor,
+        setCursor: options.setCursor,
+        failed(failure) {
+          if (failure.type === "identity_conflict") {
+            fail(new BrowserChannelStreamError("server_protocol_error", "browser channel stream reused a stable message identity inconsistently"));
+          } else {
+            fail(new BrowserChannelStreamError("consumer_rejected", "browser channel stream consumer rejected a message", { cause: failure.cause }));
           }
-        } finally {
-          accepting = false;
-          settleIfPossible();
-        }
-      };
+        },
+        idle: settleIfPossible
+      });
       options.socket.onopen = () => {
         if (settled || terminalError || disconnected)
           return;
@@ -718,13 +889,11 @@
           fail(message);
           return;
         }
-        if (pending.length >= options.maxPendingMessages) {
-          pending.length = 0;
+        if (!lane.offer(message)) {
+          lane.clear();
           disconnect("fleetd_client_backpressure");
           return;
         }
-        pending.push(message);
-        drain();
       };
       options.socket.onerror = () => {
         disconnect("fleetd_client_transport");
@@ -732,7 +901,7 @@
       options.socket.onclose = () => {
         disconnected = true;
         if (options.isStopped())
-          pending.length = 0;
+          lane.clear();
         settleIfPossible();
       };
       const abortAttempt = () => {
@@ -750,49 +919,11 @@
     if (!isExactRecord(value, ["message", "type"]) || value.type !== "message") {
       return protocolFailure("browser channel stream received an unsupported frame");
     }
-    const message = value.message;
-    if (!isExactRecord(message, [
-      "causation_id",
-      "channel_id",
-      "correlation_id",
-      "created_at_ms",
-      "id",
-      "kind",
-      "payload",
-      "recipient_id",
-      "sender_id",
-      "seq"
-    ]) || !Number.isSafeInteger(message.seq) || message.seq <= 0 || typeof message.id !== "string" || message.id.length === 0 || message.channel_id !== channelId || typeof message.sender_id !== "string" || message.sender_id.length === 0 || !isNullableString(message.recipient_id) || typeof message.kind !== "string" || message.kind.length === 0 || !isNullableString(message.correlation_id) || !isNullableString(message.causation_id) || !Number.isSafeInteger(message.created_at_ms)) {
+    const message = decodeChannelMessage(value.message, channelId);
+    if (isDecodeFailure(message)) {
       return protocolFailure("browser channel stream received an invalid immutable message envelope");
     }
     return message;
-  }
-  function classifyDuplicate(message, cursor, identities) {
-    const sequenceForId = identities.byId.get(message.id);
-    if (sequenceForId !== undefined && sequenceForId !== message.seq) {
-      return "conflict";
-    }
-    const idForSequence = identities.bySequence.get(message.seq);
-    if (idForSequence !== undefined && idForSequence !== message.id) {
-      return "conflict";
-    }
-    if (message.seq <= cursor)
-      return "duplicate";
-    return "new";
-  }
-  function rememberIdentity(message, identities) {
-    identities.bySequence.set(message.seq, message.id);
-    identities.byId.set(message.id, message.seq);
-    identities.order.push(message.seq);
-    if (identities.order.length <= MAX_RETAINED_IDENTITIES)
-      return;
-    const expiredSequence = identities.order.shift();
-    if (expiredSequence === undefined)
-      return;
-    const expiredId = identities.bySequence.get(expiredSequence);
-    identities.bySequence.delete(expiredSequence);
-    if (expiredId !== undefined)
-      identities.byId.delete(expiredId);
   }
   function browserSocketUrl(origin) {
     const url = new URL(BROWSER_CHANNEL_STREAM_PATH, origin);
@@ -806,19 +937,8 @@
       socket.close(1000, reason);
     } catch {}
   }
-  function isExactRecord(value, keys) {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-      return false;
-    }
-    const actual = Object.keys(value).sort();
-    const expected = [...keys].sort();
-    return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-  }
-  function isNullableString(value) {
-    return value === null || typeof value === "string";
-  }
   function isCursor(value) {
-    return Number.isSafeInteger(value) && value >= 0;
+    return isChannelStreamCursor(value);
   }
   function protocolFailure(message) {
     return new BrowserChannelStreamError("server_protocol_error", message);
@@ -892,6 +1012,10 @@
         const exactChannelId = boundedIdentifier(channelId, "channelId");
         return requestJson(fetchImplementation, origin, `/v1/channels/${encodeURIComponent(exactChannelId)}/members`, participantCredential, { method: "GET" }, [200], requestTimeoutMs, activeRequests);
       },
+      async listAttention() {
+        assertOpen();
+        return requestJson(fetchImplementation, origin, "/v1/conversations/attention", participantCredential, { method: "GET" }, [200], requestTimeoutMs, activeRequests);
+      },
       openStream(streamOptions) {
         assertOpen();
         const stream = openBrowserChannelStream({
@@ -921,6 +1045,18 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(message)
         }, [200, 201], requestTimeoutMs, activeRequests);
+      },
+      async advanceRead(channelId, throughSeq) {
+        assertOpen();
+        const exactChannelId = boundedIdentifier(channelId, "channelId");
+        if (!Number.isSafeInteger(throughSeq) || throughSeq < 0) {
+          throw new Error("throughSeq must be a non-negative safe integer");
+        }
+        return requestJson(fetchImplementation, origin, `/v1/channels/${encodeURIComponent(exactChannelId)}/read-cursor`, participantCredential, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ through_seq: throughSeq })
+        }, [200], requestTimeoutMs, activeRequests);
       },
       close() {
         if (closed)
@@ -1745,9 +1881,33 @@
   var client = createClient(createConfig());
 
   // ../../clients/typescript/src/generated/sdk.gen.ts
+  var listAgentSeatConfigurations = (options) => (options?.client ?? client).get({
+    security: [{ scheme: "bearer", type: "http" }],
+    url: "/v1/agent-seat-configurations",
+    ...options
+  });
+  var listAgentSeats = (options) => (options?.client ?? client).get({
+    security: [{ scheme: "bearer", type: "http" }],
+    url: "/v1/agent-seats",
+    ...options
+  });
   var listAgents = (options) => (options?.client ?? client).get({
     security: [{ scheme: "bearer", type: "http" }],
     url: "/v1/agents",
+    ...options
+  });
+  var configureAgentSeat = (options) => (options.client ?? client).put({
+    security: [{ scheme: "bearer", type: "http" }],
+    url: "/v1/agents/{agent_id}/seat-configuration",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers
+    }
+  });
+  var restartAgentSeat = (options) => (options.client ?? client).post({
+    security: [{ scheme: "bearer", type: "http" }],
+    url: "/v1/agents/{agent_id}/seat-restart",
     ...options
   });
   var createChannel = (options) => (options.client ?? client).post({
@@ -1853,6 +2013,8 @@
     };
     return {
       listAgents: () => execute("list agents", (signal) => listAgents({ client: wireClient, signal })),
+      listAgentSeats: () => execute("list agent seats", (signal) => listAgentSeats({ client: wireClient, signal })),
+      listAgentSeatConfigurations: () => execute("list agent seat configurations", (signal) => listAgentSeatConfigurations({ client: wireClient, signal })),
       listConversations: (query) => execute("list conversations", (signal) => listConversations({ client: wireClient, query, signal })),
       createSharedChannel: (body) => execute("create shared channel", (signal) => createChannel({ body, client: wireClient, signal })),
       renameSharedChannel: (channelId, body) => execute("rename shared channel", (signal) => renameChannel({
@@ -1875,6 +2037,17 @@
       openDirectConversation: (body) => execute("open direct conversation", (signal) => openDirectConversation({ body, client: wireClient, signal })),
       listPluginGenerations: (query) => execute("list plugin generations", (signal) => listPluginGenerations({ client: wireClient, query, signal })),
       listSessionBindings: (query) => execute("list session bindings", (signal) => listSessionBindings({ client: wireClient, query, signal })),
+      configureAgentSeat: (agentId, body) => execute("configure agent seat", (signal) => configureAgentSeat({
+        body,
+        client: wireClient,
+        path: { agent_id: agentId },
+        signal
+      })),
+      restartAgentSeat: (agentId) => execute("restart agent seat", (signal) => restartAgentSeat({
+        client: wireClient,
+        path: { agent_id: agentId },
+        signal
+      })),
       close() {
         if (closed)
           return;
@@ -1890,12 +2063,10 @@
   // src/ui/composer.ts
   function composerAvailability(input) {
     const channelReady = input.phase === "live" && input.selectedChannelId !== null;
-    const targetReady = channelReady && input.targetId !== "";
     const sending = input.sending || input.pendingSends > 0;
     return {
-      textareaDisabled: !targetReady,
-      targetDisabled: !channelReady,
-      sendDisabled: !targetReady || input.draft.trim() === "" || sending,
+      textareaDisabled: !channelReady,
+      sendDisabled: !channelReady || input.draft.trim() === "" || sending,
       sending
     };
   }
@@ -1911,7 +2082,6 @@
   }
   function applyComposerAvailability(availability, elements) {
     elements.textarea.disabled = availability.textareaDisabled;
-    elements.target.disabled = availability.targetDisabled;
     elements.send.disabled = availability.sendDisabled;
     elements.form.setAttribute("aria-busy", String(availability.sending));
     elements.send.setAttribute("aria-busy", String(availability.sending));
@@ -2141,8 +2311,27 @@
     }).join(" ");
   }
 
+  // src/ui/attention.ts
+  function conversationAttentionBadge(attention) {
+    const unread = attention?.unread_count ?? 0;
+    const addressed = attention?.addressed_unread_count ?? 0;
+    if (unread <= 0)
+      return;
+    return addressed > 0 ? {
+      text: `@${boundedCount(addressed)}`,
+      description: `${unread} unread, ${addressed} addressed to you`,
+      tone: "addressed"
+    } : {
+      text: boundedCount(unread),
+      description: `${unread} unread`,
+      tone: "unread"
+    };
+  }
+  function boundedCount(count) {
+    return count > 99 ? "99+" : String(count);
+  }
+
   // src/ui/components.ts
-  var CHANNEL_BROADCAST_TARGET = "__fleetd_channel__";
   function renderConnectionStatus(element, snapshot, sending) {
     const status = connectionStatusView({
       phase: snapshot.phase,
@@ -2158,7 +2347,7 @@
     element.setAttribute("aria-atomic", "true");
     element.setAttribute("aria-busy", String(status.busy));
   }
-  function renderChannelList(container, channels, selectedChannelId, snapshot) {
+  function renderChannelList(container, channels, selectedChannelId, snapshot, attention = new Map) {
     container.setAttribute("aria-busy", String(snapshot.phase === "loading_channels"));
     if (channels.length === 0) {
       const state = document.createElement("p");
@@ -2177,19 +2366,19 @@
     const rows = channels.map((channel) => {
       const selected = channel.id === selectedChannelId;
       const row = existing.get(channel.id) ?? channelRow(channel, selected);
-      updateChannelRow(row, channel, selected);
+      updateChannelRow(row, channel, selected, undefined, attention.get(channel.id));
       return row;
     });
     reconcileChildren(container, rows);
   }
-  function renderConversationNavigation(elements, conversations, selectedChannelId, snapshot, agentHealth = new Map) {
+  function renderConversationNavigation(elements, conversations, selectedChannelId, snapshot, agentHealth = new Map, attention = new Map) {
     const active = conversations.filter((conversation) => conversation.archived_at_ms == null && conversation.members.some((member) => member.agent_id === snapshot.participantId));
     const shared = active.filter((conversation) => conversation.kind === "shared");
     const direct = active.filter((conversation) => conversation.kind === "direct");
-    renderChannelList(elements.channels, shared, selectedChannelId, snapshot);
-    renderDirectList(elements.directs, direct, selectedChannelId, snapshot, agentHealth);
+    renderChannelList(elements.channels, shared, selectedChannelId, snapshot, attention);
+    renderDirectList(elements.directs, direct, selectedChannelId, snapshot, agentHealth, attention);
   }
-  function renderDirectList(container, conversations, selectedChannelId, snapshot, agentHealth) {
+  function renderDirectList(container, conversations, selectedChannelId, snapshot, agentHealth, attention) {
     container.setAttribute("aria-busy", String(snapshot.phase === "loading_channels"));
     if (conversations.length === 0) {
       const state = document.createElement("p");
@@ -2212,11 +2401,12 @@
       updateChannelRow(row, conversation, selected, {
         label,
         marker: avatarLabel(label)
-      });
+      }, attention.get(conversation.id));
       if (peer) {
         row.dataset.directAgentId = peer.agent_id;
         row.dataset.agentHealth = agentHealth.get(peer.agent_id) ?? "unmanaged";
-        row.title = selected ? `${peer.agent_name}, current direct message` : `Direct message with ${peer.agent_name}`;
+        const attentionDescription = row.dataset.attentionDescription;
+        row.title = `${selected ? `${peer.agent_name}, current direct message` : `Direct message with ${peer.agent_name}`}${attentionDescription ? ` · ${attentionDescription}` : ""}`;
       }
       return row;
     });
@@ -2236,13 +2426,18 @@
     label.className = "channel-label nav-item__label";
     label.textContent = channel.name;
     content.append(label);
+    const attention = document.createElement("span");
+    attention.className = "nav-item__attention";
+    attention.hidden = true;
+    attention.setAttribute("aria-hidden", "true");
     const chevron = icon("chevron", "›", "nav-item__chevron");
-    button.append(marker, content, chevron);
+    button.append(marker, content, attention, chevron);
     updateChannelRow(button, channel, selected);
     return button;
   }
-  function updateChannelRow(button, channel, selected, presentation) {
-    button.title = selected ? `${channel.name}, current channel` : channel.name;
+  function updateChannelRow(button, channel, selected, presentation, attention) {
+    const attentionDescription = updateAttentionBadge(button, attention);
+    button.title = `${selected ? `${channel.name}, current channel` : channel.name}${attentionDescription ? ` · ${attentionDescription}` : ""}`;
     const label = button.querySelector(".channel-label");
     if (label)
       label.textContent = presentation?.label ?? displayName(channel.name);
@@ -2255,6 +2450,31 @@
     } else {
       button.removeAttribute("aria-current");
     }
+    const labelText = presentation?.label ?? displayName(channel.name);
+    button.setAttribute("aria-label", `${labelText}${selected ? ", current conversation" : ""}${attentionDescription ? `, ${attentionDescription}` : ""}`);
+  }
+  function updateAttentionBadge(button, attention) {
+    const badge = button.querySelector(".nav-item__attention");
+    if (!badge)
+      return;
+    const unread = attention?.unread_count ?? 0;
+    const addressed = attention?.addressed_unread_count ?? 0;
+    const view = conversationAttentionBadge(attention);
+    button.dataset.unreadCount = String(unread);
+    button.dataset.addressedUnreadCount = String(addressed);
+    if (!view) {
+      badge.hidden = true;
+      badge.textContent = "";
+      delete badge.dataset.tone;
+      delete button.dataset.attentionDescription;
+      return;
+    }
+    badge.hidden = false;
+    badge.dataset.tone = view.tone;
+    badge.textContent = view.text;
+    badge.title = view.description;
+    button.dataset.attentionDescription = view.description;
+    return view.description;
   }
   function renderChannelHeader(snapshot, elements, conversation) {
     const channel = snapshot.channels.find((candidate) => candidate.id === snapshot.selectedChannelId);
@@ -2267,39 +2487,6 @@
       elements.avatar.dataset.kind = conversation?.kind ?? "shared";
     }
     elements.meta.textContent = channel ? `${conversation?.kind === "direct" ? "Direct message" : `${snapshot.members.length} participants`} · ${snapshot.messages.length} messages` : snapshot.phase === "loading_channels" ? "Finding conversations…" : "Choose a conversation to begin.";
-  }
-  function renderMemberTargets(select, members, participantId, allowBroadcast = false) {
-    const prior = select.value;
-    const candidates = members.filter((member) => member.agent_id !== participantId).map(memberOptionView);
-    if (candidates.length === 0 && !allowBroadcast) {
-      const option = document.createElement("option");
-      option.value = "";
-      option.textContent = "No other participants";
-      option.disabled = true;
-      select.replaceChildren(option);
-      select.value = "";
-      select.title = "This channel has no other message recipient.";
-      return "";
-    }
-    const existing = new Map(Array.from(select.options).map((option) => [option.value, option]));
-    const broadcast = document.createElement("option");
-    broadcast.value = CHANNEL_BROADCAST_TARGET;
-    broadcast.textContent = "Everyone in this channel";
-    broadcast.title = "Send a channel message to every participant";
-    const options = candidates.map((candidate) => {
-      const option = existing.get(candidate.id) ?? document.createElement("option");
-      option.value = candidate.id;
-      option.textContent = candidate.label;
-      option.title = candidate.description;
-      return option;
-    });
-    const allOptions = allowBroadcast ? [broadcast, ...options] : options;
-    reconcileChildren(select, allOptions);
-    const priorIsValid = candidates.some((candidate) => candidate.id === prior) || allowBroadcast && prior === CHANNEL_BROADCAST_TARGET;
-    const selected = priorIsValid ? prior : candidates.find((candidate) => candidate.preferred)?.id ?? candidates[0]?.id ?? "";
-    select.value = selected;
-    select.title = selected === CHANNEL_BROADCAST_TARGET ? broadcast.title : candidates.find((candidate) => candidate.id === selected)?.description ?? "Message recipient";
-    return selected;
   }
   function renderEmptyConversation(snapshot, elements) {
     const state = emptyConversationView({
@@ -2318,15 +2505,32 @@
   class MessageListView {
     #container;
     #channelId = null;
+    #firstUnreadSeq = null;
+    #unreadMarker;
     constructor(container) {
       this.#container = container;
     }
     clear() {
       this.#container.replaceChildren();
       this.#channelId = null;
+      this.#firstUnreadSeq = null;
+      this.#unreadMarker = undefined;
     }
-    render(snapshot, contract) {
+    visibleThroughSeq() {
+      const viewport = this.#container.getBoundingClientRect();
+      let through = null;
+      for (const article of this.#container.querySelectorAll("[data-message-seq]")) {
+        const sequence = Number(article.dataset.messageSeq);
+        const bounds = article.getBoundingClientRect();
+        if (Number.isSafeInteger(sequence) && sequence >= 0 && bounds.top < viewport.bottom && bounds.bottom > viewport.top) {
+          through = through === null ? sequence : Math.max(through, sequence);
+        }
+      }
+      return through;
+    }
+    render(snapshot, contract, firstUnreadSeq = null) {
       const changedChannel = this.#channelId !== snapshot.selectedChannelId;
+      const changedUnreadBoundary = this.#firstUnreadSeq !== firstUnreadSeq;
       const nearBottom = isNearBottom(this.#container);
       const anchor = !changedChannel && !nearBottom ? visibleAnchor(this.#container) : undefined;
       const names = new Map(snapshot.members.map((member) => [member.agent_id, member.agent_name]));
@@ -2338,23 +2542,50 @@
         if (messageId)
           existing.set(messageId, child);
       }
-      const nodes = snapshot.messages.map((message) => {
+      const nodes = [];
+      let unreadMarkerInserted = false;
+      for (const message of snapshot.messages) {
+        if (!unreadMarkerInserted && firstUnreadSeq !== null && message.seq >= firstUnreadSeq) {
+          if (changedUnreadBoundary || !this.#unreadMarker) {
+            this.#unreadMarker = unreadMarker();
+          }
+          nodes.push(this.#unreadMarker);
+          unreadMarkerInserted = true;
+        }
         const current = existing.get(message.id);
         if (current?.dataset.messageSeq === String(message.seq)) {
           updateMessageLabels(current, message, snapshot.participantId, names);
-          return current;
+          nodes.push(current);
+        } else {
+          nodes.push(messageCard(message, snapshot.participantId, names, contract));
         }
-        return messageCard(message, snapshot.participantId, names, contract);
-      });
+      }
       reconcileChildren(this.#container, nodes);
       this.#container.setAttribute("aria-busy", String(snapshot.phase === "connecting" || snapshot.phase === "reconnecting"));
       this.#channelId = snapshot.selectedChannelId;
-      if (changedChannel || nearBottom) {
+      this.#firstUnreadSeq = firstUnreadSeq;
+      if ((changedChannel || changedUnreadBoundary) && unreadMarkerInserted) {
+        const marker = this.#unreadMarker;
+        if (marker) {
+          this.#container.scrollTop = Math.max(0, marker.offsetTop - this.#container.offsetTop - 16);
+        }
+      } else if (changedChannel || nearBottom) {
         this.#container.scrollTop = this.#container.scrollHeight;
       } else if (anchor) {
         restoreAnchor(this.#container, anchor);
       }
     }
+  }
+  function unreadMarker() {
+    const marker = document.createElement("div");
+    marker.className = "unread-marker";
+    marker.dataset.unreadMarker = "true";
+    marker.setAttribute("role", "separator");
+    marker.setAttribute("aria-label", "New messages");
+    const label = document.createElement("span");
+    label.textContent = "New messages";
+    marker.append(label);
+    return marker;
   }
   function messageCard(message, participantId, names, contract) {
     const article = document.createElement("article");
@@ -2517,6 +2748,75 @@
     }
   }
 
+  // src/ui/mentions.ts
+  var MAX_MENTION_CANDIDATES = 8;
+  function mentionQueryAt(draft, caret) {
+    if (!Number.isSafeInteger(caret) || caret < 0 || caret > draft.length) {
+      return;
+    }
+    const prefix = draft.slice(0, caret);
+    const match = prefix.match(/(?:^|[\s([{])@([^\s@]*)$/u);
+    if (!match)
+      return;
+    const marker = prefix.lastIndexOf("@");
+    return {
+      start: marker,
+      end: caret,
+      text: match[1] ?? ""
+    };
+  }
+  function mentionCandidates(members, participantId, query) {
+    const normalizedQuery = normalize(query);
+    return members.filter((member) => member.agent_id !== participantId).map((member) => {
+      const option = memberOptionView(member);
+      return {
+        recipientId: member.agent_id,
+        label: option.label,
+        exactName: member.agent_name,
+        description: option.description,
+        receivesInboxWork: member.delivery_mode === "inbox"
+      };
+    }).filter((candidate) => {
+      if (normalizedQuery === "")
+        return true;
+      return [candidate.label, candidate.exactName].some((value) => normalize(value).includes(normalizedQuery));
+    }).sort((left, right) => {
+      const leftStarts = normalize(left.label).startsWith(normalizedQuery);
+      const rightStarts = normalize(right.label).startsWith(normalizedQuery);
+      if (leftStarts !== rightStarts)
+        return leftStarts ? -1 : 1;
+      if (left.receivesInboxWork !== right.receivesInboxWork) {
+        return left.receivesInboxWork ? -1 : 1;
+      }
+      return left.label.localeCompare(right.label);
+    }).slice(0, MAX_MENTION_CANDIDATES);
+  }
+  function applyMention(draft, query, candidate) {
+    const token = `@${candidate.label}`;
+    const suffix = draft.slice(query.end);
+    const spacer = suffix === "" || /^\s/u.test(suffix) ? " " : "";
+    const inserted = `${token}${spacer}`;
+    return {
+      draft: `${draft.slice(0, query.start)}${inserted}${suffix}`,
+      caret: query.start + inserted.length,
+      selection: {
+        recipientId: candidate.recipientId,
+        token,
+        label: candidate.label
+      }
+    };
+  }
+  function mentionSelectionPresent(draft, selection) {
+    return draft.includes(selection.token);
+  }
+  function directRecipient(members, participantId) {
+    const peers = mentionCandidates(members, participantId, "");
+    return peers.length === 1 ? peers[0] : undefined;
+  }
+  function normalize(value) {
+    return value.trim().toLocaleLowerCase();
+  }
+
   // src/ui/workspace-components.ts
   function renderAgentDirectory(container, items) {
     if (items.length === 0) {
@@ -2543,13 +2843,22 @@
       status.className = "agent-card__status";
       status.textContent = `${item.status} · ${item.description}`;
       content.append(name, status);
+      const actions = document.createElement("div");
+      actions.className = "agent-card__actions";
+      const manage = document.createElement("button");
+      manage.type = "button";
+      manage.className = "button";
+      manage.dataset.manageAgentId = item.id;
+      manage.textContent = item.configured ? "Manage" : "Set up";
+      manage.setAttribute("aria-label", `${item.configured ? "Manage" : "Set up"} ${item.name}`);
       const message = document.createElement("button");
       message.type = "button";
       message.className = "button";
       message.dataset.directAgentId = item.id;
       message.textContent = "Message";
       message.setAttribute("aria-label", `Message ${item.name}`);
-      article.append(avatar, content, message);
+      actions.append(manage, message);
+      article.append(avatar, content, actions);
       return article;
     });
     container.replaceChildren(...rows);
@@ -2631,15 +2940,16 @@
   }
 
   // src/ui/workspace-view-models.ts
-  function agentDirectoryItems(agents, generations, bindings, participantId) {
+  function agentDirectoryItems(agents, generations, bindings, participantId, configurations = []) {
+    const configurationByAgent = new Map(configurations.map((configuration) => [configuration.agent_id, configuration]));
     const latestGenerations = latestByAgent(generations, (generation) => generation.agent_id, (generation) => generation.started_at_ms);
     const latestBindings = latestByAgent(bindings, (binding) => binding.agent_id, (binding) => binding.updated_at_ms);
-    return agents.filter((agent) => agent.id !== participantId).map((agent) => agentDirectoryItem(agent, latestGenerations.get(agent.id), latestBindings.get(agent.id))).sort((left, right) => {
+    return agents.filter((agent) => agent.id !== participantId).map((agent) => agentDirectoryItem(agent, latestGenerations.get(agent.id), latestBindings.get(agent.id), configurationByAgent.get(agent.id))).sort((left, right) => {
       const healthDifference = healthOrder(left.health) - healthOrder(right.health);
       return healthDifference || left.name.localeCompare(right.name);
     });
   }
-  function agentDirectoryItem(agent, generation, binding) {
+  function agentDirectoryItem(agent, generation, binding, configuration) {
     const name = displayName(agent.name);
     const identity = `${agent.name} · ${agent.id}`;
     if (binding?.state === "active" && binding.active_invocation_id != null && generation?.health === "active") {
@@ -2650,7 +2960,9 @@
         initials: initials(name),
         health: "working",
         status: "Working",
-        description: `${generation.runtime_name} has an active invocation.`
+        description: `${generation.runtime_name} has an active invocation.`,
+        configured: configuration !== undefined,
+        desiredState: configuration?.desired_state
       };
     }
     if (binding?.state === "uncertain") {
@@ -2661,7 +2973,9 @@
         initials: initials(name),
         health: "stale",
         status: "Needs attention",
-        description: "Its latest session has an uncertain outcome."
+        description: "Its latest session has an uncertain outcome.",
+        configured: configuration !== undefined,
+        desiredState: configuration?.desired_state
       };
     }
     if (generation?.health === "active") {
@@ -2673,7 +2987,9 @@
         initials: initials(name),
         health: "active",
         status: hasActiveSession ? "Session active" : "Worker observed",
-        description: hasActiveSession ? `${generation.runtime_name} owns an active session with no active invocation recorded.` : `Fleetd observed an active ${generation.runtime_name} plugin generation.`
+        description: hasActiveSession ? `${generation.runtime_name} owns an active session with no active invocation recorded.` : `Fleetd observed an active ${generation.runtime_name} plugin generation.`,
+        configured: configuration !== undefined,
+        desiredState: configuration?.desired_state
       };
     }
     if (generation?.health === "stale") {
@@ -2684,7 +3000,9 @@
         initials: initials(name),
         health: "stale",
         status: "Connection stale",
-        description: "Fleetd has not observed a recent worker heartbeat."
+        description: "Fleetd has not observed a recent worker heartbeat.",
+        configured: configuration !== undefined,
+        desiredState: configuration?.desired_state
       };
     }
     if (generation?.health === "stopped") {
@@ -2695,7 +3013,9 @@
         initials: initials(name),
         health: "stopped",
         status: "Offline",
-        description: "Its latest observed worker generation has stopped."
+        description: "Its latest observed worker generation has stopped.",
+        configured: configuration !== undefined,
+        desiredState: configuration?.desired_state
       };
     }
     return {
@@ -2704,8 +3024,10 @@
       exactName: identity,
       initials: initials(name),
       health: "unmanaged",
-      status: "No worker observed",
-      description: `Registered participant ${shortId(agent.id)} has no observed worker.`
+      status: configuration?.desired_state === "running" ? "Starting" : configuration?.desired_state === "stopped" ? "Stopped by you" : "Not configured",
+      description: configuration?.desired_state === "running" ? "This machine is reconciling its approved runtime." : configuration?.desired_state === "stopped" ? "Its configured runtime is not currently requested." : `Registered participant ${shortId(agent.id)} has no runtime profile.`,
+      configured: configuration !== undefined,
+      desiredState: configuration?.desired_state
     };
   }
   function latestByAgent(values, agentId, timestamp) {
@@ -2754,15 +3076,29 @@
     empty: required("empty-conversation"),
     emptyTitle: required("empty-conversation-title"),
     emptyCopy: required("empty-conversation-copy"),
-    target: required("message-target"),
     composer: required("composer"),
     composerText: required("composer-text"),
+    composerAudience: required("composer-audience"),
+    composerAudienceLabel: requiredDescendant(required("composer-audience"), ".composer-audience-label"),
+    clearMention: required("clear-mention"),
+    mentionSuggestions: required("mention-suggestions"),
     send: required("send-message"),
     disconnect: required("disconnect"),
     openConversationDetails: required("open-conversation-details"),
     agentDirectoryDialog: required("agent-directory-dialog"),
     agentDirectoryState: required("agent-directory-state"),
     agentList: required("agent-list"),
+    agentSeatDialog: required("agent-seat-dialog"),
+    agentSeatForm: required("agent-seat-form"),
+    agentSeatTitle: required("agent-seat-title"),
+    agentSeatCopy: required("agent-seat-copy"),
+    agentSeatProfileSummary: required("agent-seat-profile-summary"),
+    agentSeatProfile: required("agent-seat-profile"),
+    agentSeatInstructions: required("agent-seat-instructions"),
+    agentSeatDesiredState: required("agent-seat-desired-state"),
+    agentSeatError: required("agent-seat-error"),
+    restartAgentSeat: required("restart-agent-seat"),
+    saveAgentSeat: required("save-agent-seat"),
     channelDialog: required("channel-dialog"),
     channelForm: required("channel-form"),
     channelName: required("channel-name"),
@@ -2805,8 +3141,22 @@
   var conversations = [];
   var pluginGenerations = [];
   var sessionBindings = [];
+  var seatConfigurations = [];
+  var runtimeProfiles = [];
+  var configuredAgentId;
   var workspaceError;
   var workspaceBusy = false;
+  var mentionSelection;
+  var mentionQuery;
+  var mentionOptions = [];
+  var activeMentionIndex = 0;
+  var mentionDismissed = false;
+  var renderedChannelId = null;
+  var visitFirstUnreadSeq = null;
+  var pendingReadAdvances = new Map;
+  var readAdvanceRunning = false;
+  var attentionRefreshRunning = false;
+  var attentionRefreshTimer;
   var messageList = new MessageListView(elements.messages);
   var publicApp = {
     connect,
@@ -2825,7 +3175,11 @@
         member_count: snapshot?.members.length ?? 0,
         message_ids: snapshot?.messages.map((message) => message.id) ?? [],
         message_sequences: snapshot?.messages.map((message) => message.seq) ?? [],
+        attention: snapshot?.attention ?? [],
+        first_unread_seq: visitFirstUnreadSeq,
         pending_sends: snapshot?.pendingSends ?? 0,
+        composer_recipient_id: currentRecipientId(),
+        mention_suggestions_open: !elements.mentionSuggestions.hidden,
         error_code: snapshot?.error?.code ?? null
       };
     }
@@ -2870,11 +3224,24 @@
     const target = event.target;
     if (!(target instanceof Element))
       return;
+    const manage = target.closest("button[data-manage-agent-id]");
+    if (manage?.dataset.manageAgentId) {
+      openAgentSeatConfiguration(manage.dataset.manageAgentId);
+      return;
+    }
     const button = target.closest("button[data-direct-agent-id]");
     if (!button?.dataset.directAgentId)
       return;
     openDirectMessage(button.dataset.directAgentId, button);
   });
+  elements.agentSeatForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveAgentSeatConfiguration();
+  });
+  elements.restartAgentSeat.addEventListener("click", () => {
+    restartConfiguredAgent();
+  });
+  elements.agentSeatProfile.addEventListener("change", renderSelectedProfileSummary);
   elements.channelForm.addEventListener("submit", (event) => {
     event.preventDefault();
     createSharedChannel();
@@ -2909,21 +3276,52 @@
     sendComposerMessage();
   });
   elements.composerText.addEventListener("input", () => {
+    mentionDismissed = false;
+    if (mentionSelection && !mentionSelectionPresent(elements.composerText.value, mentionSelection)) {
+      mentionSelection = undefined;
+    }
+    refreshMentionSuggestions();
     resizeComposer(elements.composerText);
     renderComposerAvailability();
+    renderComposerContext();
   });
   elements.composerText.addEventListener("keydown", (event) => {
+    if (handleMentionKeydown(event))
+      return;
     if (!isComposerSendShortcut(event))
       return;
     event.preventDefault();
     elements.composer.requestSubmit();
   });
-  elements.target.addEventListener("change", () => {
-    renderComposerAvailability();
-    renderComposerContext();
-    const selected = elements.target.selectedOptions[0];
-    if (selected?.title)
-      elements.target.title = selected.title;
+  elements.composerText.addEventListener("click", refreshMentionSuggestions);
+  elements.composerText.addEventListener("keyup", (event) => {
+    if (["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"].includes(event.key)) {
+      return;
+    }
+    refreshMentionSuggestions();
+  });
+  elements.mentionSuggestions.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+  });
+  elements.mentionSuggestions.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element))
+      return;
+    const option = target.closest("button[data-recipient-id]");
+    const recipientId = option?.dataset.recipientId;
+    if (!recipientId)
+      return;
+    const candidate = mentionOptions.find((item) => item.recipientId === recipientId);
+    if (candidate)
+      selectMention(candidate);
+  });
+  elements.clearMention.addEventListener("click", clearSelectedMention);
+  elements.messages.addEventListener("scroll", queueCurrentVisibleRead);
+  window.addEventListener("focus", refreshAttentionOnReturn);
+  window.addEventListener("resize", queueCurrentVisibleRead);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible")
+      refreshAttentionOnReturn();
   });
   resizeComposer(elements.composerText);
   async function connect(profileInput) {
@@ -2940,6 +3338,7 @@
       requestKind: profile.requestKind,
       resultKind: profile.resultKind
     };
+    runtimeProfiles = profile.runtimeProfiles ?? [];
     let activeOperatorClient;
     const transport = (() => {
       try {
@@ -2976,6 +3375,7 @@
       const channelId = profile.channelId;
       if (channelId)
         await activeSession.selectChannel(channelId);
+      scheduleAttentionRefresh();
     } catch {
       if (generation === appGeneration && session === activeSession)
         disconnect();
@@ -2985,6 +3385,10 @@
   function disconnect() {
     appGeneration += 1;
     sendInFlight = false;
+    if (attentionRefreshTimer !== undefined) {
+      window.clearTimeout(attentionRefreshTimer);
+      attentionRefreshTimer = undefined;
+    }
     unsubscribe?.();
     unsubscribe = undefined;
     session?.close();
@@ -2997,8 +3401,15 @@
     conversations = [];
     pluginGenerations = [];
     sessionBindings = [];
+    seatConfigurations = [];
+    runtimeProfiles = [];
+    configuredAgentId = undefined;
     workspaceError = undefined;
     workspaceBusy = false;
+    resetMentionState();
+    renderedChannelId = null;
+    visitFirstUnreadSeq = null;
+    pendingReadAdvances.clear();
     if (renderFrame !== undefined)
       cancelAnimationFrame(renderFrame);
     renderFrame = undefined;
@@ -3006,6 +3417,7 @@
     elements.connectPanel.hidden = false;
     for (const dialog of [
       elements.agentDirectoryDialog,
+      elements.agentSeatDialog,
       elements.channelDialog,
       elements.conversationDetailsDialog,
       elements.archiveChannelDialog
@@ -3016,7 +3428,6 @@
     messageList.clear();
     elements.channels.replaceChildren();
     elements.directs.replaceChildren();
-    elements.target.replaceChildren();
     elements.composerText.value = "";
     elements.openConversationDetails.disabled = true;
     resizeComposer(elements.composerText);
@@ -3034,24 +3445,31 @@
   }
   function render(snapshot) {
     renderConnectionStatus(elements.status, snapshot, sendInFlight);
+    const attention = new Map(snapshot.attention.map((item) => [item.channel_id, item]));
     const directory = agentDirectoryItems(agents, pluginGenerations, sessionBindings, snapshot.participantId);
-    renderConversationNavigation({ channels: elements.channels, directs: elements.directs }, conversations, snapshot.selectedChannelId, snapshot, new Map(directory.map((item) => [item.id, item.health])));
+    renderConversationNavigation({ channels: elements.channels, directs: elements.directs }, conversations, snapshot.selectedChannelId, snapshot, new Map(directory.map((item) => [item.id, item.health])), attention);
     const selectedConversation = conversations.find((conversation) => conversation.id === snapshot.selectedChannelId);
+    if (renderedChannelId !== snapshot.selectedChannelId) {
+      resetMentionState();
+      renderedChannelId = snapshot.selectedChannelId;
+      visitFirstUnreadSeq = snapshot.selectedChannelId === null ? null : attention.get(snapshot.selectedChannelId)?.first_unread_seq ?? null;
+    }
     renderChannelHeader(snapshot, {
       title: elements.channelTitle,
       meta: elements.channelMeta,
       avatar: elements.channelAvatar
     }, selectedConversation);
-    renderMemberTargets(elements.target, snapshot.members, snapshot.participantId, selectedConversation?.kind === "shared");
     elements.openConversationDetails.disabled = selectedConversation == null;
+    refreshMentionSuggestions();
     renderComposerContext();
-    messageList.render(snapshot, requiredContract());
+    messageList.render(snapshot, requiredContract(), visitFirstUnreadSeq);
     renderEmptyConversation(snapshot, {
       root: elements.empty,
       title: elements.emptyTitle,
       copy: elements.emptyCopy
     });
     renderComposerAvailability();
+    queueVisibleReadAdvance(snapshot, attention);
   }
   function selectConversationFromEvent(event) {
     const target = event.target;
@@ -3060,21 +3478,105 @@
     const button = target.closest("button[data-channel-id]");
     if (!button?.dataset.channelId || !session)
       return;
-    session.selectChannel(button.dataset.channelId).catch(() => {
-      if (session)
-        scheduleRender(session.snapshot);
+    const activeSession = session;
+    const channelId = button.dataset.channelId;
+    (async () => {
+      try {
+        await activeSession.refreshAttention();
+      } catch {}
+      await activeSession.selectChannel(channelId);
+    })().catch(() => {
+      if (session === activeSession)
+        scheduleRender(activeSession.snapshot);
     });
+  }
+  function queueVisibleReadAdvance(snapshot, attention) {
+    const channelId = snapshot.selectedChannelId;
+    if (channelId === null || snapshot.phase !== "live" || snapshot.cursor <= 0 || !documentIsAttended()) {
+      return;
+    }
+    const readThrough = attention.get(channelId)?.read_through_seq ?? 0;
+    const throughSeq = messageList.visibleThroughSeq();
+    if (throughSeq === null || throughSeq <= readThrough)
+      return;
+    pendingReadAdvances.set(channelId, Math.max(pendingReadAdvances.get(channelId) ?? 0, throughSeq));
+    if (!readAdvanceRunning)
+      drainReadAdvances();
+  }
+  function queueCurrentVisibleRead() {
+    const snapshot = latestSnapshot;
+    if (!snapshot)
+      return;
+    queueVisibleReadAdvance(snapshot, new Map(snapshot.attention.map((item) => [item.channel_id, item])));
+  }
+  async function drainReadAdvances() {
+    if (readAdvanceRunning)
+      return;
+    readAdvanceRunning = true;
+    try {
+      while (pendingReadAdvances.size > 0) {
+        const next = pendingReadAdvances.entries().next().value;
+        if (!next)
+          break;
+        const [channelId, throughSeq] = next;
+        pendingReadAdvances.delete(channelId);
+        const activeSession = session;
+        if (!activeSession)
+          continue;
+        try {
+          await activeSession.markRead(channelId, throughSeq);
+        } catch {}
+      }
+    } finally {
+      readAdvanceRunning = false;
+      if (pendingReadAdvances.size > 0)
+        drainReadAdvances();
+    }
+  }
+  function refreshAttentionOnReturn() {
+    const activeSession = session;
+    if (!activeSession || attentionRefreshRunning || !documentIsAttended())
+      return;
+    attentionRefreshRunning = true;
+    activeSession.refreshAttention().catch(() => {}).finally(() => {
+      attentionRefreshRunning = false;
+      if (session === activeSession) {
+        scheduleRender(activeSession.snapshot);
+      }
+    });
+  }
+  function scheduleAttentionRefresh() {
+    if (!session || attentionRefreshTimer !== undefined)
+      return;
+    const generation = appGeneration;
+    attentionRefreshTimer = window.setTimeout(() => {
+      attentionRefreshTimer = undefined;
+      if (session && generation === appGeneration) {
+        refreshAttentionOnReturn();
+        scheduleAttentionRefresh();
+      }
+    }, 5000);
+  }
+  function documentIsAttended() {
+    return document.visibilityState === "visible" && document.hasFocus();
   }
   async function refreshWorkspace(client2 = requiredOperatorClient()) {
     workspaceBusy = true;
     elements.agentList.setAttribute("aria-busy", "true");
     renderAgentDirectoryState();
     try {
-      const [nextAgents, nextConversations, nextGenerations, nextBindings] = await Promise.all([
+      const [
+        nextAgents,
+        nextConversations,
+        nextGenerations,
+        nextBindings,
+        nextSeatConfigurations
+      ] = await Promise.all([
         client2.listAgents(),
         client2.listConversations({ include_archived: false }),
         client2.listPluginGenerations(),
-        client2.listSessionBindings()
+        client2.listSessionBindings(),
+        client2.listAgentSeatConfigurations()
       ]);
       if (client2 !== operatorClient)
         return;
@@ -3082,6 +3584,7 @@
       conversations = nextConversations;
       pluginGenerations = nextGenerations;
       sessionBindings = nextBindings;
+      seatConfigurations = nextSeatConfigurations;
       workspaceError = undefined;
       renderAgentDirectoryState();
       if (session)
@@ -3106,7 +3609,7 @@
   }
   function renderAgentDirectoryState() {
     const snapshot = latestSnapshot;
-    const items = agentDirectoryItems(agents, pluginGenerations, sessionBindings, snapshot?.participantId ?? "");
+    const items = agentDirectoryItems(agents, pluginGenerations, sessionBindings, snapshot?.participantId ?? "", seatConfigurations);
     renderAgentDirectory(elements.agentList, items);
     if (workspaceError) {
       elements.agentDirectoryState.textContent = workspaceError;
@@ -3119,6 +3622,95 @@
     } else {
       elements.agentDirectoryState.hidden = true;
       elements.agentDirectoryState.textContent = "";
+    }
+  }
+  function openAgentSeatConfiguration(agentId) {
+    const agent = agents.find((candidate) => candidate.id === agentId);
+    if (!agent)
+      return;
+    configuredAgentId = agentId;
+    const current = seatConfigurations.find((configuration) => configuration.agent_id === agentId);
+    elements.agentSeatTitle.textContent = `${current ? "Manage" : "Set up"} ${displayName(agent.name)}`;
+    elements.agentSeatCopy.textContent = current ? `This runtime follows ${displayName(agent.name)} wherever the agent participates.` : `Make ${displayName(agent.name)} an active collaborator on this machine.`;
+    const options = runtimeProfiles.map((profile) => {
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = profile.label;
+      return option;
+    });
+    if (current && !runtimeProfiles.some((profile) => profile.id === current.profile_id)) {
+      const unavailable = document.createElement("option");
+      unavailable.value = current.profile_id;
+      unavailable.textContent = `${current.profile_id} · unavailable on this host`;
+      options.unshift(unavailable);
+    }
+    if (options.length === 0) {
+      const unavailable = document.createElement("option");
+      unavailable.value = "";
+      unavailable.textContent = "No approved profiles available";
+      options.push(unavailable);
+    }
+    elements.agentSeatProfile.replaceChildren(...options);
+    elements.agentSeatProfile.value = current?.profile_id ?? runtimeProfiles[0]?.id ?? "";
+    elements.agentSeatInstructions.value = current?.instructions ?? "";
+    elements.agentSeatDesiredState.value = current?.desired_state ?? "running";
+    elements.restartAgentSeat.disabled = current?.desired_state !== "running";
+    elements.saveAgentSeat.disabled = runtimeProfiles.length === 0;
+    setDialogError(elements.agentSeatError);
+    renderSelectedProfileSummary();
+    if (elements.agentDirectoryDialog.open)
+      elements.agentDirectoryDialog.close();
+    if (elements.conversationDetailsDialog.open)
+      elements.conversationDetailsDialog.close();
+    showDialog(elements.agentSeatDialog);
+  }
+  function renderSelectedProfileSummary() {
+    const selected = runtimeProfiles.find((profile) => profile.id === elements.agentSeatProfile.value);
+    elements.agentSeatProfileSummary.textContent = selected ? selected.description : runtimeProfiles.length === 0 ? "This host has not published an approved runtime catalog. Configure the desktop host to activate agents." : "The previously selected profile is not approved on this host.";
+    elements.agentSeatProfileSummary.dataset.tone = selected ? "neutral" : "warning";
+  }
+  async function saveAgentSeatConfiguration() {
+    const client2 = operatorClient;
+    const agentId = configuredAgentId;
+    if (!client2 || !agentId || !elements.agentSeatProfile.value)
+      return;
+    setFormBusy(elements.agentSeatForm, elements.saveAgentSeat, true, "Applying…");
+    elements.restartAgentSeat.disabled = true;
+    setDialogError(elements.agentSeatError);
+    try {
+      await client2.configureAgentSeat(agentId, {
+        profile_id: elements.agentSeatProfile.value,
+        instructions: elements.agentSeatInstructions.value,
+        desired_state: elements.agentSeatDesiredState.value === "stopped" ? "stopped" : "running"
+      });
+      await refreshWorkspace(client2);
+      elements.agentSeatDialog.close();
+    } catch (error) {
+      setDialogError(elements.agentSeatError, operatorErrorMessage(error, "The agent configuration could not be applied."));
+    } finally {
+      setFormBusy(elements.agentSeatForm, elements.saveAgentSeat, false, "Save and apply");
+      const current = seatConfigurations.find((configuration) => configuration.agent_id === agentId);
+      elements.restartAgentSeat.disabled = current?.desired_state !== "running";
+    }
+  }
+  async function restartConfiguredAgent() {
+    const client2 = operatorClient;
+    const agentId = configuredAgentId;
+    if (!client2 || !agentId)
+      return;
+    elements.restartAgentSeat.disabled = true;
+    elements.restartAgentSeat.textContent = "Restarting…";
+    setDialogError(elements.agentSeatError);
+    try {
+      await client2.restartAgentSeat(agentId);
+      await refreshWorkspace(client2);
+      elements.agentSeatDialog.close();
+    } catch (error) {
+      setDialogError(elements.agentSeatError, operatorErrorMessage(error, "The agent could not be restarted."));
+    } finally {
+      elements.restartAgentSeat.textContent = "Restart now";
+      const current = seatConfigurations.find((configuration) => configuration.agent_id === agentId);
+      elements.restartAgentSeat.disabled = current?.desired_state !== "running";
     }
   }
   function openCreateChannel() {
@@ -3241,7 +3833,12 @@
         delivery_mode: "inbox"
       });
       await refreshConversationState();
-      openConversationDetails();
+      const configured = seatConfigurations.some((configuration) => configuration.agent_id === agentId);
+      if (!configured && runtimeProfiles.length > 0) {
+        openAgentSeatConfiguration(agentId);
+      } else {
+        openConversationDetails();
+      }
     } catch (error) {
       setDialogError(elements.conversationDetailsError, operatorErrorMessage(error, "The agent could not be added."));
     } finally {
@@ -3335,8 +3932,8 @@
       return;
     const draft = elements.composerText.value;
     const text2 = draft.trim();
-    const recipientId = elements.target.value;
-    if (!text2 || !recipientId)
+    const recipientId = currentRecipientId();
+    if (!text2)
       return;
     const turnId = crypto.randomUUID();
     const generation = appGeneration;
@@ -3346,7 +3943,7 @@
     try {
       await activeSession.send({
         idempotency_key: `fleetd-conversation/${turnId}`,
-        recipient_id: recipientId === CHANNEL_BROADCAST_TARGET ? null : recipientId,
+        recipient_id: recipientId,
         kind: contract.requestKind,
         payload: { text: text2 },
         correlation_id: turnId,
@@ -3354,6 +3951,7 @@
       });
       if (generation === appGeneration && session === activeSession && elements.composerText.value === draft) {
         elements.composerText.value = "";
+        resetMentionState();
         resizeComposer(elements.composerText);
       }
     } catch {
@@ -3374,7 +3972,6 @@
     const availability = composerAvailability({
       phase: snapshot?.phase ?? "closed",
       selectedChannelId: snapshot?.selectedChannelId ?? null,
-      targetId: elements.target.value,
       draft: elements.composerText.value,
       pendingSends: snapshot?.pendingSends ?? 0,
       sending: sendInFlight
@@ -3382,13 +3979,145 @@
     applyComposerAvailability(availability, {
       form: elements.composer,
       textarea: elements.composerText,
-      target: elements.target,
       send: elements.send
     });
   }
   function renderComposerContext() {
-    const recipient = elements.target.selectedOptions[0]?.textContent?.trim();
-    elements.composerText.placeholder = recipient ? `Message ${recipient}…` : "Write a message…";
+    const snapshot = latestSnapshot;
+    const conversation = selectedConversation();
+    const direct = conversation?.kind === "direct" ? directRecipient(snapshot?.members ?? [], snapshot?.participantId ?? "") : undefined;
+    const selected = mentionSelection && mentionSelectionPresent(elements.composerText.value, mentionSelection) ? mentionSelection : undefined;
+    const recipientId = direct?.recipientId ?? selected?.recipientId ?? "";
+    const recipientLabel2 = direct?.label ?? selected?.label;
+    elements.composerAudience.dataset.recipientId = recipientId;
+    elements.clearMention.hidden = direct !== undefined || selected === undefined;
+    elements.composerAudienceLabel.textContent = !conversation ? "Select a conversation" : recipientLabel2 ? `Notifying ${recipientLabel2}` : "Notifying everyone";
+    elements.composerText.placeholder = !conversation ? "Write a message…" : conversation.kind === "direct" && recipientLabel2 ? `Message ${recipientLabel2}…` : "Message the channel…";
+  }
+  function currentRecipientId() {
+    const snapshot = latestSnapshot;
+    const conversation = selectedConversation();
+    if (!snapshot || !conversation)
+      return null;
+    if (conversation.kind === "direct") {
+      return directRecipient(snapshot.members, snapshot.participantId)?.recipientId ?? null;
+    }
+    if (mentionSelection && mentionSelectionPresent(elements.composerText.value, mentionSelection)) {
+      return mentionSelection.recipientId;
+    }
+    return null;
+  }
+  function refreshMentionSuggestions() {
+    const snapshot = latestSnapshot;
+    const conversation = selectedConversation();
+    if (mentionDismissed || snapshot?.phase !== "live" || conversation?.kind !== "shared" || mentionSelection !== undefined) {
+      hideMentionSuggestions();
+      return;
+    }
+    const caret = elements.composerText.selectionStart;
+    mentionQuery = mentionQueryAt(elements.composerText.value, caret);
+    mentionOptions = mentionQuery ? mentionCandidates(snapshot.members, snapshot.participantId, mentionQuery.text) : [];
+    if (!mentionQuery || mentionOptions.length === 0) {
+      hideMentionSuggestions();
+      return;
+    }
+    activeMentionIndex = Math.min(activeMentionIndex, mentionOptions.length - 1);
+    const options = mentionOptions.map((candidate, index) => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.className = "mention-option";
+      option.id = `mention-option-${index}`;
+      option.dataset.recipientId = candidate.recipientId;
+      option.setAttribute("role", "option");
+      option.setAttribute("aria-selected", String(index === activeMentionIndex));
+      option.title = candidate.description;
+      const name = document.createElement("span");
+      name.className = "mention-option-name";
+      name.textContent = `@${candidate.label}`;
+      const note = document.createElement("span");
+      note.className = "mention-option-note";
+      note.textContent = candidate.receivesInboxWork ? "will be notified" : "watching channel";
+      option.append(name, note);
+      return option;
+    });
+    elements.mentionSuggestions.replaceChildren(...options);
+    elements.mentionSuggestions.hidden = false;
+    elements.composerText.setAttribute("aria-expanded", "true");
+    elements.composerText.setAttribute("aria-activedescendant", `mention-option-${activeMentionIndex}`);
+  }
+  function handleMentionKeydown(event) {
+    if (elements.mentionSuggestions.hidden || mentionOptions.length === 0) {
+      return false;
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      activeMentionIndex = (activeMentionIndex + direction + mentionOptions.length) % mentionOptions.length;
+      refreshMentionSuggestions();
+      return true;
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault();
+      const candidate = mentionOptions[activeMentionIndex];
+      if (candidate)
+        selectMention(candidate);
+      return true;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      mentionDismissed = true;
+      hideMentionSuggestions();
+      return true;
+    }
+    return false;
+  }
+  function selectMention(candidate) {
+    if (!mentionQuery)
+      return;
+    const applied = applyMention(elements.composerText.value, mentionQuery, candidate);
+    mentionSelection = applied.selection;
+    elements.composerText.value = applied.draft;
+    elements.composerText.setSelectionRange(applied.caret, applied.caret);
+    mentionDismissed = false;
+    hideMentionSuggestions();
+    resizeComposer(elements.composerText);
+    renderComposerAvailability();
+    renderComposerContext();
+    elements.composerText.focus();
+  }
+  function clearSelectedMention() {
+    if (!mentionSelection)
+      return;
+    const tokenIndex = elements.composerText.value.indexOf(mentionSelection.token);
+    if (tokenIndex >= 0) {
+      const before = elements.composerText.value.slice(0, tokenIndex);
+      const after = elements.composerText.value.slice(tokenIndex + mentionSelection.token.length);
+      elements.composerText.value = before.endsWith(" ") && after.startsWith(" ") ? `${before}${after.slice(1)}` : `${before}${after}`;
+      const caret = Math.min(tokenIndex, elements.composerText.value.length);
+      elements.composerText.setSelectionRange(caret, caret);
+    }
+    mentionSelection = undefined;
+    mentionDismissed = false;
+    hideMentionSuggestions();
+    resizeComposer(elements.composerText);
+    renderComposerAvailability();
+    renderComposerContext();
+    elements.composerText.focus();
+  }
+  function hideMentionSuggestions() {
+    mentionQuery = undefined;
+    mentionOptions = [];
+    activeMentionIndex = 0;
+    elements.mentionSuggestions.hidden = true;
+    elements.mentionSuggestions.replaceChildren();
+    elements.composerText.setAttribute("aria-expanded", "false");
+    elements.composerText.removeAttribute("aria-activedescendant");
+  }
+  function resetMentionState() {
+    mentionSelection = undefined;
+    mentionDismissed = false;
+    hideMentionSuggestions();
+    renderComposerContext();
   }
   function validateProfile(value) {
     if (!value || typeof value !== "object")
@@ -3400,6 +4129,21 @@
     boundedProfileField(value.resultKind, "resultKind", 256);
     if (value.channelId !== undefined && (typeof value.channelId !== "string" || value.channelId.trim().length === 0 || value.channelId.length > 256)) {
       throw new Error("invalid conversation profile field: channelId");
+    }
+    if (value.runtimeProfiles !== undefined) {
+      if (!Array.isArray(value.runtimeProfiles) || value.runtimeProfiles.length > 128) {
+        throw new Error("invalid conversation profile field: runtimeProfiles");
+      }
+      const ids = new Set;
+      for (const profile of value.runtimeProfiles) {
+        boundedProfileField(profile.id, "runtimeProfiles.id", 128);
+        boundedProfileField(profile.label, "runtimeProfiles.label", 256);
+        boundedProfileField(profile.description, "runtimeProfiles.description", 2048);
+        if (!/^[A-Za-z0-9._-]+$/u.test(profile.id) || ids.has(profile.id)) {
+          throw new Error("invalid conversation profile field: runtimeProfiles.id");
+        }
+        ids.add(profile.id);
+      }
     }
     return value;
   }

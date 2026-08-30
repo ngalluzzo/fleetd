@@ -5,6 +5,8 @@
 //! instance — is the caller\'s decision, so these return whether the row moved
 //! rather than committing on their own.
 
+use std::collections::BTreeSet;
+
 use sqlx::Row;
 
 use crate::{
@@ -13,7 +15,7 @@ use crate::{
 };
 use fleetd_proto::model::{
     BlockDelivery, BlockResolution, BlockedDelivery, ClaimDeliveries, Delivery, DeliveryRecord,
-    DeliveryState, ResolveDeliveryBlock, RetryDelivery,
+    DeliveryState, Message, ResolveDeliveryBlock, RetryDelivery,
 };
 
 const MAX_CLAIM_LIMIT: u32 = 100;
@@ -73,6 +75,67 @@ impl Store {
         rows.iter()
             .map(|row| delivery_record_from_row(row, now))
             .collect()
+    }
+
+    /// Finds the newest currently claimable delivery after one message in the
+    /// same channel, restricted to an exact set of opaque message kinds.
+    ///
+    /// This is an authoritative read, not a notification. Callers may poll it
+    /// to decide whether newer channel input should affect work already in
+    /// progress; a missed or duplicated wakeup cannot change the answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid cursor or empty kind set, or when a
+    /// durable row cannot be read or decoded.
+    pub async fn newest_claimable_delivery_message_after(
+        &self,
+        agent_id: &str,
+        channel_id: &str,
+        after: i64,
+        message_kinds: &BTreeSet<String>,
+    ) -> Result<Option<Message>, FleetError> {
+        if after < 0 {
+            return Err(FleetError::Invalid(
+                "delivery message cursor must not be negative".to_owned(),
+            ));
+        }
+        if message_kinds.is_empty() {
+            return Err(FleetError::Invalid(
+                "delivery message-kind selector must not be empty".to_owned(),
+            ));
+        }
+        let now = now_ms();
+        let message_kinds_json = serde_json::to_string(message_kinds)?;
+        let row = sqlx::query(
+            r"
+            SELECT m.seq, m.id, m.channel_id, m.sender_id, m.recipient_id,
+                   m.kind, m.payload_json, m.correlation_id, m.causation_id,
+                   m.created_at_ms
+            FROM agent_deliveries d
+            JOIN messages m ON m.seq = d.message_seq
+            WHERE d.agent_id = ?
+              AND m.channel_id = ?
+              AND m.seq > ?
+              AND d.available_at_ms <= ?
+              AND (
+                d.state = 'pending'
+                OR (d.state = 'leased' AND d.lease_expires_at_ms <= ?)
+              )
+              AND m.kind IN (SELECT value FROM json_each(?))
+            ORDER BY m.seq DESC
+            LIMIT 1
+            ",
+        )
+        .bind(agent_id)
+        .bind(channel_id)
+        .bind(after)
+        .bind(now)
+        .bind(now)
+        .bind(message_kinds_json)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(message_from_row).transpose()
     }
 
     /// Lists unresolved blocked deliveries for operator review.

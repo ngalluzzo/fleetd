@@ -137,6 +137,91 @@ impl Store {
             next_cursor,
         })
     }
+
+    /// Reads the newest bounded slice of channel history before one sequence.
+    ///
+    /// The returned messages remain in ascending durable order. This is the
+    /// kernel read used when an execution adapter needs recent shared context
+    /// for a source message without walking the channel from sequence zero.
+    /// Addressing never narrows the result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-positive boundary, an unknown channel, or a
+    /// read or decoding failure.
+    pub async fn list_recent_messages_before(
+        &self,
+        channel_id: &str,
+        before: i64,
+        limit: u32,
+    ) -> Result<Vec<Message>, FleetError> {
+        if before <= 0 {
+            return Err(FleetError::Invalid(
+                "message boundary must be greater than zero".to_owned(),
+            ));
+        }
+        let limit = limit.clamp(1, 500);
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM channels WHERE id = ?")
+            .bind(channel_id)
+            .fetch_one(&self.pool)
+            .await?;
+        if exists == 0 {
+            return Err(FleetError::NotFound {
+                entity: "channel",
+                id: channel_id.to_owned(),
+            });
+        }
+        let rows = sqlx::query(
+            r"
+            SELECT seq, id, channel_id, sender_id, recipient_id, kind, payload_json,
+                   correlation_id, causation_id, created_at_ms
+            FROM messages
+            WHERE channel_id = ? AND seq < ?
+            ORDER BY seq DESC
+            LIMIT ?
+            ",
+        )
+        .bind(channel_id)
+        .bind(before)
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await?;
+        let mut messages: Vec<_> = rows
+            .iter()
+            .map(message_from_row)
+            .collect::<Result<_, _>>()?;
+        messages.reverse();
+        Ok(messages)
+    }
+
+    /// Returns the durable sequence at the current end of one channel.
+    ///
+    /// A caller can retain this as a reconciliation baseline and later ask
+    /// about messages committed after it. The sequence is authoritative even
+    /// when process-local commit notifications are lost.
+    ///
+    /// # Errors
+    ///
+    /// Returns not found for an unknown channel, or a persistence failure.
+    pub async fn latest_channel_message_seq(&self, channel_id: &str) -> Result<i64, FleetError> {
+        let row = sqlx::query(
+            r"
+            SELECT COALESCE(MAX(m.seq), 0) AS latest_seq
+            FROM channels c
+            LEFT JOIN messages m ON m.channel_id = c.id
+            WHERE c.id = ?
+            GROUP BY c.id
+            ",
+        )
+        .bind(channel_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| FleetError::NotFound {
+            entity: "channel",
+            id: channel_id.to_owned(),
+        })?;
+        Ok(row.try_get("latest_seq")?)
+    }
 }
 
 const MAX_IDEMPOTENCY_KEY_LENGTH: usize = 256;

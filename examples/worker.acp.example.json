@@ -46,6 +46,8 @@
     "idle_timeout_ms": 120000,
     "wall_timeout_ms": 600000,
     "cancel_drain_timeout_ms": 15000,
+    "interrupt_on_new_message": true,
+    "interrupt_poll_interval_ms": 250,
     "max_captured_output_bytes": 524288,
     "tool_budget": 64
   }

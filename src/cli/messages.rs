@@ -4,7 +4,7 @@ use std::error::Error;
 
 use clap::Subcommand;
 
-use fleetd::model::{MessagePage, SendMessage};
+use fleetd::model::{AdvanceConversationRead, ConversationAttention, MessagePage, SendMessage};
 use futures_util::StreamExt;
 use serde_json::json;
 
@@ -45,6 +45,15 @@ pub(super) enum MessageCommand {
         channel: String,
         #[arg(long, default_value_t = 0)]
         after: i64,
+    },
+    /// List exact unread and directly addressed counts for this participant.
+    Attention,
+    /// Monotonically acknowledge channel messages through one exact cursor.
+    Read {
+        #[arg(long)]
+        channel: String,
+        #[arg(long)]
+        through: i64,
     },
 }
 
@@ -99,6 +108,29 @@ pub(super) async fn message_command(api: &ApiClient, command: MessageCommand) ->
             print_json(&page)
         }
         MessageCommand::Watch { channel, after } => watch(api, &channel, after).await,
+        MessageCommand::Attention => {
+            let attention: Vec<ConversationAttention> = api
+                .get("/v1/conversations/attention")
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            print_json(&attention)
+        }
+        MessageCommand::Read { channel, through } => {
+            let attention: ConversationAttention = api
+                .put(&format!("/v1/channels/{channel}/read-cursor"))
+                .json(&AdvanceConversationRead {
+                    through_seq: through,
+                })
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            print_json(&attention)
+        }
     }
 }
 

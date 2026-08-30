@@ -2,6 +2,7 @@ import type { ConversationSnapshot } from "@fleetd/client/conversation";
 import type {
   Channel,
   ChannelMember,
+  ConversationAttention,
   ConversationSummary,
   Message,
 } from "@fleetd/client/types";
@@ -13,12 +14,10 @@ import {
   connectionStatusView,
   displayName,
   emptyConversationView,
-  memberOptionView,
   recipientLabel,
   senderLabel,
 } from "./view-models.ts";
-
-export const CHANNEL_BROADCAST_TARGET = "__fleetd_channel__";
+import { conversationAttentionBadge } from "./attention.ts";
 
 export function renderConnectionStatus(
   element: HTMLElement,
@@ -45,6 +44,7 @@ export function renderChannelList(
   channels: readonly Channel[],
   selectedChannelId: string | null,
   snapshot: Pick<ConversationSnapshot, "phase" | "error">,
+  attention: ReadonlyMap<string, ConversationAttention> = new Map(),
 ): void {
   container.setAttribute(
     "aria-busy",
@@ -74,7 +74,7 @@ export function renderChannelList(
   const rows = channels.map((channel) => {
     const selected = channel.id === selectedChannelId;
     const row = existing.get(channel.id) ?? channelRow(channel, selected);
-    updateChannelRow(row, channel, selected);
+    updateChannelRow(row, channel, selected, undefined, attention.get(channel.id));
     return row;
   });
   reconcileChildren(container, rows);
@@ -89,6 +89,7 @@ export function renderConversationNavigation(
   selectedChannelId: string | null,
   snapshot: Pick<ConversationSnapshot, "phase" | "error" | "participantId">,
   agentHealth: ReadonlyMap<string, string> = new Map(),
+  attention: ReadonlyMap<string, ConversationAttention> = new Map(),
 ): void {
   const active = conversations.filter(
     (conversation) =>
@@ -104,6 +105,7 @@ export function renderConversationNavigation(
     shared,
     selectedChannelId,
     snapshot,
+    attention,
   );
   renderDirectList(
     elements.directs,
@@ -111,6 +113,7 @@ export function renderConversationNavigation(
     selectedChannelId,
     snapshot,
     agentHealth,
+    attention,
   );
 }
 
@@ -120,6 +123,7 @@ function renderDirectList(
   selectedChannelId: string | null,
   snapshot: Pick<ConversationSnapshot, "phase" | "error" | "participantId">,
   agentHealth: ReadonlyMap<string, string>,
+  attention: ReadonlyMap<string, ConversationAttention>,
 ): void {
   container.setAttribute(
     "aria-busy",
@@ -151,16 +155,23 @@ function renderDirectList(
     );
     const label = peer ? displayName(peer.agent_name) : "Direct conversation";
     const row = existing.get(conversation.id) ?? channelRow(conversation, selected);
-    updateChannelRow(row, conversation, selected, {
-      label,
-      marker: avatarLabel(label),
-    });
+    updateChannelRow(
+      row,
+      conversation,
+      selected,
+      {
+        label,
+        marker: avatarLabel(label),
+      },
+      attention.get(conversation.id),
+    );
     if (peer) {
       row.dataset.directAgentId = peer.agent_id;
       row.dataset.agentHealth = agentHealth.get(peer.agent_id) ?? "unmanaged";
-      row.title = selected
+      const attentionDescription = row.dataset.attentionDescription;
+      row.title = `${selected
         ? `${peer.agent_name}, current direct message`
-        : `Direct message with ${peer.agent_name}`;
+        : `Direct message with ${peer.agent_name}`}${attentionDescription ? ` · ${attentionDescription}` : ""}`;
     }
     return row;
   });
@@ -187,8 +198,13 @@ export function channelRow(
   label.textContent = channel.name;
   content.append(label);
 
+  const attention = document.createElement("span");
+  attention.className = "nav-item__attention";
+  attention.hidden = true;
+  attention.setAttribute("aria-hidden", "true");
+
   const chevron = icon("chevron", "›", "nav-item__chevron");
-  button.append(marker, content, chevron);
+  button.append(marker, content, attention, chevron);
   updateChannelRow(button, channel, selected);
   return button;
 }
@@ -198,8 +214,10 @@ function updateChannelRow(
   channel: Channel,
   selected: boolean,
   presentation?: { readonly label: string; readonly marker: string },
+  attention?: ConversationAttention,
 ): void {
-  button.title = selected ? `${channel.name}, current channel` : channel.name;
+  const attentionDescription = updateAttentionBadge(button, attention);
+  button.title = `${selected ? `${channel.name}, current channel` : channel.name}${attentionDescription ? ` · ${attentionDescription}` : ""}`;
   const label = button.querySelector<HTMLElement>(".channel-label");
   if (label) label.textContent = presentation?.label ?? displayName(channel.name);
   const marker = button.querySelector<HTMLElement>(".channel-marker .ui-icon");
@@ -210,6 +228,37 @@ function updateChannelRow(
   } else {
     button.removeAttribute("aria-current");
   }
+  const labelText = presentation?.label ?? displayName(channel.name);
+  button.setAttribute(
+    "aria-label",
+    `${labelText}${selected ? ", current conversation" : ""}${attentionDescription ? `, ${attentionDescription}` : ""}`,
+  );
+}
+
+function updateAttentionBadge(
+  button: HTMLButtonElement,
+  attention?: ConversationAttention,
+): string | undefined {
+  const badge = button.querySelector<HTMLElement>(".nav-item__attention");
+  if (!badge) return undefined;
+  const unread = attention?.unread_count ?? 0;
+  const addressed = attention?.addressed_unread_count ?? 0;
+  const view = conversationAttentionBadge(attention);
+  button.dataset.unreadCount = String(unread);
+  button.dataset.addressedUnreadCount = String(addressed);
+  if (!view) {
+    badge.hidden = true;
+    badge.textContent = "";
+    delete badge.dataset.tone;
+    delete button.dataset.attentionDescription;
+    return undefined;
+  }
+  badge.hidden = false;
+  badge.dataset.tone = view.tone;
+  badge.textContent = view.text;
+  badge.title = view.description;
+  button.dataset.attentionDescription = view.description;
+  return view.description;
 }
 
 export function renderChannelHeader(
@@ -247,58 +296,6 @@ export function renderChannelHeader(
       : "Choose a conversation to begin.";
 }
 
-export function renderMemberTargets(
-  select: HTMLSelectElement,
-  members: readonly ChannelMember[],
-  participantId: string,
-  allowBroadcast = false,
-): string {
-  const prior = select.value;
-  const candidates = members
-    .filter((member) => member.agent_id !== participantId)
-    .map(memberOptionView);
-  if (candidates.length === 0 && !allowBroadcast) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "No other participants";
-    option.disabled = true;
-    select.replaceChildren(option);
-    select.value = "";
-    select.title = "This channel has no other message recipient.";
-    return "";
-  }
-  const existing = new Map(
-    Array.from(select.options).map((option) => [option.value, option]),
-  );
-  const broadcast = document.createElement("option");
-  broadcast.value = CHANNEL_BROADCAST_TARGET;
-  broadcast.textContent = "Everyone in this channel";
-  broadcast.title = "Send a channel message to every participant";
-  const options = candidates.map((candidate) => {
-    const option = existing.get(candidate.id) ?? document.createElement("option");
-    option.value = candidate.id;
-    option.textContent = candidate.label;
-    option.title = candidate.description;
-    return option;
-  });
-  const allOptions = allowBroadcast ? [broadcast, ...options] : options;
-  reconcileChildren(select, allOptions);
-  const priorIsValid =
-    candidates.some((candidate) => candidate.id === prior) ||
-    (allowBroadcast && prior === CHANNEL_BROADCAST_TARGET);
-  const selected = priorIsValid
-    ? prior
-    : (candidates.find((candidate) => candidate.preferred)?.id ??
-      candidates[0]?.id ??
-      "");
-  select.value = selected;
-  select.title = selected === CHANNEL_BROADCAST_TARGET
-    ? broadcast.title
-    : candidates.find((candidate) => candidate.id === selected)?.description ??
-      "Message recipient";
-  return selected;
-}
-
 export function renderEmptyConversation(
   snapshot: ConversationSnapshot,
   elements: {
@@ -323,6 +320,8 @@ export function renderEmptyConversation(
 export class MessageListView {
   readonly #container: HTMLElement;
   #channelId: string | null = null;
+  #firstUnreadSeq: number | null = null;
+  #unreadMarker?: HTMLElement;
 
   constructor(container: HTMLElement) {
     this.#container = container;
@@ -331,13 +330,38 @@ export class MessageListView {
   clear(): void {
     this.#container.replaceChildren();
     this.#channelId = null;
+    this.#firstUnreadSeq = null;
+    this.#unreadMarker = undefined;
+  }
+
+  /** Highest message whose leading edge has entered the visible message pane. */
+  visibleThroughSeq(): number | null {
+    const viewport = this.#container.getBoundingClientRect();
+    let through: number | null = null;
+    for (const article of this.#container.querySelectorAll<HTMLElement>(
+      "[data-message-seq]",
+    )) {
+      const sequence = Number(article.dataset.messageSeq);
+      const bounds = article.getBoundingClientRect();
+      if (
+        Number.isSafeInteger(sequence) &&
+        sequence >= 0 &&
+        bounds.top < viewport.bottom &&
+        bounds.bottom > viewport.top
+      ) {
+        through = through === null ? sequence : Math.max(through, sequence);
+      }
+    }
+    return through;
   }
 
   render(
     snapshot: ConversationSnapshot,
     contract: ConversationPresentationContract,
+    firstUnreadSeq: number | null = null,
   ): void {
     const changedChannel = this.#channelId !== snapshot.selectedChannelId;
+    const changedUnreadBoundary = this.#firstUnreadSeq !== firstUnreadSeq;
     const nearBottom = isNearBottom(this.#container);
     const anchor =
       !changedChannel && !nearBottom ? visibleAnchor(this.#container) : undefined;
@@ -350,14 +374,28 @@ export class MessageListView {
       const messageId = child.dataset.messageId;
       if (messageId) existing.set(messageId, child);
     }
-    const nodes = snapshot.messages.map((message) => {
+    const nodes: HTMLElement[] = [];
+    let unreadMarkerInserted = false;
+    for (const message of snapshot.messages) {
+      if (
+        !unreadMarkerInserted &&
+        firstUnreadSeq !== null &&
+        message.seq >= firstUnreadSeq
+      ) {
+        if (changedUnreadBoundary || !this.#unreadMarker) {
+          this.#unreadMarker = unreadMarker();
+        }
+        nodes.push(this.#unreadMarker);
+        unreadMarkerInserted = true;
+      }
       const current = existing.get(message.id);
       if (current?.dataset.messageSeq === String(message.seq)) {
         updateMessageLabels(current, message, snapshot.participantId, names);
-        return current;
+        nodes.push(current);
+      } else {
+        nodes.push(messageCard(message, snapshot.participantId, names, contract));
       }
-      return messageCard(message, snapshot.participantId, names, contract);
-    });
+    }
     reconcileChildren(this.#container, nodes);
     this.#container.setAttribute(
       "aria-busy",
@@ -366,12 +404,33 @@ export class MessageListView {
       ),
     );
     this.#channelId = snapshot.selectedChannelId;
-    if (changedChannel || nearBottom) {
+    this.#firstUnreadSeq = firstUnreadSeq;
+    if ((changedChannel || changedUnreadBoundary) && unreadMarkerInserted) {
+      const marker = this.#unreadMarker;
+      if (marker) {
+        this.#container.scrollTop = Math.max(
+          0,
+          marker.offsetTop - this.#container.offsetTop - 16,
+        );
+      }
+    } else if (changedChannel || nearBottom) {
       this.#container.scrollTop = this.#container.scrollHeight;
     } else if (anchor) {
       restoreAnchor(this.#container, anchor);
     }
   }
+}
+
+function unreadMarker(): HTMLElement {
+  const marker = document.createElement("div");
+  marker.className = "unread-marker";
+  marker.dataset.unreadMarker = "true";
+  marker.setAttribute("role", "separator");
+  marker.setAttribute("aria-label", "New messages");
+  const label = document.createElement("span");
+  label.textContent = "New messages";
+  marker.append(label);
+  return marker;
 }
 
 export function messageCard(

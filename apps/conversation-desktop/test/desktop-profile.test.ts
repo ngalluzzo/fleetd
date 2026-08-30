@@ -89,11 +89,78 @@ describe("desktop profile", () => {
     const profile = await loadDesktopProfile(profilePath);
     expect(profile.operatorCredential).toBe("operator-secret");
     expect(profile.participantCredential).toBe("participant-secret");
+    expect(profile.runtimeProfiles).toEqual([]);
 
     await chmod(participantPath, 0o644);
     await expect(loadDesktopProfile(profilePath)).rejects.toThrow(
       "must not grant group or other permissions",
     );
+  });
+
+  test("loads only public descriptors from a private v2 runtime catalog", async () => {
+    const directory = await privateDirectory();
+    const operatorPath = join(directory, "operator.token");
+    const participantPath = join(directory, "participant.token");
+    const catalogPath = join(directory, "worker-profiles.json");
+    const profilePath = join(directory, "profile.json");
+    await writeFile(operatorPath, "operator-secret", { mode: 0o600 });
+    await writeFile(participantPath, "participant-secret", { mode: 0o600 });
+    await writeFile(
+      catalogPath,
+      JSON.stringify({
+        schema_version: 2,
+        inference_backends: [
+          {
+            id: "local-qwen",
+            label: "Local Qwen",
+            plugin: {
+              executable: "/private/inference-plugin",
+              config: { model: "/private/model" },
+            },
+          },
+        ],
+        profiles: [
+          {
+            id: "opencode-default",
+            label: "OpenCode",
+            description: "Approved local runtime",
+            inference_backend: "local-qwen",
+            worker: {
+              schema_version: 2,
+              plugin: { executable: "/private/secret-executable" },
+            },
+          },
+        ],
+      }),
+      { mode: 0o600 },
+    );
+    await writeFile(
+      profilePath,
+      JSON.stringify({
+        schema_version: 2,
+        origin: "http://127.0.0.1:4317",
+        participant_id: "human-id",
+        operator_credential_file: operatorPath,
+        participant_credential_file: participantPath,
+        fleet_config_file: join(directory, "fleet.json"),
+        fleetd_executable: join(directory, "fleetd"),
+        worker_profiles_file: catalogPath,
+        request_kind: "conversation.prompt/v1",
+        result_kind: "conversation.result/v1",
+      }),
+      { mode: 0o600 },
+    );
+
+    const profile = await loadDesktopProfile(profilePath);
+    expect(profile.schemaVersion).toBe(2);
+    expect(profile.runtimeProfiles).toEqual([
+      {
+        id: "opencode-default",
+        label: "OpenCode",
+        description: "Approved local runtime",
+      },
+    ]);
+    expect(JSON.stringify(profile.runtimeProfiles)).not.toContain("executable");
   });
 
   test("rejects linked credential files and whitespace-bearing values", async () => {

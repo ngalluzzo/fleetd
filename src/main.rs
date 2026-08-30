@@ -39,7 +39,7 @@ async fn main() -> cli::MainResult<()> {
                 .with_filter(sensitive_transport_filter),
         )
         .init();
-    cli::run().await
+    Box::pin(cli::run()).await
 }
 
 #[cfg(test)]

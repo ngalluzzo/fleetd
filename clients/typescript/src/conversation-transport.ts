@@ -1,4 +1,5 @@
 import type {
+  ConversationAttention,
   Channel,
   ChannelMember,
   Message,
@@ -40,9 +41,14 @@ export interface OpenConversationStream {
 export interface ConversationTransport {
   readonly participantId: string;
   listChannels(): Promise<readonly Channel[]>;
+  listAttention(): Promise<readonly ConversationAttention[]>;
   listMembers(channelId: string): Promise<readonly ChannelMember[]>;
   openStream(options: OpenConversationStream): ConversationTransportStream;
   send(channelId: string, message: SendMessage): Promise<Message>;
+  advanceRead(
+    channelId: string,
+    throughSeq: number,
+  ): Promise<ConversationAttention>;
   close(): void;
 }
 
@@ -127,6 +133,19 @@ export function createBrowserConversationTransport(
         activeRequests,
       );
     },
+    async listAttention() {
+      assertOpen();
+      return requestJson<ConversationAttention[]>(
+        fetchImplementation,
+        origin,
+        "/v1/conversations/attention",
+        participantCredential,
+        { method: "GET" },
+        [200],
+        requestTimeoutMs,
+        activeRequests,
+      );
+    },
     openStream(streamOptions) {
       assertOpen();
       const stream = openBrowserChannelStream({
@@ -165,6 +184,27 @@ export function createBrowserConversationTransport(
           body: JSON.stringify(message),
         },
         [200, 201],
+        requestTimeoutMs,
+        activeRequests,
+      );
+    },
+    async advanceRead(channelId, throughSeq) {
+      assertOpen();
+      const exactChannelId = boundedIdentifier(channelId, "channelId");
+      if (!Number.isSafeInteger(throughSeq) || throughSeq < 0) {
+        throw new Error("throughSeq must be a non-negative safe integer");
+      }
+      return requestJson<ConversationAttention>(
+        fetchImplementation,
+        origin,
+        `/v1/channels/${encodeURIComponent(exactChannelId)}/read-cursor`,
+        participantCredential,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ through_seq: throughSeq }),
+        },
+        [200],
         requestTimeoutMs,
         activeRequests,
       );

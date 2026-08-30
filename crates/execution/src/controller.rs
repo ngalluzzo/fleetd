@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::operations;
+use crate::permission::{self, PermissionPolicy};
 use crate::session_binding;
 use crate::settlement;
 use crate::trajectory::{
@@ -15,7 +16,7 @@ use crate::trajectory::{
 use fleetd_kernel::{error::FleetError, store::Store};
 use fleetd_plugin_host::{
     Binding, HarnessAcpClient, HarnessAcpNotification, HarnessExecutionCertainty,
-    PermissionOutcome, PermissionResolution, PromptBlock, StartTurn, TurnPolicy, TurnSource,
+    PermissionResolution, PromptBlock, StartTurn, TurnPolicy, TurnSource,
 };
 use fleetd_proto::model::{
     ArmInvocation, BlockDelivery, BlockedDelivery, CompleteInvocation, Invocation,
@@ -42,6 +43,22 @@ pub struct ManagedTurn {
     pub result_capture: TurnResultCapture,
     /// Adapter-owned immutable context copied into the raw result evidence.
     pub result_context: serde_json::Value,
+    /// Controller-owned consent policy. `AllowOnce` is admitted by worker
+    /// validation only for an OS-sandboxed plugin process.
+    pub permission_policy: PermissionPolicy,
+    /// Optional host-owned signal that can stop this turn before its wall
+    /// deadline. The controller still requires terminal evidence and revokes
+    /// grants before settlement.
+    pub interruption: Option<BoxFuture<'static, ManagedTurnInterruption>>,
+}
+
+/// A reason outside the harness that should stop an active turn.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ManagedTurnInterruption {
+    /// The worker seat is shutting down or being replaced.
+    WorkerShutdown,
+    /// A newer accepted message is waiting in the same channel lane.
+    NewerMessage { message_id: String },
 }
 
 /// Invocation-scoped authority made available to a harness turn.
@@ -70,6 +87,10 @@ pub enum TurnResultCapture {
 #[derive(Debug)]
 pub enum ManagedTurnOutcome {
     Completed(Box<InvocationCompletion>),
+    Interrupted {
+        completion: Box<InvocationCompletion>,
+        interruption: ManagedTurnInterruption,
+    },
     Blocked(Box<BlockedDelivery>),
 }
 
@@ -190,6 +211,8 @@ impl<'store> ManagedHarnessController<'store> {
             result_kind,
             result_capture,
             result_context,
+            permission_policy,
+            interruption,
         } = turn;
         session_binding::arm_session_invocation(
             self.store,
@@ -219,27 +242,8 @@ impl<'store> ManagedHarnessController<'store> {
             }
         }
 
-        let fence = fleetd_plugin_host::ExecutionFence {
-            binding_id: binding.binding_id.clone(),
-            binding_generation: binding.binding_generation,
-            owner_epoch: binding.owner_epoch,
-            invocation_id: invocation.id.clone(),
-            fence_token: invocation.fence_token.clone(),
-        };
-        let request = StartTurn {
-            fence: fence.clone(),
-            session_ref,
-            source: TurnSource {
-                agent_id: invocation.agent_id.clone(),
-                message_id: invocation.message.id.clone(),
-                channel_id: invocation.message.channel_id.clone(),
-                sender_id: invocation.message.sender_id.clone(),
-                correlation_id: invocation.message.correlation_id.clone(),
-                causation_id: invocation.message.causation_id.clone(),
-            },
-            prompt,
-            policy: policy.clone(),
-        };
+        let request = start_turn_request(&invocation, &binding, session_ref, prompt, &policy);
+        let fence = request.fence.clone();
         if let Err(error) = harness.start_turn(&request).await {
             revoke_grants(&grants, &invocation.id).await;
             return self
@@ -250,11 +254,15 @@ impl<'store> ManagedHarnessController<'store> {
         let terminal_result = self
             .await_terminal(
                 harness,
-                &invocation,
-                &generation_id,
-                &binding,
-                &fence,
-                &policy,
+                TerminalWait {
+                    invocation: &invocation,
+                    generation_id: &generation_id,
+                    binding: &binding,
+                    fence: &fence,
+                    policy: &policy,
+                    permission_policy,
+                    interruption,
+                },
             )
             .await;
         revoke_grants(&grants, &invocation.id).await;
@@ -278,79 +286,126 @@ impl<'store> ManagedHarnessController<'store> {
     async fn await_terminal(
         &self,
         harness: &mut HarnessAcpClient,
-        invocation: &Invocation,
-        generation_id: &str,
-        binding: &Binding,
-        fence: &fleetd_plugin_host::ExecutionFence,
-        policy: &TurnPolicy,
+        wait: TerminalWait<'_>,
     ) -> Result<TerminalDrain, ManagedTurnError> {
-        match tokio::time::timeout(
-            Duration::from_millis(policy.wall_timeout_ms),
-            drain_turn(
+        let TerminalWait {
+            invocation,
+            generation_id,
+            binding,
+            fence,
+            policy,
+            permission_policy,
+            interruption,
+        } = wait;
+        let initial = {
+            let drain = drain_turn(
                 self.store,
                 generation_id,
                 harness,
                 fence,
                 self.sink.as_deref(),
+                permission_policy,
+            );
+            tokio::pin!(drain);
+            let wall_deadline = tokio::time::sleep(Duration::from_millis(policy.wall_timeout_ms));
+            tokio::pin!(wall_deadline);
+            let interruption = async move {
+                match interruption {
+                    Some(interruption) => interruption.await,
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::pin!(interruption);
+            tokio::select! {
+                biased;
+                result = &mut drain => InitialDrain::Finished(Box::new(result)),
+                stop = &mut interruption => InitialDrain::Stopped(HostStopReason::from(stop)),
+                () = &mut wall_deadline => InitialDrain::Stopped(HostStopReason::WallDeadline),
+            }
+        };
+        match initial {
+            InitialDrain::Finished(result) => match *result {
+                Ok(terminal) => Ok(TerminalDrain::Terminal(TerminalEvidence {
+                    terminal: Box::new(terminal),
+                    host_stop_reason: None,
+                })),
+                Err(error) => {
+                    self.blocked_drain(
+                        invocation,
+                        binding,
+                        format!("turn evidence failed: {error}"),
+                    )
+                    .await
+                }
+            },
+            InitialDrain::Stopped(host_stop_reason) => {
+                self.cancel_and_drain(
+                    harness,
+                    CancelWait {
+                        invocation,
+                        generation_id,
+                        binding,
+                        fence,
+                        policy,
+                        permission_policy,
+                    },
+                    host_stop_reason,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn cancel_and_drain(
+        &self,
+        harness: &mut HarnessAcpClient,
+        wait: CancelWait<'_>,
+        host_stop_reason: HostStopReason,
+    ) -> Result<TerminalDrain, ManagedTurnError> {
+        if let Err(error) = harness.cancel_turn(host_stop_reason.cancel_reason()).await {
+            return self
+                .blocked_drain(
+                    wait.invocation,
+                    wait.binding,
+                    format!(
+                        "host {} cancellation failed: {error}",
+                        host_stop_reason.cancel_reason()
+                    ),
+                )
+                .await;
+        }
+        match tokio::time::timeout(
+            Duration::from_millis(wait.policy.cancel_drain_timeout_ms),
+            drain_turn(
+                self.store,
+                wait.generation_id,
+                harness,
+                wait.fence,
+                self.sink.as_deref(),
+                wait.permission_policy,
             ),
         )
         .await
         {
             Ok(Ok(terminal)) => Ok(TerminalDrain::Terminal(TerminalEvidence {
                 terminal: Box::new(terminal),
-                host_stop_reason: None,
+                host_stop_reason: Some(host_stop_reason),
             })),
             Ok(Err(error)) => {
                 self.blocked_drain(
-                    invocation,
-                    binding,
-                    format!("turn evidence failed: {error}"),
+                    wait.invocation,
+                    wait.binding,
+                    format!("cancel drain failed: {error}"),
                 )
                 .await
             }
             Err(_) => {
-                if let Err(error) = harness.cancel_turn("wall_deadline").await {
-                    return self
-                        .blocked_drain(
-                            invocation,
-                            binding,
-                            format!("host wall deadline cancellation failed: {error}"),
-                        )
-                        .await;
-                }
-                match tokio::time::timeout(
-                    Duration::from_millis(policy.cancel_drain_timeout_ms),
-                    drain_turn(
-                        self.store,
-                        generation_id,
-                        harness,
-                        fence,
-                        self.sink.as_deref(),
-                    ),
+                self.blocked_drain(
+                    wait.invocation,
+                    wait.binding,
+                    "cancel drain deadline exceeded".to_owned(),
                 )
                 .await
-                {
-                    Ok(Ok(terminal)) => Ok(TerminalDrain::Terminal(TerminalEvidence {
-                        terminal: Box::new(terminal),
-                        host_stop_reason: Some(HostStopReason::WallDeadline),
-                    })),
-                    Ok(Err(error)) => {
-                        self.blocked_drain(
-                            invocation,
-                            binding,
-                            format!("cancel drain failed: {error}"),
-                        )
-                        .await
-                    }
-                    Err(_) => {
-                        self.blocked_drain(
-                            invocation,
-                            binding,
-                            "cancel drain deadline exceeded".to_owned(),
-                        )
-                        .await
-                    }
-                }
             }
         }
     }
@@ -368,6 +423,9 @@ impl<'store> ManagedHarnessController<'store> {
             terminal,
             host_stop_reason,
         } = terminal_evidence;
+        let interruption = host_stop_reason
+            .as_ref()
+            .and_then(HostStopReason::interruption);
         let terminal = *terminal;
         if terminal.execution_certainty == HarnessExecutionCertainty::OutcomeUnknown
             || !terminal.session_quiescent
@@ -411,7 +469,14 @@ impl<'store> ManagedHarnessController<'store> {
                 usage: &terminal.usage,
             },
         );
-        Ok(ManagedTurnOutcome::Completed(Box::new(completion)))
+        if let Some(interruption) = interruption {
+            Ok(ManagedTurnOutcome::Interrupted {
+                completion: Box::new(completion),
+                interruption,
+            })
+        } else {
+            Ok(ManagedTurnOutcome::Completed(Box::new(completion)))
+        }
     }
 
     async fn block_after_arm(
@@ -465,6 +530,35 @@ impl<'store> ManagedHarnessController<'store> {
     }
 }
 
+fn start_turn_request(
+    invocation: &Invocation,
+    binding: &Binding,
+    session_ref: String,
+    prompt: Vec<PromptBlock>,
+    policy: &TurnPolicy,
+) -> StartTurn {
+    StartTurn {
+        fence: fleetd_plugin_host::ExecutionFence {
+            binding_id: binding.binding_id.clone(),
+            binding_generation: binding.binding_generation,
+            owner_epoch: binding.owner_epoch,
+            invocation_id: invocation.id.clone(),
+            fence_token: invocation.fence_token.clone(),
+        },
+        session_ref,
+        source: TurnSource {
+            agent_id: invocation.agent_id.clone(),
+            message_id: invocation.message.id.clone(),
+            channel_id: invocation.message.channel_id.clone(),
+            sender_id: invocation.message.sender_id.clone(),
+            correlation_id: invocation.message.correlation_id.clone(),
+            causation_id: invocation.message.causation_id.clone(),
+        },
+        prompt,
+        policy: policy.clone(),
+    }
+}
+
 fn terminal_payload(
     invocation_id: &str,
     result_capture: TurnResultCapture,
@@ -477,7 +571,7 @@ fn terminal_payload(
         .iter()
         .all(|message| message.complete);
     let terminal_stop_reason = terminal.stop_reason.clone();
-    let effective_stop_reason = host_stop_reason.map_or_else(
+    let effective_stop_reason = host_stop_reason.as_ref().map_or_else(
         || terminal_stop_reason.clone(),
         |reason| reason.as_str().to_owned(),
     );
@@ -494,9 +588,19 @@ fn terminal_payload(
         && runtime_stop_reason.is_none()
         && terminal_stop_reason == "end_turn"
         && transcript_complete;
+    let result_status = if host_stop_reason
+        .as_ref()
+        .is_some_and(HostStopReason::is_interruption)
+    {
+        "interrupted"
+    } else if terminal_success {
+        "completed"
+    } else {
+        "failed"
+    };
     let mut payload = match result_capture {
         TurnResultCapture::Transcript => json!({
-            "status": if terminal_success { "completed" } else { "failed" },
+            "status": result_status,
             "invocation_id": invocation_id,
             "stop_reason": effective_stop_reason,
             "output_complete": transcript_complete,
@@ -509,7 +613,7 @@ fn terminal_payload(
             let structured_result = capture_final_assistant_json(&terminal.assistant_messages);
             let structured_captured = structured_result["status"] == "captured";
             json!({
-                "status": if terminal_success && structured_captured { "completed" } else { "failed" },
+                "status": if result_status == "interrupted" { "interrupted" } else if terminal_success && structured_captured { "completed" } else { "failed" },
                 "invocation_id": invocation_id,
                 "stop_reason": effective_stop_reason,
                 "transcript_complete": transcript_complete,
@@ -528,6 +632,15 @@ fn terminal_payload(
             .insert(
                 "runtime_stop_reason".to_owned(),
                 Value::String(runtime_stop_reason),
+            );
+    }
+    if let Some(HostStopReason::NewerMessage { message_id }) = host_stop_reason {
+        payload
+            .as_object_mut()
+            .expect("managed result payloads are objects")
+            .insert(
+                "interrupted_by_message_id".to_owned(),
+                Value::String(message_id),
             );
     }
     payload
@@ -606,15 +719,52 @@ fn select_final_assistant_message(
     Ok((final_message, "last_identified_assistant_message"))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum HostStopReason {
     WallDeadline,
+    WorkerShutdown,
+    NewerMessage { message_id: String },
 }
 
 impl HostStopReason {
-    const fn as_str(self) -> &'static str {
+    const fn as_str(&self) -> &'static str {
         match self {
             Self::WallDeadline => "host_wall_deadline",
+            Self::WorkerShutdown => "host_worker_shutdown",
+            Self::NewerMessage { .. } => "host_newer_message",
+        }
+    }
+
+    const fn cancel_reason(&self) -> &'static str {
+        match self {
+            Self::WallDeadline => "wall_deadline",
+            Self::WorkerShutdown => "worker_shutdown",
+            Self::NewerMessage { .. } => "newer_message",
+        }
+    }
+
+    const fn is_interruption(&self) -> bool {
+        matches!(self, Self::WorkerShutdown | Self::NewerMessage { .. })
+    }
+
+    fn interruption(&self) -> Option<ManagedTurnInterruption> {
+        match self {
+            Self::WorkerShutdown => Some(ManagedTurnInterruption::WorkerShutdown),
+            Self::NewerMessage { message_id } => Some(ManagedTurnInterruption::NewerMessage {
+                message_id: message_id.clone(),
+            }),
+            Self::WallDeadline => None,
+        }
+    }
+}
+
+impl From<ManagedTurnInterruption> for HostStopReason {
+    fn from(value: ManagedTurnInterruption) -> Self {
+        match value {
+            ManagedTurnInterruption::WorkerShutdown => Self::WorkerShutdown,
+            ManagedTurnInterruption::NewerMessage { message_id } => {
+                Self::NewerMessage { message_id }
+            }
         }
     }
 }
@@ -624,9 +774,33 @@ struct TerminalEvidence {
     host_stop_reason: Option<HostStopReason>,
 }
 
+struct TerminalWait<'a> {
+    invocation: &'a Invocation,
+    generation_id: &'a str,
+    binding: &'a Binding,
+    fence: &'a fleetd_plugin_host::ExecutionFence,
+    policy: &'a TurnPolicy,
+    permission_policy: PermissionPolicy,
+    interruption: Option<BoxFuture<'static, ManagedTurnInterruption>>,
+}
+
+struct CancelWait<'a> {
+    invocation: &'a Invocation,
+    generation_id: &'a str,
+    binding: &'a Binding,
+    fence: &'a fleetd_plugin_host::ExecutionFence,
+    policy: &'a TurnPolicy,
+    permission_policy: PermissionPolicy,
+}
+
 enum TerminalDrain {
     Terminal(TerminalEvidence),
     Blocked(Box<BlockedDelivery>),
+}
+
+enum InitialDrain {
+    Finished(Box<Result<fleetd_plugin_host::TurnTerminal, TurnDrainError>>),
+    Stopped(HostStopReason),
 }
 
 async fn drain_turn(
@@ -635,6 +809,7 @@ async fn drain_turn(
     harness: &mut HarnessAcpClient,
     fence: &fleetd_plugin_host::ExecutionFence,
     sink: Option<&dyn TrajectorySink>,
+    permission_policy: PermissionPolicy,
 ) -> Result<fleetd_plugin_host::TurnTerminal, TurnDrainError> {
     loop {
         match harness.next_notification().await? {
@@ -660,7 +835,11 @@ async fn drain_turn(
                 }
             }
             HarnessAcpNotification::PermissionRequested(permission) => {
-                let raw = serde_json::to_value(&permission)?;
+                let decision = permission::decide(permission_policy, &permission);
+                let mut raw = serde_json::to_value(&permission)?;
+                raw.as_object_mut()
+                    .expect("permission requests serialize as objects")
+                    .insert("controller_resolution".to_owned(), decision.evidence);
                 let observed_at_ms = fleetd_kernel::store::now_ms();
                 operations::record_invocation_event(
                     store,
@@ -685,7 +864,7 @@ async fn drain_turn(
                     .resolve_permission(&PermissionResolution {
                         fence: fence.clone(),
                         permission_id: permission.permission_id,
-                        outcome: PermissionOutcome::Cancelled,
+                        outcome: decision.outcome,
                     })
                     .await?;
             }

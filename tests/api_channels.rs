@@ -1,11 +1,184 @@
 //! Authorization over channels, membership, and durable messages.
 
-use fleetd::model::{ClaimBatch, IssuedCredential, Message, MessagePage, SendMessage};
+use fleetd::model::{
+    ClaimBatch, ConversationAttention, IssuedCredential, Message, MessagePage, SendMessage,
+};
 use serde_json::json;
 
 mod common;
 
 use common::api::{Daemon, claim, post_message, send_message};
+
+#[tokio::test]
+async fn personal_attention_is_agent_owned_exact_and_monotonic() {
+    let server = Daemon::start().await;
+    let sender = server.register("attention-api-sender").await;
+    let reader = server.register("attention-api-reader").await;
+    let outsider = server.register("attention-api-outsider").await;
+    let channel = server.channel(&[&sender.agent.id, &reader.agent.id]).await;
+    let addressed = send_message(&server, &channel.id, &sender, &reader.agent.id).await;
+    let other_channel: fleetd::model::Channel = server
+        .post("/v1/channels", Some(&server.operator_token))
+        .json(&json!({
+            "name": "attention-api-gap-channel",
+            "metadata": {},
+            "member_ids": [sender.agent.id, outsider.agent.id],
+            "members": [],
+        }))
+        .send()
+        .await
+        .expect("interleaved channel request")
+        .error_for_status()
+        .expect("interleaved channel response")
+        .json()
+        .await
+        .expect("interleaved channel body");
+    let interleaved = send_message(&server, &other_channel.id, &sender, &outsider.agent.id).await;
+    let broadcast: Message = server
+        .post(
+            &format!("/v1/channels/{}/messages", channel.id),
+            Some(&sender.credential.token),
+        )
+        .json(&SendMessage {
+            idempotency_key: None,
+            recipient_id: None,
+            kind: "text".to_owned(),
+            payload: json!({ "text": "shared update" }),
+            correlation_id: None,
+            causation_id: None,
+        })
+        .send()
+        .await
+        .expect("broadcast request")
+        .error_for_status()
+        .expect("broadcast response")
+        .json()
+        .await
+        .expect("broadcast body");
+
+    let attention = list_attention(&server, &reader.credential.token).await;
+    assert_eq!(
+        attention,
+        vec![ConversationAttention {
+            channel_id: channel.id.clone(),
+            read_through_seq: 0,
+            latest_message_seq: Some(broadcast.seq),
+            unread_count: 2,
+            addressed_unread_count: 1,
+            first_unread_seq: Some(addressed.seq),
+            first_addressed_unread_seq: Some(addressed.seq),
+        }]
+    );
+
+    let advanced = advance_attention(
+        &server,
+        &reader.credential.token,
+        &channel.id,
+        addressed.seq,
+    )
+    .await;
+    assert_eq!(advanced.read_through_seq, addressed.seq);
+    assert_eq!(advanced.unread_count, 1);
+    assert_eq!(advanced.addressed_unread_count, 0);
+
+    let stale = advance_attention(&server, &reader.credential.token, &channel.id, 0).await;
+    assert_eq!(stale.read_through_seq, addressed.seq);
+
+    assert_attention_rejections(
+        &server,
+        &reader.credential.token,
+        &outsider.credential.token,
+        &channel.id,
+        addressed.seq,
+        interleaved.seq,
+        broadcast.seq,
+    )
+    .await;
+}
+
+async fn assert_attention_rejections(
+    server: &Daemon,
+    reader_token: &str,
+    outsider_token: &str,
+    channel_id: &str,
+    addressed_seq: i64,
+    other_channel_seq: i64,
+    latest_seq: i64,
+) {
+    for (label, through_seq) in [
+        ("future", latest_seq + 1),
+        ("other-channel", other_channel_seq),
+    ] {
+        let response = server
+            .request(
+                reqwest::Method::PUT,
+                &format!("/v1/channels/{channel_id}/read-cursor"),
+                Some(reader_token),
+            )
+            .json(&json!({ "through_seq": through_seq }))
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("{label} cursor request: {error}"));
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "{label}"
+        );
+    }
+    let outsider = server
+        .request(
+            reqwest::Method::PUT,
+            &format!("/v1/channels/{channel_id}/read-cursor"),
+            Some(outsider_token),
+        )
+        .json(&json!({ "through_seq": addressed_seq }))
+        .send()
+        .await
+        .expect("outsider request");
+    assert_eq!(outsider.status(), reqwest::StatusCode::FORBIDDEN);
+    let operator = server
+        .get("/v1/conversations/attention", Some(&server.operator_token))
+        .send()
+        .await
+        .expect("operator attention request");
+    assert_eq!(operator.status(), reqwest::StatusCode::FORBIDDEN);
+}
+
+async fn list_attention(server: &Daemon, token: &str) -> Vec<ConversationAttention> {
+    server
+        .get("/v1/conversations/attention", Some(token))
+        .send()
+        .await
+        .expect("attention request")
+        .error_for_status()
+        .expect("attention response")
+        .json()
+        .await
+        .expect("attention body")
+}
+
+async fn advance_attention(
+    server: &Daemon,
+    token: &str,
+    channel_id: &str,
+    through_seq: i64,
+) -> ConversationAttention {
+    server
+        .request(
+            reqwest::Method::PUT,
+            &format!("/v1/channels/{channel_id}/read-cursor"),
+            Some(token),
+        )
+        .json(&json!({ "through_seq": through_seq }))
+        .send()
+        .await
+        .expect("advance request")
+        .error_for_status()
+        .expect("advance response")
+        .json()
+        .await
+        .expect("advance body")
+}
 
 #[tokio::test]
 async fn channel_membership_listing_is_exact_bounded_and_authorized() {

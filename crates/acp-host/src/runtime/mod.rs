@@ -209,6 +209,21 @@ impl DriverRuntime {
         }
     }
 
+    /// Operational generations this initialized runtime can actually serve.
+    ///
+    /// ACP reserves transcript replay for `session/load`. A resumable runtime
+    /// that intentionally omits load can still provide the complete managed
+    /// turn interface, but it must not promise Fleetd's transcript generation.
+    pub(crate) fn declared_interfaces(&self) -> Vec<fleetd_proto::plugin::PluginInterface> {
+        let supports_transcript_replay = self
+            .description
+            .agent_capabilities
+            .get("loadSession")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        fleetd_proto::harness_acp::declared_interfaces(supports_transcript_replay)
+    }
+
     pub async fn stop(&mut self) {
         let (reply_tx, reply_rx) = oneshot::channel();
         let _unused = self.commands.send(Command::Stop { reply: reply_tx }).await;

@@ -9,6 +9,7 @@
 
 pub mod error;
 pub mod harness_acp;
+pub mod inference_openai;
 pub mod model;
 pub mod operations;
 pub mod plugin;

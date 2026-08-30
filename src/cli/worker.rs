@@ -6,8 +6,14 @@ use clap::{Args, Subcommand};
 use fleetd_otlp::config::EgressRequest;
 
 use fleetd::{
-    execution::worker::{ContinuousHarnessWorker, ContinuousWorkerConfig, EnvelopeTurnAdapter},
-    plugin::{PluginSpec, ToolBudget, TurnPolicy, harness_acp_interface},
+    execution::{
+        permission::PermissionPolicy,
+        worker::{ContinuousHarnessWorker, ContinuousWorkerConfig, EnvelopeTurnAdapter},
+    },
+    plugin::{
+        MacOsSeatbeltSandbox, PluginSpec, SandboxNetwork, ToolBudget, TurnPolicy,
+        harness_acp_interface,
+    },
     store::Store,
 };
 use serde::Deserialize;
@@ -18,10 +24,14 @@ pub type MainResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 use super::{print_json, shutdown_signal};
 
+use super::worker_supervisor::{WorkerSuperviseArgs, supervise_workers};
+
 #[derive(Subcommand)]
 pub(super) enum WorkerCommand {
     /// Continuously reserve and execute one agent's inbox.
     Run(WorkerRunArgs),
+    /// Keep configured agent identities running from an approved local catalog.
+    Supervise(WorkerSuperviseArgs),
 }
 
 #[derive(Args)]
@@ -37,7 +47,7 @@ pub(super) struct WorkerRunArgs {
     once: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WorkerFileConfig {
     schema_version: u32,
@@ -49,6 +59,12 @@ pub(super) struct WorkerFileConfig {
     mcp_grants: Vec<String>,
     #[serde(default)]
     compatibility_digest: Option<String>,
+    /// Optional kernel-enforced process boundary for this seat.
+    #[serde(default)]
+    sandbox: Option<WorkerSandboxConfig>,
+    /// Operator-authored standing instructions for this stable identity.
+    #[serde(default)]
+    instructions: String,
     pub(super) plugin: WorkerPluginConfig,
     adapter: WorkerAdapterConfig,
     #[serde(default = "default_result_kind")]
@@ -109,7 +125,7 @@ pub(super) struct InboundAcceptanceConfig {
     message_kinds: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WorkerPluginConfig {
     id: String,
@@ -117,7 +133,7 @@ pub(super) struct WorkerPluginConfig {
     #[serde(default)]
     args: Vec<String>,
     #[serde(default = "empty_json_object")]
-    config: Value,
+    pub(super) config: Value,
     #[serde(default = "default_initialize_timeout_ms")]
     initialize_timeout_ms: u64,
     #[serde(default = "default_request_timeout_ms")]
@@ -126,7 +142,165 @@ pub(super) struct WorkerPluginConfig {
     shutdown_timeout_ms: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum WorkerSandboxConfig {
+    MacosSeatbelt {
+        #[serde(default)]
+        posture: WorkerSandboxPosture,
+        #[serde(default)]
+        read_access: WorkerSandboxReadAccess,
+        #[serde(default)]
+        writable_directories: Vec<PathBuf>,
+        #[serde(default)]
+        private_state_directory: Option<PathBuf>,
+        #[serde(default)]
+        private_temp_directory: Option<PathBuf>,
+        #[serde(default)]
+        read_only_directories: Vec<PathBuf>,
+        #[serde(default)]
+        network: WorkerSandboxNetwork,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum WorkerSandboxPosture {
+    #[default]
+    Strict,
+    WriteScoped,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum WorkerSandboxReadAccess {
+    #[default]
+    DeclaredAndSystem,
+    Unrestricted,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum WorkerSandboxNetwork {
+    #[default]
+    Deny,
+    AllowOutbound,
+    Unrestricted,
+}
+
+impl WorkerSandboxConfig {
+    fn into_sandbox(
+        self,
+        working_directory: &std::path::Path,
+        additional_directories: &[PathBuf],
+    ) -> MainResult<MacOsSeatbeltSandbox> {
+        let Self::MacosSeatbelt {
+            posture,
+            read_access,
+            writable_directories,
+            private_state_directory,
+            private_temp_directory,
+            read_only_directories,
+            network,
+        } = self;
+        let mut writable_roots = vec![working_directory.to_path_buf()];
+        writable_roots.extend(additional_directories.iter().cloned());
+        writable_roots.extend(writable_directories);
+        let sandbox = match posture {
+            WorkerSandboxPosture::Strict => strict_seatbelt(
+                writable_roots,
+                read_access,
+                read_only_directories,
+                private_state_directory.is_some(),
+                private_temp_directory.is_some(),
+                network,
+            ),
+            WorkerSandboxPosture::WriteScoped => write_scoped_seatbelt(
+                writable_roots,
+                read_access,
+                read_only_directories.is_empty(),
+                private_state_directory,
+                private_temp_directory,
+                network,
+            ),
+        };
+        sandbox.map_err(|error| format!("worker sandbox configuration is invalid: {error}").into())
+    }
+}
+
+fn strict_seatbelt(
+    writable_roots: Vec<PathBuf>,
+    read_access: WorkerSandboxReadAccess,
+    read_only_directories: Vec<PathBuf>,
+    has_private_state_directory: bool,
+    has_private_temp_directory: bool,
+    network: WorkerSandboxNetwork,
+) -> Result<MacOsSeatbeltSandbox, String> {
+    if read_access != WorkerSandboxReadAccess::DeclaredAndSystem {
+        return Err(
+            "strict macOS Seatbelt posture requires read_access=declared_and_system".to_owned(),
+        );
+    }
+    if has_private_state_directory || has_private_temp_directory {
+        return Err(
+            "strict macOS Seatbelt posture does not accept write_scoped private state/temp fields"
+                .to_owned(),
+        );
+    }
+    let network = match network {
+        WorkerSandboxNetwork::Deny => SandboxNetwork::Deny,
+        WorkerSandboxNetwork::AllowOutbound => SandboxNetwork::AllowOutbound,
+        WorkerSandboxNetwork::Unrestricted => {
+            return Err(
+                "strict macOS Seatbelt posture does not permit unrestricted network".to_owned(),
+            );
+        }
+    };
+    MacOsSeatbeltSandbox::new(writable_roots, read_only_directories, network)
+}
+
+fn write_scoped_seatbelt(
+    mut writable_roots: Vec<PathBuf>,
+    read_access: WorkerSandboxReadAccess,
+    read_only_directories_empty: bool,
+    private_state_directory: Option<PathBuf>,
+    private_temp_directory: Option<PathBuf>,
+    network: WorkerSandboxNetwork,
+) -> Result<MacOsSeatbeltSandbox, String> {
+    if read_access != WorkerSandboxReadAccess::Unrestricted {
+        return Err(
+            "write_scoped macOS Seatbelt posture requires read_access=unrestricted".to_owned(),
+        );
+    }
+    if network != WorkerSandboxNetwork::Unrestricted {
+        return Err("write_scoped macOS Seatbelt posture requires network=unrestricted".to_owned());
+    }
+    if !read_only_directories_empty {
+        return Err(
+            "write_scoped macOS Seatbelt posture cannot declare read-only roots because reads are unrestricted"
+                .to_owned(),
+        );
+    }
+    let state = private_state_directory.ok_or_else(|| {
+        "write_scoped macOS Seatbelt posture requires private_state_directory".to_owned()
+    })?;
+    let temp = private_temp_directory.ok_or_else(|| {
+        "write_scoped macOS Seatbelt posture requires private_temp_directory".to_owned()
+    })?;
+    writable_roots.push(state);
+    writable_roots.push(temp);
+    MacOsSeatbeltSandbox::write_scoped(writable_roots)
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WorkerPermissionPolicy {
+    #[default]
+    Deny,
+    AllowOnce,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WorkerTurnConfig {
     #[serde(default = "default_idle_timeout_ms")]
@@ -135,10 +309,16 @@ pub(super) struct WorkerTurnConfig {
     wall_timeout_ms: u64,
     #[serde(default = "default_cancel_drain_timeout_ms")]
     cancel_drain_timeout_ms: u64,
+    #[serde(default = "default_interrupt_on_new_message")]
+    interrupt_on_new_message: bool,
+    #[serde(default = "default_interrupt_poll_interval_ms")]
+    interrupt_poll_interval_ms: u64,
     #[serde(default = "default_captured_output_bytes")]
     max_captured_output_bytes: usize,
     #[serde(default = "default_tool_budget")]
     tool_budget: u64,
+    #[serde(default)]
+    permission_policy: WorkerPermissionPolicy,
 }
 
 impl Default for WorkerTurnConfig {
@@ -147,8 +327,11 @@ impl Default for WorkerTurnConfig {
             idle_timeout_ms: default_idle_timeout_ms(),
             wall_timeout_ms: default_wall_timeout_ms(),
             cancel_drain_timeout_ms: default_cancel_drain_timeout_ms(),
+            interrupt_on_new_message: default_interrupt_on_new_message(),
+            interrupt_poll_interval_ms: default_interrupt_poll_interval_ms(),
             max_captured_output_bytes: default_captured_output_bytes(),
             tool_budget: default_tool_budget(),
+            permission_policy: WorkerPermissionPolicy::Deny,
         }
     }
 }
@@ -165,6 +348,17 @@ pub(super) fn load_worker_config(path: &std::path::Path) -> MainResult<WorkerFil
             path.display()
         )
     })?;
+    parse_worker_config_value(value).map_err(|error| {
+        format!(
+            "worker configuration {} is invalid: {error}",
+            path.display()
+        )
+        .into()
+    })
+}
+
+/// Parses a complete worker value after its caller establishes provenance.
+pub(super) fn parse_worker_config_value(value: Value) -> MainResult<WorkerFileConfig> {
     let schema_version = value.get("schema_version").and_then(Value::as_u64);
     if schema_version != Some(2) {
         let observed =
@@ -174,12 +368,7 @@ pub(super) fn load_worker_config(path: &std::path::Path) -> MainResult<WorkerFil
         )
         .into());
     }
-    let desired: WorkerFileConfig = serde_json::from_value(value).map_err(|error| {
-        format!(
-            "worker configuration {} is invalid: {error}",
-            path.display()
-        )
-    })?;
+    let desired: WorkerFileConfig = serde_json::from_value(value)?;
     debug_assert_eq!(desired.schema_version, 2);
     Ok(desired)
 }
@@ -189,7 +378,8 @@ pub(super) async fn worker_command(
     fleet: &fleetd_fleet::ResolvedFleet,
 ) -> MainResult<()> {
     match command {
-        WorkerCommand::Run(args) => run_worker(args, fleet).await,
+        WorkerCommand::Run(args) => Box::pin(run_worker(args, fleet)).await,
+        WorkerCommand::Supervise(args) => supervise_workers(args, fleet).await,
     }
 }
 
@@ -208,6 +398,25 @@ pub(super) async fn run_worker(
         tokio::fs::create_dir_all(parent).await?;
     }
     let store = Store::open_with_message_commit_hints(&db).await?;
+    let cancellation = CancellationToken::new();
+    let signal = cancellation.clone();
+    let signal_task = tokio::spawn(async move {
+        shutdown_signal().await;
+        signal.cancel();
+    });
+    let report = run_loaded_worker(store, desired, cancellation, args.once.then_some(1)).await;
+    signal_task.abort();
+    print_json(&report?)
+}
+
+/// Provisions the transports one loaded seat needs, then runs it until its
+/// cancellation fence closes.
+pub(super) async fn run_loaded_worker(
+    store: Store,
+    desired: WorkerFileConfig,
+    cancellation: CancellationToken,
+    max_settled_turns: Option<u64>,
+) -> MainResult<fleetd::execution::worker::WorkerReport> {
     let adapter = desired.turn_adapter()?;
     // Egress is a transport, so the binary provisions it for the same reason it
     // provisions the MCP endpoint below: the worker is handed a sink and never
@@ -215,7 +424,7 @@ pub(super) async fn run_worker(
     // happens here, before a plugin process exists, because a malformed block
     // is a configuration mistake rather than a runtime condition.
     let egress = desired.egress_request();
-    let mut config = desired.into_runtime_config();
+    let mut config = desired.into_runtime_config()?;
     if let Some(request) = egress {
         let validated = request
             .validate()
@@ -245,24 +454,11 @@ pub(super) async fn run_worker(
         None
     };
     let worker = ContinuousHarnessWorker::new(&store, config, adapter)?;
-    let cancellation = CancellationToken::new();
-    let signal = cancellation.clone();
-    let signal_task = tokio::spawn(async move {
-        shutdown_signal().await;
-        signal.cancel();
-    });
-    tracing::info!(database = %db.display(), "continuous worker ready");
-    let run = if args.once {
-        worker.run_until(cancellation, Some(1)).await
-    } else {
-        worker.run(cancellation).await
-    };
-    signal_task.abort();
+    let run = worker.run_until(cancellation, max_settled_turns).await;
     if let Some(broker) = broker {
         broker.shutdown().await;
     }
-    let report = run?;
-    print_json(&report)
+    Ok(run?)
 }
 
 impl WorkerFileConfig {
@@ -277,6 +473,9 @@ impl WorkerFileConfig {
                     .into());
                 }
                 EnvelopeTurnAdapter::new(self.result_kind.clone(), inbound.message_kinds.clone())
+                    .and_then(|adapter| {
+                        adapter.with_standing_instructions(self.instructions.clone())
+                    })
                     .map_err(|error| {
                         format!("worker adapter configuration is invalid: {error}").into()
                     })
@@ -306,33 +505,62 @@ impl WorkerFileConfig {
         })
     }
 
-    fn into_runtime_config(self) -> ContinuousWorkerConfig {
-        ContinuousWorkerConfig {
-            agent_id: self.agent_id,
-            plugin: self.plugin.into_spec(),
-            working_directory: self.working_directory,
-            additional_directories: self.additional_directories,
-            mcp_grants: self.mcp_grants,
+    fn into_runtime_config(self) -> MainResult<ContinuousWorkerConfig> {
+        let WorkerFileConfig {
+            agent_id,
+            working_directory,
+            additional_directories,
+            mcp_grants,
+            compatibility_digest,
+            plugin,
+            lease_duration_ms,
+            poll_interval_ms,
+            restart_backoff_ms,
+            pre_arm_retry_delay_ms,
+            turn,
+            sandbox,
+            ..
+        } = self;
+        let permission_policy = match turn.permission_policy {
+            WorkerPermissionPolicy::Deny => PermissionPolicy::Deny,
+            WorkerPermissionPolicy::AllowOnce => PermissionPolicy::AllowOnce,
+        };
+        let mut plugin = plugin.into_spec();
+        if let Some(sandbox) = sandbox {
+            let sandbox = sandbox.into_sandbox(&working_directory, &additional_directories)?;
+            plugin = plugin.with_macos_seatbelt(sandbox);
+        }
+        Ok(ContinuousWorkerConfig {
+            agent_id,
+            plugin,
+            working_directory,
+            additional_directories,
+            mcp_grants,
             turn_grants: Vec::new(),
-            compatibility_digest: self.compatibility_digest,
-            lease_duration: std::time::Duration::from_millis(self.lease_duration_ms),
-            poll_interval: std::time::Duration::from_millis(self.poll_interval_ms),
-            restart_backoff: std::time::Duration::from_millis(self.restart_backoff_ms),
-            pre_arm_retry_delay: std::time::Duration::from_millis(self.pre_arm_retry_delay_ms),
+            compatibility_digest,
+            lease_duration: std::time::Duration::from_millis(lease_duration_ms),
+            poll_interval: std::time::Duration::from_millis(poll_interval_ms),
+            interrupt_on_new_message: turn.interrupt_on_new_message,
+            interrupt_poll_interval: std::time::Duration::from_millis(
+                turn.interrupt_poll_interval_ms,
+            ),
+            restart_backoff: std::time::Duration::from_millis(restart_backoff_ms),
+            pre_arm_retry_delay: std::time::Duration::from_millis(pre_arm_retry_delay_ms),
             turn_policy: TurnPolicy {
-                idle_timeout_ms: self.turn.idle_timeout_ms,
-                wall_timeout_ms: self.turn.wall_timeout_ms,
-                cancel_drain_timeout_ms: self.turn.cancel_drain_timeout_ms,
-                max_captured_output_bytes: self.turn.max_captured_output_bytes,
+                idle_timeout_ms: turn.idle_timeout_ms,
+                wall_timeout_ms: turn.wall_timeout_ms,
+                cancel_drain_timeout_ms: turn.cancel_drain_timeout_ms,
+                max_captured_output_bytes: turn.max_captured_output_bytes,
                 permission_policy: "controller".to_owned(),
                 tool_budget: ToolBudget {
-                    limit: self.turn.tool_budget,
+                    limit: turn.tool_budget,
                     required_enforcement: "observe_then_cancel".to_owned(),
                 },
                 token_budget: None,
             },
+            permission_policy,
             trajectory_sink: None,
-        }
+        })
     }
 }
 
@@ -391,6 +619,14 @@ pub(super) const fn default_cancel_drain_timeout_ms() -> u64 {
     15_000
 }
 
+pub(super) const fn default_interrupt_on_new_message() -> bool {
+    true
+}
+
+pub(super) const fn default_interrupt_poll_interval_ms() -> u64 {
+    250
+}
+
 pub(super) const fn default_captured_output_bytes() -> usize {
     512 * 1_024
 }
@@ -445,7 +681,13 @@ mod tests {
         }))
         .expect("parse without egress");
         assert!(desired.egress_request().is_none());
-        assert!(desired.into_runtime_config().trajectory_sink.is_none());
+        assert!(
+            desired
+                .into_runtime_config()
+                .expect("configure unsandboxed deny-only worker")
+                .trajectory_sink
+                .is_none()
+        );
     }
 
     /// An unknown field inside the egress block fails the seat rather than
@@ -496,10 +738,14 @@ mod tests {
             adapter.inbound_acceptance().message_kinds(),
             &std::collections::BTreeSet::from(["work.request/v1".to_owned()])
         );
-        let runtime = desired.into_runtime_config();
+        let runtime = desired
+            .into_runtime_config()
+            .expect("configure bounded defaults");
         assert_eq!(runtime.lease_duration.as_millis(), 900_000);
         assert_eq!(runtime.turn_policy.wall_timeout_ms, 600_000);
         assert_eq!(runtime.turn_policy.tool_budget.limit, 64);
+        assert!(runtime.interrupt_on_new_message);
+        assert_eq!(runtime.interrupt_poll_interval.as_millis(), 250);
 
         let mut invalid = value;
         invalid["surprise"] = json!(true);
@@ -524,5 +770,106 @@ mod tests {
         let duplicate: WorkerFileConfig =
             serde_json::from_value(duplicate).expect("parse duplicate acceptance shape");
         assert!(duplicate.turn_adapter().is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sandboxed_allow_once_is_explicit_and_content_addressed() {
+        let desired: WorkerFileConfig = serde_json::from_value(json!({
+            "schema_version": 2,
+            "agent_id": "agent-id",
+            "working_directory": env!("CARGO_MANIFEST_DIR"),
+            "sandbox": {
+                "kind": "macos_seatbelt",
+                "read_only_directories": ["/usr"],
+                "network": "deny"
+            },
+            "adapter": {
+                "kind": "envelope",
+                "inbound": {"schema_version": 1, "message_kinds": ["work.request/v1"]}
+            },
+            "turn": {"permission_policy": "allow_once"},
+            "plugin": {"id": "mock.harness", "executable": "/usr/bin/python3"}
+        }))
+        .expect("parse sandboxed writer");
+        let runtime = desired
+            .into_runtime_config()
+            .expect("compile declared Seatbelt policy");
+        assert_eq!(
+            runtime.permission_policy,
+            fleetd::execution::permission::PermissionPolicy::AllowOnce
+        );
+        assert!(
+            runtime
+                .plugin
+                .sandbox_profile_digest()
+                .is_some_and(|digest| digest.starts_with("sha256:"))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn write_scoped_posture_is_named_explicit_and_rejects_implicit_limits() {
+        let state = tempfile::tempdir().expect("private state");
+        let temp = tempfile::tempdir().expect("private temp");
+        let desired: WorkerFileConfig = serde_json::from_value(json!({
+            "schema_version": 2,
+            "agent_id": "agent-id",
+            "working_directory": env!("CARGO_MANIFEST_DIR"),
+            "sandbox": {
+                "kind": "macos_seatbelt",
+                "posture": "write_scoped",
+                "read_access": "unrestricted",
+                "network": "unrestricted",
+                "private_state_directory": state.path(),
+                "private_temp_directory": temp.path()
+            },
+            "adapter": {
+                "kind": "envelope",
+                "inbound": {"schema_version": 1, "message_kinds": ["work.request/v1"]}
+            },
+            "turn": {"permission_policy": "allow_once"},
+            "plugin": {"id": "mock.harness", "executable": "/usr/bin/python3"}
+        }))
+        .expect("parse write-scoped desired state");
+        let runtime = desired
+            .into_runtime_config()
+            .expect("compile write-scoped Seatbelt policy");
+        assert_eq!(
+            runtime.plugin.sandbox_posture(),
+            Some(fleetd::plugin::MacOsSeatbeltPosture::WriteScoped)
+        );
+        assert_eq!(
+            runtime.plugin.sandbox_security_scope(),
+            Some("writes_scoped_reads_and_network_unrestricted")
+        );
+        assert!(
+            runtime
+                .plugin
+                .sandbox_profile_digest()
+                .is_some_and(|digest| digest.starts_with("sha256:"))
+        );
+
+        let implicit: WorkerFileConfig = serde_json::from_value(json!({
+            "schema_version": 2,
+            "agent_id": "agent-id",
+            "working_directory": env!("CARGO_MANIFEST_DIR"),
+            "sandbox": {
+                "kind": "macos_seatbelt",
+                "posture": "write_scoped",
+                "private_state_directory": state.path(),
+                "private_temp_directory": temp.path()
+            },
+            "adapter": {
+                "kind": "envelope",
+                "inbound": {"schema_version": 1, "message_kinds": ["work.request/v1"]}
+            },
+            "plugin": {"id": "mock.harness", "executable": "/usr/bin/python3"}
+        }))
+        .expect("parse structurally valid but implicit write-scoped state");
+        let Err(error) = implicit.into_runtime_config() else {
+            panic!("write-scoped limitations must be explicit");
+        };
+        assert!(error.to_string().contains("read_access=unrestricted"));
     }
 }

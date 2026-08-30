@@ -254,12 +254,14 @@ fn crate_root_re_exports_modules_only() {
 }
 
 /// The layer that decides what happens to durable state.
-const EXECUTION_MODULES: [&str; 10] = [
+const EXECUTION_MODULES: [&str; 12] = [
     "controller",
     "health",
     "invocation",
     "message_grant",
     "operations",
+    "permission",
+    "seat_configuration",
     "session_binding",
     "settlement",
     "trajectory",
@@ -286,7 +288,7 @@ const SOURCE_LAYERS: [&str; 0] = [];
 /// instead of in `SOURCE_LAYERS`. Declaring it by concept keeps the rule that
 /// matters -- a layer must not appear unannounced -- while letting one surface
 /// stop being a 1,700-line file.
-const COMMAND_SURFACE_MODULES: [&str; 13] = [
+const COMMAND_SURFACE_MODULES: [&str; 14] = [
     "agents",
     "channels",
     "client",
@@ -300,17 +302,19 @@ const COMMAND_SURFACE_MODULES: [&str; 13] = [
     "transcript",
     "triggers",
     "worker",
+    "worker_supervisor",
 ];
 
 /// The layer that exposes it. Route domains own handlers; the rest is
 /// composition, shared guards, and the transport beneath them.
-const HTTP_ROUTE_DOMAINS: [&str; 8] = [
+const HTTP_ROUTE_DOMAINS: [&str; 9] = [
     "agents",
     "channels",
     "deliveries",
     "invocations",
     "messages",
     "operations",
+    "seats",
     "streams",
     "triggers",
 ];

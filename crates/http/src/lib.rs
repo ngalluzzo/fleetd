@@ -55,6 +55,7 @@ route_domains!(
     invocations,
     operations,
     triggers,
+    seats,
 );
 
 // Shared by those domains.
@@ -74,7 +75,7 @@ const BEARER_AUTH: &str = "bearerAuth";
 #[openapi(
     info(
         title = "fleetd API",
-        version = "1.9.0",
+        version = "1.10.0",
         description = "Versioned control-plane contract for cooperating software agents."
     ),
     tags(
@@ -84,7 +85,8 @@ const BEARER_AUTH: &str = "bearerAuth";
         (name = "deliveries", description = "Leased agent inbox delivery"),
         (name = "invocations", description = "Crash-safe managed invocation fencing"),
         (name = "operations", description = "Operator-visible worker and harness evidence"),
-        (name = "triggers", description = "Inbound triggers that create work on their own")
+        (name = "triggers", description = "Inbound triggers that create work on their own"),
+        (name = "seats", description = "Desired execution for stable agent identities")
     ),
     modifiers(&SecurityAddon)
 )]

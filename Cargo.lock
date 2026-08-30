@@ -1001,11 +1001,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleetd-harness-deepseek"
+version = "0.1.0"
+dependencies = [
+ "fleetd-acp-host",
+ "fleetd-plugin-host",
+ "fleetd-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "fleetd-harness-opencode"
 version = "0.1.0"
 dependencies = [
  "fleetd-acp-host",
  "fleetd-plugin-host",
+ "fleetd-proto",
  "serde",
  "serde_json",
  "sha2",
@@ -1034,6 +1048,47 @@ dependencies = [
  "tracing",
  "utoipa",
  "utoipa-axum",
+]
+
+[[package]]
+name = "fleetd-inference-host"
+version = "0.1.0"
+dependencies = [
+ "fleetd-proto",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "fleetd-inference-llama-cpp"
+version = "0.1.0"
+dependencies = [
+ "fleetd-inference-host",
+ "fleetd-plugin-host",
+ "fleetd-proto",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "fleetd-inference-mlx-vlm"
+version = "0.1.0"
+dependencies = [
+ "fleetd-inference-host",
+ "fleetd-plugin-host",
+ "fleetd-proto",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

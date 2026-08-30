@@ -1,5 +1,6 @@
 import type {
   Agent,
+  AgentSeatConfiguration,
   PluginGeneration,
   SessionBinding,
 } from "@fleetd/client/types";
@@ -20,6 +21,8 @@ export interface AgentDirectoryItem {
   readonly health: AgentHealth;
   readonly status: string;
   readonly description: string;
+  readonly configured: boolean;
+  readonly desiredState?: "running" | "stopped";
 }
 
 export function agentDirectoryItems(
@@ -27,7 +30,11 @@ export function agentDirectoryItems(
   generations: readonly PluginGeneration[],
   bindings: readonly SessionBinding[],
   participantId: string,
+  configurations: readonly AgentSeatConfiguration[] = [],
 ): readonly AgentDirectoryItem[] {
+  const configurationByAgent = new Map(
+    configurations.map((configuration) => [configuration.agent_id, configuration]),
+  );
   const latestGenerations = latestByAgent(
     generations,
     (generation) => generation.agent_id,
@@ -46,6 +53,7 @@ export function agentDirectoryItems(
         agent,
         latestGenerations.get(agent.id),
         latestBindings.get(agent.id),
+        configurationByAgent.get(agent.id),
       ),
     )
     .sort((left, right) => {
@@ -58,6 +66,7 @@ export function agentDirectoryItem(
   agent: Agent,
   generation?: PluginGeneration,
   binding?: SessionBinding,
+  configuration?: AgentSeatConfiguration,
 ): AgentDirectoryItem {
   const name = displayName(agent.name);
   const identity = `${agent.name} · ${agent.id}`;
@@ -75,6 +84,8 @@ export function agentDirectoryItem(
       health: "working",
       status: "Working",
       description: `${generation.runtime_name} has an active invocation.`,
+      configured: configuration !== undefined,
+      desiredState: configuration?.desired_state,
     };
   }
   if (binding?.state === "uncertain") {
@@ -86,6 +97,8 @@ export function agentDirectoryItem(
       health: "stale",
       status: "Needs attention",
       description: "Its latest session has an uncertain outcome.",
+      configured: configuration !== undefined,
+      desiredState: configuration?.desired_state,
     };
   }
   if (generation?.health === "active") {
@@ -100,6 +113,8 @@ export function agentDirectoryItem(
       description: hasActiveSession
         ? `${generation.runtime_name} owns an active session with no active invocation recorded.`
         : `Fleetd observed an active ${generation.runtime_name} plugin generation.`,
+      configured: configuration !== undefined,
+      desiredState: configuration?.desired_state,
     };
   }
   if (generation?.health === "stale") {
@@ -111,6 +126,8 @@ export function agentDirectoryItem(
       health: "stale",
       status: "Connection stale",
       description: "Fleetd has not observed a recent worker heartbeat.",
+      configured: configuration !== undefined,
+      desiredState: configuration?.desired_state,
     };
   }
   if (generation?.health === "stopped") {
@@ -122,6 +139,8 @@ export function agentDirectoryItem(
       health: "stopped",
       status: "Offline",
       description: "Its latest observed worker generation has stopped.",
+      configured: configuration !== undefined,
+      desiredState: configuration?.desired_state,
     };
   }
   return {
@@ -130,8 +149,20 @@ export function agentDirectoryItem(
     exactName: identity,
     initials: initials(name),
     health: "unmanaged",
-    status: "No worker observed",
-    description: `Registered participant ${shortId(agent.id)} has no observed worker.`,
+    status:
+      configuration?.desired_state === "running"
+        ? "Starting"
+        : configuration?.desired_state === "stopped"
+          ? "Stopped by you"
+          : "Not configured",
+    description:
+      configuration?.desired_state === "running"
+        ? "This machine is reconciling its approved runtime."
+        : configuration?.desired_state === "stopped"
+          ? "Its configured runtime is not currently requested."
+          : `Registered participant ${shortId(agent.id)} has no runtime profile.`,
+    configured: configuration !== undefined,
+    desiredState: configuration?.desired_state,
   };
 }
 

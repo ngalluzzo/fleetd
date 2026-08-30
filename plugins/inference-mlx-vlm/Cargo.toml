@@ -1,0 +1,24 @@
+[package]
+name = "fleetd-inference-mlx-vlm"
+version = "0.1.0"
+edition = "2024"
+description = "MLX-VLM inference backend plugin for fleetd"
+license = "MIT"
+
+[dependencies]
+fleetd-inference-host = { path = "../../crates/inference-host" }
+fleetd-proto = { path = "../../crates/proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+fleetd-plugin-host = { path = "../../crates/plugin-host" }
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

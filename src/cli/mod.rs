@@ -31,6 +31,7 @@ mod serve;
 mod transcript;
 mod triggers;
 mod worker;
+mod worker_supervisor;
 
 use agents::{AgentCommand, agent_command};
 use channels::{ChannelCommand, channel_command};
@@ -158,7 +159,7 @@ pub async fn run() -> MainResult<()> {
         Command::Trigger { command } => {
             trigger_command(&ApiClient::load(&server, token_file.as_deref())?, command).await
         }
-        Command::Worker { command } => worker_command(command, &fleet).await,
+        Command::Worker { command } => Box::pin(worker_command(command, &fleet)).await,
         Command::Status(args) => {
             status_command(&ApiClient::load(&server, token_file.as_deref())?, args).await
         }
@@ -208,6 +209,17 @@ fn default_operator_token_path(database: &Path) -> PathBuf {
         .join("operator.token")
 }
 
+#[cfg(unix)]
+async fn shutdown_signal() {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate.recv() => {}
+    }
+}
+
+#[cfg(not(unix))]
 async fn shutdown_signal() {
     let _unused = tokio::signal::ctrl_c().await;
 }

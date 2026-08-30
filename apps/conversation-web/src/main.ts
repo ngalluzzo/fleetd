@@ -10,6 +10,8 @@ import {
 } from "@fleetd/client/operator";
 import type {
   Agent,
+  AgentSeatConfiguration,
+  ConversationAttention,
   ConversationSummary,
   PluginGeneration,
   SessionBinding,
@@ -22,14 +24,22 @@ import {
   resizeComposer,
 } from "./ui/composer.ts";
 import {
-  CHANNEL_BROADCAST_TARGET,
   MessageListView,
   renderChannelHeader,
   renderConversationNavigation,
   renderConnectionStatus,
   renderEmptyConversation,
-  renderMemberTargets,
 } from "./ui/components.ts";
+import {
+  applyMention,
+  directRecipient,
+  mentionCandidates,
+  mentionQueryAt,
+  mentionSelectionPresent,
+  type MentionCandidate,
+  type MentionQuery,
+  type MentionSelection,
+} from "./ui/mentions.ts";
 import {
   renderAddMemberOptions,
   renderAgentDirectory,
@@ -47,6 +57,13 @@ interface ConnectionProfile {
   requestKind: string;
   resultKind: string;
   channelId?: string;
+  runtimeProfiles?: readonly RuntimeProfileDescriptor[];
+}
+
+interface RuntimeProfileDescriptor {
+  id: string;
+  label: string;
+  description: string;
 }
 
 interface PublicConversationApp {
@@ -83,9 +100,15 @@ const elements = {
   empty: required<HTMLElement>("empty-conversation"),
   emptyTitle: required<HTMLElement>("empty-conversation-title"),
   emptyCopy: required<HTMLElement>("empty-conversation-copy"),
-  target: required<HTMLSelectElement>("message-target"),
   composer: required<HTMLFormElement>("composer"),
   composerText: required<HTMLTextAreaElement>("composer-text"),
+  composerAudience: required<HTMLElement>("composer-audience"),
+  composerAudienceLabel: requiredDescendant<HTMLElement>(
+    required<HTMLElement>("composer-audience"),
+    ".composer-audience-label",
+  ),
+  clearMention: required<HTMLButtonElement>("clear-mention"),
+  mentionSuggestions: required<HTMLElement>("mention-suggestions"),
   send: required<HTMLButtonElement>("send-message"),
   disconnect: required<HTMLButtonElement>("disconnect"),
   openConversationDetails: required<HTMLButtonElement>(
@@ -94,6 +117,17 @@ const elements = {
   agentDirectoryDialog: required<HTMLDialogElement>("agent-directory-dialog"),
   agentDirectoryState: required<HTMLElement>("agent-directory-state"),
   agentList: required<HTMLElement>("agent-list"),
+  agentSeatDialog: required<HTMLDialogElement>("agent-seat-dialog"),
+  agentSeatForm: required<HTMLFormElement>("agent-seat-form"),
+  agentSeatTitle: required<HTMLElement>("agent-seat-title"),
+  agentSeatCopy: required<HTMLElement>("agent-seat-copy"),
+  agentSeatProfileSummary: required<HTMLElement>("agent-seat-profile-summary"),
+  agentSeatProfile: required<HTMLSelectElement>("agent-seat-profile"),
+  agentSeatInstructions: required<HTMLTextAreaElement>("agent-seat-instructions"),
+  agentSeatDesiredState: required<HTMLSelectElement>("agent-seat-desired-state"),
+  agentSeatError: required<HTMLElement>("agent-seat-error"),
+  restartAgentSeat: required<HTMLButtonElement>("restart-agent-seat"),
+  saveAgentSeat: required<HTMLButtonElement>("save-agent-seat"),
   channelDialog: required<HTMLDialogElement>("channel-dialog"),
   channelForm: required<HTMLFormElement>("channel-form"),
   channelName: required<HTMLInputElement>("channel-name"),
@@ -152,8 +186,22 @@ let agents: readonly Agent[] = [];
 let conversations: readonly ConversationSummary[] = [];
 let pluginGenerations: readonly PluginGeneration[] = [];
 let sessionBindings: readonly SessionBinding[] = [];
+let seatConfigurations: readonly AgentSeatConfiguration[] = [];
+let runtimeProfiles: readonly RuntimeProfileDescriptor[] = [];
+let configuredAgentId: string | undefined;
 let workspaceError: string | undefined;
 let workspaceBusy = false;
+let mentionSelection: MentionSelection | undefined;
+let mentionQuery: MentionQuery | undefined;
+let mentionOptions: readonly MentionCandidate[] = [];
+let activeMentionIndex = 0;
+let mentionDismissed = false;
+let renderedChannelId: string | null = null;
+let visitFirstUnreadSeq: number | null = null;
+const pendingReadAdvances = new Map<string, number>();
+let readAdvanceRunning = false;
+let attentionRefreshRunning = false;
+let attentionRefreshTimer: number | undefined;
 const messageList = new MessageListView(elements.messages);
 
 const publicApp: PublicConversationApp = {
@@ -175,7 +223,11 @@ const publicApp: PublicConversationApp = {
       member_count: snapshot?.members.length ?? 0,
       message_ids: snapshot?.messages.map((message) => message.id) ?? [],
       message_sequences: snapshot?.messages.map((message) => message.seq) ?? [],
+      attention: snapshot?.attention ?? [],
+      first_unread_seq: visitFirstUnreadSeq,
       pending_sends: snapshot?.pendingSends ?? 0,
+      composer_recipient_id: currentRecipientId(),
+      mention_suggestions_open: !elements.mentionSuggestions.hidden,
       error_code: snapshot?.error?.code ?? null,
     };
   },
@@ -226,10 +278,23 @@ elements.openConversationDetails.addEventListener(
 elements.agentList.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof Element)) return;
+  const manage = target.closest<HTMLButtonElement>("button[data-manage-agent-id]");
+  if (manage?.dataset.manageAgentId) {
+    openAgentSeatConfiguration(manage.dataset.manageAgentId);
+    return;
+  }
   const button = target.closest<HTMLButtonElement>("button[data-direct-agent-id]");
   if (!button?.dataset.directAgentId) return;
   void openDirectMessage(button.dataset.directAgentId, button);
 });
+elements.agentSeatForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveAgentSeatConfiguration();
+});
+elements.restartAgentSeat.addEventListener("click", () => {
+  void restartConfiguredAgent();
+});
+elements.agentSeatProfile.addEventListener("change", renderSelectedProfileSummary);
 elements.channelForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void createSharedChannel();
@@ -261,19 +326,51 @@ elements.composer.addEventListener("submit", (event) => {
   void sendComposerMessage();
 });
 elements.composerText.addEventListener("input", () => {
+  mentionDismissed = false;
+  if (
+    mentionSelection &&
+    !mentionSelectionPresent(elements.composerText.value, mentionSelection)
+  ) {
+    mentionSelection = undefined;
+  }
+  refreshMentionSuggestions();
   resizeComposer(elements.composerText);
   renderComposerAvailability();
+  renderComposerContext();
 });
 elements.composerText.addEventListener("keydown", (event) => {
+  if (handleMentionKeydown(event)) return;
   if (!isComposerSendShortcut(event)) return;
   event.preventDefault();
   elements.composer.requestSubmit();
 });
-elements.target.addEventListener("change", () => {
-  renderComposerAvailability();
-  renderComposerContext();
-  const selected = elements.target.selectedOptions[0];
-  if (selected?.title) elements.target.title = selected.title;
+elements.composerText.addEventListener("click", refreshMentionSuggestions);
+elements.composerText.addEventListener("keyup", (event) => {
+  if (["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"].includes(event.key)) {
+    return;
+  }
+  refreshMentionSuggestions();
+});
+elements.mentionSuggestions.addEventListener("mousedown", (event) => {
+  event.preventDefault();
+});
+elements.mentionSuggestions.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const option = target.closest<HTMLButtonElement>("button[data-recipient-id]");
+  const recipientId = option?.dataset.recipientId;
+  if (!recipientId) return;
+  const candidate = mentionOptions.find(
+    (item) => item.recipientId === recipientId,
+  );
+  if (candidate) selectMention(candidate);
+});
+elements.clearMention.addEventListener("click", clearSelectedMention);
+elements.messages.addEventListener("scroll", queueCurrentVisibleRead);
+window.addEventListener("focus", refreshAttentionOnReturn);
+window.addEventListener("resize", queueCurrentVisibleRead);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") refreshAttentionOnReturn();
 });
 resizeComposer(elements.composerText);
 
@@ -291,6 +388,7 @@ async function connect(profileInput: ConnectionProfile): Promise<void> {
     requestKind: profile.requestKind,
     resultKind: profile.resultKind,
   };
+  runtimeProfiles = profile.runtimeProfiles ?? [];
   let activeOperatorClient: FleetdOperatorClient | undefined;
   const transport = (() => {
     try {
@@ -325,6 +423,7 @@ async function connect(profileInput: ConnectionProfile): Promise<void> {
     }
     const channelId = profile.channelId;
     if (channelId) await activeSession.selectChannel(channelId);
+    scheduleAttentionRefresh();
   } catch {
     if (generation === appGeneration && session === activeSession) disconnect();
     throw new Error("Fleetd conversation connection failed");
@@ -334,6 +433,10 @@ async function connect(profileInput: ConnectionProfile): Promise<void> {
 function disconnect(): void {
   appGeneration += 1;
   sendInFlight = false;
+  if (attentionRefreshTimer !== undefined) {
+    window.clearTimeout(attentionRefreshTimer);
+    attentionRefreshTimer = undefined;
+  }
   unsubscribe?.();
   unsubscribe = undefined;
   session?.close();
@@ -346,14 +449,22 @@ function disconnect(): void {
   conversations = [];
   pluginGenerations = [];
   sessionBindings = [];
+  seatConfigurations = [];
+  runtimeProfiles = [];
+  configuredAgentId = undefined;
   workspaceError = undefined;
   workspaceBusy = false;
+  resetMentionState();
+  renderedChannelId = null;
+  visitFirstUnreadSeq = null;
+  pendingReadAdvances.clear();
   if (renderFrame !== undefined) cancelAnimationFrame(renderFrame);
   renderFrame = undefined;
   elements.app.hidden = true;
   elements.connectPanel.hidden = false;
   for (const dialog of [
     elements.agentDirectoryDialog,
+    elements.agentSeatDialog,
     elements.channelDialog,
     elements.conversationDetailsDialog,
     elements.archiveChannelDialog,
@@ -363,7 +474,6 @@ function disconnect(): void {
   messageList.clear();
   elements.channels.replaceChildren();
   elements.directs.replaceChildren();
-  elements.target.replaceChildren();
   elements.composerText.value = "";
   elements.openConversationDetails.disabled = true;
   resizeComposer(elements.composerText);
@@ -381,6 +491,9 @@ function scheduleRender(snapshot: ConversationSnapshot): void {
 
 function render(snapshot: ConversationSnapshot): void {
   renderConnectionStatus(elements.status, snapshot, sendInFlight);
+  const attention = new Map(
+    snapshot.attention.map((item) => [item.channel_id, item]),
+  );
   const directory = agentDirectoryItems(
     agents,
     pluginGenerations,
@@ -393,30 +506,34 @@ function render(snapshot: ConversationSnapshot): void {
     snapshot.selectedChannelId,
     snapshot,
     new Map(directory.map((item) => [item.id, item.health])),
+    attention,
   );
   const selectedConversation = conversations.find(
     (conversation) => conversation.id === snapshot.selectedChannelId,
   );
+  if (renderedChannelId !== snapshot.selectedChannelId) {
+    resetMentionState();
+    renderedChannelId = snapshot.selectedChannelId;
+    visitFirstUnreadSeq = snapshot.selectedChannelId === null
+      ? null
+      : attention.get(snapshot.selectedChannelId)?.first_unread_seq ?? null;
+  }
   renderChannelHeader(snapshot, {
     title: elements.channelTitle,
     meta: elements.channelMeta,
     avatar: elements.channelAvatar,
   }, selectedConversation);
-  renderMemberTargets(
-    elements.target,
-    snapshot.members,
-    snapshot.participantId,
-    selectedConversation?.kind === "shared",
-  );
   elements.openConversationDetails.disabled = selectedConversation == null;
+  refreshMentionSuggestions();
   renderComposerContext();
-  messageList.render(snapshot, requiredContract());
+  messageList.render(snapshot, requiredContract(), visitFirstUnreadSeq);
   renderEmptyConversation(snapshot, {
     root: elements.empty,
     title: elements.emptyTitle,
     copy: elements.emptyCopy,
   });
   renderComposerAvailability();
+  queueVisibleReadAdvance(snapshot, attention);
 }
 
 function selectConversationFromEvent(event: Event): void {
@@ -424,9 +541,106 @@ function selectConversationFromEvent(event: Event): void {
   if (!(target instanceof Element)) return;
   const button = target.closest<HTMLButtonElement>("button[data-channel-id]");
   if (!button?.dataset.channelId || !session) return;
-  void session.selectChannel(button.dataset.channelId).catch(() => {
-    if (session) scheduleRender(session.snapshot);
+  const activeSession = session;
+  const channelId = button.dataset.channelId;
+  void (async () => {
+    try {
+      await activeSession.refreshAttention();
+    } catch {
+      // Selection still opens against the last exact durable attention read.
+    }
+    await activeSession.selectChannel(channelId);
+  })().catch(() => {
+    if (session === activeSession) scheduleRender(activeSession.snapshot);
   });
+}
+
+function queueVisibleReadAdvance(
+  snapshot: ConversationSnapshot,
+  attention: ReadonlyMap<string, ConversationAttention>,
+): void {
+  const channelId = snapshot.selectedChannelId;
+  if (
+    channelId === null ||
+    snapshot.phase !== "live" ||
+    snapshot.cursor <= 0 ||
+    !documentIsAttended()
+  ) {
+    return;
+  }
+  const readThrough = attention.get(channelId)?.read_through_seq ?? 0;
+  const throughSeq = messageList.visibleThroughSeq();
+  if (throughSeq === null || throughSeq <= readThrough) return;
+  pendingReadAdvances.set(
+    channelId,
+    Math.max(pendingReadAdvances.get(channelId) ?? 0, throughSeq),
+  );
+  if (!readAdvanceRunning) void drainReadAdvances();
+}
+
+function queueCurrentVisibleRead(): void {
+  const snapshot = latestSnapshot;
+  if (!snapshot) return;
+  queueVisibleReadAdvance(
+    snapshot,
+    new Map(snapshot.attention.map((item) => [item.channel_id, item])),
+  );
+}
+
+async function drainReadAdvances(): Promise<void> {
+  if (readAdvanceRunning) return;
+  readAdvanceRunning = true;
+  try {
+    while (pendingReadAdvances.size > 0) {
+      const next = pendingReadAdvances.entries().next().value as
+        | [string, number]
+        | undefined;
+      if (!next) break;
+      const [channelId, throughSeq] = next;
+      pendingReadAdvances.delete(channelId);
+      const activeSession = session;
+      if (!activeSession) continue;
+      try {
+        await activeSession.markRead(channelId, throughSeq);
+      } catch {
+        // The durable cursor remains unchanged and a later focus or selection
+        // refresh will retry from authoritative state.
+      }
+    }
+  } finally {
+    readAdvanceRunning = false;
+    if (pendingReadAdvances.size > 0) void drainReadAdvances();
+  }
+}
+
+function refreshAttentionOnReturn(): void {
+  const activeSession = session;
+  if (!activeSession || attentionRefreshRunning || !documentIsAttended()) return;
+  attentionRefreshRunning = true;
+  void activeSession.refreshAttention().catch(() => {
+    // Conversation transport remains usable; the next focus retries.
+  }).finally(() => {
+    attentionRefreshRunning = false;
+    if (session === activeSession) {
+      scheduleRender(activeSession.snapshot);
+    }
+  });
+}
+
+function scheduleAttentionRefresh(): void {
+  if (!session || attentionRefreshTimer !== undefined) return;
+  const generation = appGeneration;
+  attentionRefreshTimer = window.setTimeout(() => {
+    attentionRefreshTimer = undefined;
+    if (session && generation === appGeneration) {
+      refreshAttentionOnReturn();
+      scheduleAttentionRefresh();
+    }
+  }, 5_000);
+}
+
+function documentIsAttended(): boolean {
+  return document.visibilityState === "visible" && document.hasFocus();
 }
 
 async function refreshWorkspace(
@@ -436,18 +650,26 @@ async function refreshWorkspace(
   elements.agentList.setAttribute("aria-busy", "true");
   renderAgentDirectoryState();
   try {
-    const [nextAgents, nextConversations, nextGenerations, nextBindings] =
+    const [
+      nextAgents,
+      nextConversations,
+      nextGenerations,
+      nextBindings,
+      nextSeatConfigurations,
+    ] =
       await Promise.all([
         client.listAgents(),
         client.listConversations({ include_archived: false }),
         client.listPluginGenerations(),
         client.listSessionBindings(),
+        client.listAgentSeatConfigurations(),
       ]);
     if (client !== operatorClient) return;
     agents = nextAgents;
     conversations = nextConversations;
     pluginGenerations = nextGenerations;
     sessionBindings = nextBindings;
+    seatConfigurations = nextSeatConfigurations;
     workspaceError = undefined;
     renderAgentDirectoryState();
     if (session) scheduleRender(session.snapshot);
@@ -478,6 +700,7 @@ function renderAgentDirectoryState(): void {
     pluginGenerations,
     sessionBindings,
     snapshot?.participantId ?? "",
+    seatConfigurations,
   );
   renderAgentDirectory(elements.agentList, items);
   if (workspaceError) {
@@ -491,6 +714,118 @@ function renderAgentDirectoryState(): void {
   } else {
     elements.agentDirectoryState.hidden = true;
     elements.agentDirectoryState.textContent = "";
+  }
+}
+
+function openAgentSeatConfiguration(agentId: string): void {
+  const agent = agents.find((candidate) => candidate.id === agentId);
+  if (!agent) return;
+  configuredAgentId = agentId;
+  const current = seatConfigurations.find(
+    (configuration) => configuration.agent_id === agentId,
+  );
+  elements.agentSeatTitle.textContent = `${current ? "Manage" : "Set up"} ${displayName(agent.name)}`;
+  elements.agentSeatCopy.textContent = current
+    ? `This runtime follows ${displayName(agent.name)} wherever the agent participates.`
+    : `Make ${displayName(agent.name)} an active collaborator on this machine.`;
+  const options = runtimeProfiles.map((profile) => {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = profile.label;
+    return option;
+  });
+  if (
+    current &&
+    !runtimeProfiles.some((profile) => profile.id === current.profile_id)
+  ) {
+    const unavailable = document.createElement("option");
+    unavailable.value = current.profile_id;
+    unavailable.textContent = `${current.profile_id} · unavailable on this host`;
+    options.unshift(unavailable);
+  }
+  if (options.length === 0) {
+    const unavailable = document.createElement("option");
+    unavailable.value = "";
+    unavailable.textContent = "No approved profiles available";
+    options.push(unavailable);
+  }
+  elements.agentSeatProfile.replaceChildren(...options);
+  elements.agentSeatProfile.value = current?.profile_id ?? runtimeProfiles[0]?.id ?? "";
+  elements.agentSeatInstructions.value = current?.instructions ?? "";
+  elements.agentSeatDesiredState.value = current?.desired_state ?? "running";
+  elements.restartAgentSeat.disabled = current?.desired_state !== "running";
+  elements.saveAgentSeat.disabled = runtimeProfiles.length === 0;
+  setDialogError(elements.agentSeatError);
+  renderSelectedProfileSummary();
+  if (elements.agentDirectoryDialog.open) elements.agentDirectoryDialog.close();
+  if (elements.conversationDetailsDialog.open) elements.conversationDetailsDialog.close();
+  showDialog(elements.agentSeatDialog);
+}
+
+function renderSelectedProfileSummary(): void {
+  const selected = runtimeProfiles.find(
+    (profile) => profile.id === elements.agentSeatProfile.value,
+  );
+  elements.agentSeatProfileSummary.textContent = selected
+    ? selected.description
+    : runtimeProfiles.length === 0
+      ? "This host has not published an approved runtime catalog. Configure the desktop host to activate agents."
+      : "The previously selected profile is not approved on this host.";
+  elements.agentSeatProfileSummary.dataset.tone = selected ? "neutral" : "warning";
+}
+
+async function saveAgentSeatConfiguration(): Promise<void> {
+  const client = operatorClient;
+  const agentId = configuredAgentId;
+  if (!client || !agentId || !elements.agentSeatProfile.value) return;
+  setFormBusy(elements.agentSeatForm, elements.saveAgentSeat, true, "Applying…");
+  elements.restartAgentSeat.disabled = true;
+  setDialogError(elements.agentSeatError);
+  try {
+    await client.configureAgentSeat(agentId, {
+      profile_id: elements.agentSeatProfile.value,
+      instructions: elements.agentSeatInstructions.value,
+      desired_state:
+        elements.agentSeatDesiredState.value === "stopped" ? "stopped" : "running",
+    });
+    await refreshWorkspace(client);
+    elements.agentSeatDialog.close();
+  } catch (error) {
+    setDialogError(
+      elements.agentSeatError,
+      operatorErrorMessage(error, "The agent configuration could not be applied."),
+    );
+  } finally {
+    setFormBusy(elements.agentSeatForm, elements.saveAgentSeat, false, "Save and apply");
+    const current = seatConfigurations.find(
+      (configuration) => configuration.agent_id === agentId,
+    );
+    elements.restartAgentSeat.disabled = current?.desired_state !== "running";
+  }
+}
+
+async function restartConfiguredAgent(): Promise<void> {
+  const client = operatorClient;
+  const agentId = configuredAgentId;
+  if (!client || !agentId) return;
+  elements.restartAgentSeat.disabled = true;
+  elements.restartAgentSeat.textContent = "Restarting…";
+  setDialogError(elements.agentSeatError);
+  try {
+    await client.restartAgentSeat(agentId);
+    await refreshWorkspace(client);
+    elements.agentSeatDialog.close();
+  } catch (error) {
+    setDialogError(
+      elements.agentSeatError,
+      operatorErrorMessage(error, "The agent could not be restarted."),
+    );
+  } finally {
+    elements.restartAgentSeat.textContent = "Restart now";
+    const current = seatConfigurations.find(
+      (configuration) => configuration.agent_id === agentId,
+    );
+    elements.restartAgentSeat.disabled = current?.desired_state !== "running";
   }
 }
 
@@ -661,7 +996,14 @@ async function addSelectedChannelMember(): Promise<void> {
       delivery_mode: "inbox",
     });
     await refreshConversationState();
-    openConversationDetails();
+    const configured = seatConfigurations.some(
+      (configuration) => configuration.agent_id === agentId,
+    );
+    if (!configured && runtimeProfiles.length > 0) {
+      openAgentSeatConfiguration(agentId);
+    } else {
+      openConversationDetails();
+    }
   } catch (error) {
     setDialogError(
       elements.conversationDetailsError,
@@ -775,8 +1117,8 @@ async function sendComposerMessage(): Promise<void> {
   if (!activeSession || !contract || sendInFlight) return;
   const draft = elements.composerText.value;
   const text = draft.trim();
-  const recipientId = elements.target.value;
-  if (!text || !recipientId) return;
+  const recipientId = currentRecipientId();
+  if (!text) return;
   const turnId = crypto.randomUUID();
   const generation = appGeneration;
   sendInFlight = true;
@@ -785,8 +1127,7 @@ async function sendComposerMessage(): Promise<void> {
   try {
     await activeSession.send({
       idempotency_key: `fleetd-conversation/${turnId}`,
-      recipient_id:
-        recipientId === CHANNEL_BROADCAST_TARGET ? null : recipientId,
+      recipient_id: recipientId,
       kind: contract.requestKind,
       payload: { text },
       correlation_id: turnId,
@@ -798,6 +1139,7 @@ async function sendComposerMessage(): Promise<void> {
       elements.composerText.value === draft
     ) {
       elements.composerText.value = "";
+      resetMentionState();
       resizeComposer(elements.composerText);
     }
   } catch {
@@ -819,7 +1161,6 @@ function renderComposerAvailability(): void {
   const availability = composerAvailability({
     phase: snapshot?.phase ?? "closed",
     selectedChannelId: snapshot?.selectedChannelId ?? null,
-    targetId: elements.target.value,
     draft: elements.composerText.value,
     pendingSends: snapshot?.pendingSends ?? 0,
     sending: sendInFlight,
@@ -827,16 +1168,195 @@ function renderComposerAvailability(): void {
   applyComposerAvailability(availability, {
     form: elements.composer,
     textarea: elements.composerText,
-    target: elements.target,
     send: elements.send,
   });
 }
 
 function renderComposerContext(): void {
-  const recipient = elements.target.selectedOptions[0]?.textContent?.trim();
-  elements.composerText.placeholder = recipient
-    ? `Message ${recipient}…`
-    : "Write a message…";
+  const snapshot = latestSnapshot;
+  const conversation = selectedConversation();
+  const direct = conversation?.kind === "direct"
+    ? directRecipient(snapshot?.members ?? [], snapshot?.participantId ?? "")
+    : undefined;
+  const selected = mentionSelection && mentionSelectionPresent(
+    elements.composerText.value,
+    mentionSelection,
+  )
+    ? mentionSelection
+    : undefined;
+  const recipientId = direct?.recipientId ?? selected?.recipientId ?? "";
+  const recipientLabel = direct?.label ?? selected?.label;
+  elements.composerAudience.dataset.recipientId = recipientId;
+  elements.clearMention.hidden = direct !== undefined || selected === undefined;
+  elements.composerAudienceLabel.textContent = !conversation
+    ? "Select a conversation"
+    : recipientLabel
+      ? `Notifying ${recipientLabel}`
+      : "Notifying everyone";
+  elements.composerText.placeholder = !conversation
+    ? "Write a message…"
+    : conversation.kind === "direct" && recipientLabel
+      ? `Message ${recipientLabel}…`
+      : "Message the channel…";
+}
+
+function currentRecipientId(): string | null {
+  const snapshot = latestSnapshot;
+  const conversation = selectedConversation();
+  if (!snapshot || !conversation) return null;
+  if (conversation.kind === "direct") {
+    return directRecipient(snapshot.members, snapshot.participantId)?.recipientId ?? null;
+  }
+  if (
+    mentionSelection &&
+    mentionSelectionPresent(elements.composerText.value, mentionSelection)
+  ) {
+    return mentionSelection.recipientId;
+  }
+  return null;
+}
+
+function refreshMentionSuggestions(): void {
+  const snapshot = latestSnapshot;
+  const conversation = selectedConversation();
+  if (
+    mentionDismissed ||
+    snapshot?.phase !== "live" ||
+    conversation?.kind !== "shared" ||
+    mentionSelection !== undefined
+  ) {
+    hideMentionSuggestions();
+    return;
+  }
+  const caret = elements.composerText.selectionStart;
+  mentionQuery = mentionQueryAt(elements.composerText.value, caret);
+  mentionOptions = mentionQuery
+    ? mentionCandidates(
+        snapshot.members,
+        snapshot.participantId,
+        mentionQuery.text,
+      )
+    : [];
+  if (!mentionQuery || mentionOptions.length === 0) {
+    hideMentionSuggestions();
+    return;
+  }
+  activeMentionIndex = Math.min(activeMentionIndex, mentionOptions.length - 1);
+  const options = mentionOptions.map((candidate, index) => {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "mention-option";
+    option.id = `mention-option-${index}`;
+    option.dataset.recipientId = candidate.recipientId;
+    option.setAttribute("role", "option");
+    option.setAttribute("aria-selected", String(index === activeMentionIndex));
+    option.title = candidate.description;
+
+    const name = document.createElement("span");
+    name.className = "mention-option-name";
+    name.textContent = `@${candidate.label}`;
+    const note = document.createElement("span");
+    note.className = "mention-option-note";
+    note.textContent = candidate.receivesInboxWork
+      ? "will be notified"
+      : "watching channel";
+    option.append(name, note);
+    return option;
+  });
+  elements.mentionSuggestions.replaceChildren(...options);
+  elements.mentionSuggestions.hidden = false;
+  elements.composerText.setAttribute("aria-expanded", "true");
+  elements.composerText.setAttribute(
+    "aria-activedescendant",
+    `mention-option-${activeMentionIndex}`,
+  );
+}
+
+function handleMentionKeydown(event: KeyboardEvent): boolean {
+  if (elements.mentionSuggestions.hidden || mentionOptions.length === 0) {
+    return false;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    activeMentionIndex =
+      (activeMentionIndex + direction + mentionOptions.length) %
+      mentionOptions.length;
+    refreshMentionSuggestions();
+    return true;
+  }
+  if (event.key === "Enter" || event.key === "Tab") {
+    event.preventDefault();
+    const candidate = mentionOptions[activeMentionIndex];
+    if (candidate) selectMention(candidate);
+    return true;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    mentionDismissed = true;
+    hideMentionSuggestions();
+    return true;
+  }
+  return false;
+}
+
+function selectMention(candidate: MentionCandidate): void {
+  if (!mentionQuery) return;
+  const applied = applyMention(
+    elements.composerText.value,
+    mentionQuery,
+    candidate,
+  );
+  mentionSelection = applied.selection;
+  elements.composerText.value = applied.draft;
+  elements.composerText.setSelectionRange(applied.caret, applied.caret);
+  mentionDismissed = false;
+  hideMentionSuggestions();
+  resizeComposer(elements.composerText);
+  renderComposerAvailability();
+  renderComposerContext();
+  elements.composerText.focus();
+}
+
+function clearSelectedMention(): void {
+  if (!mentionSelection) return;
+  const tokenIndex = elements.composerText.value.indexOf(mentionSelection.token);
+  if (tokenIndex >= 0) {
+    const before = elements.composerText.value.slice(0, tokenIndex);
+    const after = elements.composerText.value.slice(
+      tokenIndex + mentionSelection.token.length,
+    );
+    elements.composerText.value =
+      before.endsWith(" ") && after.startsWith(" ")
+        ? `${before}${after.slice(1)}`
+        : `${before}${after}`;
+    const caret = Math.min(tokenIndex, elements.composerText.value.length);
+    elements.composerText.setSelectionRange(caret, caret);
+  }
+  mentionSelection = undefined;
+  mentionDismissed = false;
+  hideMentionSuggestions();
+  resizeComposer(elements.composerText);
+  renderComposerAvailability();
+  renderComposerContext();
+  elements.composerText.focus();
+}
+
+function hideMentionSuggestions(): void {
+  mentionQuery = undefined;
+  mentionOptions = [];
+  activeMentionIndex = 0;
+  elements.mentionSuggestions.hidden = true;
+  elements.mentionSuggestions.replaceChildren();
+  elements.composerText.setAttribute("aria-expanded", "false");
+  elements.composerText.removeAttribute("aria-activedescendant");
+}
+
+function resetMentionState(): void {
+  mentionSelection = undefined;
+  mentionDismissed = false;
+  hideMentionSuggestions();
+  renderComposerContext();
 }
 
 function validateProfile(value: ConnectionProfile): ConnectionProfile {
@@ -857,6 +1377,25 @@ function validateProfile(value: ConnectionProfile): ConnectionProfile {
       value.channelId.length > 256)
   ) {
     throw new Error("invalid conversation profile field: channelId");
+  }
+  if (value.runtimeProfiles !== undefined) {
+    if (!Array.isArray(value.runtimeProfiles) || value.runtimeProfiles.length > 128) {
+      throw new Error("invalid conversation profile field: runtimeProfiles");
+    }
+    const ids = new Set<string>();
+    for (const profile of value.runtimeProfiles) {
+      boundedProfileField(profile.id, "runtimeProfiles.id", 128);
+      boundedProfileField(profile.label, "runtimeProfiles.label", 256);
+      boundedProfileField(
+        profile.description,
+        "runtimeProfiles.description",
+        2_048,
+      );
+      if (!/^[A-Za-z0-9._-]+$/u.test(profile.id) || ids.has(profile.id)) {
+        throw new Error("invalid conversation profile field: runtimeProfiles.id");
+      }
+      ids.add(profile.id);
+    }
   }
   return value;
 }
