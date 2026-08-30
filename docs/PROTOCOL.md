@@ -82,6 +82,21 @@ identical history and live-stream visibility, but message append creates no
 leased inbox row for that membership. Existing memberships, omitted add-member
 modes, and the `CreateChannel.member_ids` shorthand all use `inbox`.
 
+Each membership also owns one durable, monotonic `read_through_seq`. It starts
+at zero and means that the participant has observed every channel message at or
+below that global sequence. The participant advances it with
+`PUT /v1/channels/{channel_id}/read-cursor`; the request must name zero or a
+sequence already committed in that channel. A stale replay returns the current
+higher cursor rather than moving it backwards, and a future cursor is rejected.
+
+`GET /v1/conversations/attention` is agent-owned and returns one exact
+projection per membership: the cursor, latest channel sequence, unread count,
+first unread sequence, and the corresponding count and first sequence for
+messages sent by another participant whose `recipient_id` is that participant.
+It does not count the participant's own messages, inspect message content, or
+infer urgency. Operator authority cannot read or mutate another participant's
+attention state.
+
 `CreateChannel.members` accepts exact agent and delivery-mode pairs in the same
 atomic creation transaction. Duplicate agents across either initial input are
 rejected. Re-adding an exact membership is idempotent; a different mode
@@ -234,6 +249,20 @@ message ID. The first completion returns `201 Created`; an identical replay,
 including after lease expiry or restart, returns the original invocation and
 message with `200 OK`. Changed result content returns `409 Conflict` and replay
 does not emit another live notification.
+
+A worker may reconcile the recipient's durable inbox while a harness turn is
+active. Under the default conversational policy, a newer claimable accepted
+message committed in the same channel after that turn began requests fenced
+harness cancellation. This does not lock the channel or mutate either source
+message. Known quiescent terminal evidence completes the older invocation with
+an ordinary causally linked result whose payload reports `interrupted` and
+identifies the newer message; the newer delivery remains pending until it is
+reserved normally. The worker retires the quiescent native session generation
+before reserving that delivery and opens a fresh generation from durable
+channel history; a harness's private state is not assumed reusable after
+cancellation. Unknown or non-quiescent cancellation follows the existing
+blocked-delivery path. This policy belongs to the worker adapter and is not a
+seventh kernel concept.
 
 Delivery is at-least-once. The stable message ID is the idempotency key for
 external effects; fleetd does not claim exactly-once execution across another

@@ -170,13 +170,25 @@ is not an operating-system security sandbox. See
 [ADR 0004](adr/0004-out-of-process-plugins.md) and the
 [lifecycle contract](contracts/plugin-lifecycle-v1.md).
 
+Inference uses that same outer lifecycle and a separate experimental typed
+interface. A backend plugin owns one model-server process, proves its exact
+version, waits for a credential-free loopback health endpoint and exact
+OpenAI-compatible model route, and returns only route plus process/profile
+identity. The machine supervisor shares one backend instance across dependent
+agent profiles and injects the resolved descriptor into each harness plugin.
+The kernel, execution crate, daemon API, and browser know no backend vendor or
+model semantics. See
+[ADR 0037](adr/0037-inference-is-a-shared-machine-resource.md).
+
 ## Harness boundary
 
 ACP is an inner harness interoperability protocol. Fleetd's current harness
-plugins negotiate the operational interfaces `fleetd.harness-acp@0.1.0` and
-`fleetd.harness-acp@0.2.0`, whose typed methods cover description, session
-open/resume, fenced turn start, permission resolution, cancellation, ordered
-events, terminal evidence, close, and transcript retrieval.
+plugins negotiate `fleetd.harness-acp@0.1.0`, whose typed methods cover
+description, session open/resume, fenced turn start, permission resolution,
+cancellation, ordered events, terminal evidence, and close. A runtime that
+advertises ACP `session/load` also negotiates `fleetd.harness-acp@0.2.0` for
+transcript retrieval; a resumable runtime without replay remains a truthful
+turn-only integration.
 
 Adoption and retrieval use different ACP methods on purpose. Resuming a session
 sends `session/resume`, which must not replay the conversation; retrieving a

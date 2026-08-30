@@ -27,6 +27,10 @@ Each item below is exercised by a reproducible record, not a design note.
 - **Continuous harness workers** that reserve work, fence dispatch, drain a
   turn, settle atomically, and restart under supervision —
   [worker guide](docs/WORKER.md).
+- **Shared machine-local inference resources.** Approved profiles can reference
+  one supervised backend process shared by several agents; experimental
+  MLX-VLM and llama.cpp plugins own strict launch and readiness policy behind
+  the same typed loopback-route interface.
 - **Real agent-to-agent loops.** A → B → A with preserved correlation and
   causation, through a narrow invocation-scoped grant that never hands a
   harness a bearer credential —
@@ -34,6 +38,9 @@ Each item below is exercised by a reproducible record, not a design note.
 - **Humans in the same conversation** as autonomous seats, through a real
   browser stream, without accumulating leased work —
   [record](docs/qualification/live-human-agent-conversation-2026-08-25.md).
+- **Durable personal attention** from membership cursors and immutable message
+  envelopes: exact unread and explicitly addressed counts that stale clients
+  cannot rewind.
 - **Native session continuity** across daemon, worker, and harness replacement,
   under owner epochs that fence the stale owner —
   [ADR 0010](docs/adr/0010-durable-session-bindings-and-owner-epochs.md).
@@ -152,16 +159,17 @@ executable directly with an empty environment, owns its complete process group,
 and gives it neither Fleetd credentials nor ambient secrets.
 
 Lifecycle initialization returns plugin identity plus exact operational
-interfaces. Current harness integrations implement
-`fleetd.harness-acp@0.1.0` and `fleetd.harness-acp@0.2.0`; those interfaces
-identify the typed wire contract for session open/resume, fenced turns,
-permission resolution, events, close, and transcript retrieval.
+interfaces. Current harness integrations implement `fleetd.harness-acp@0.1.0`;
+runtimes that can replay through ACP `session/load` additionally implement
+`fleetd.harness-acp@0.2.0` for transcript retrieval. Those interfaces identify
+the typed wire contract for session open/resume, fenced turns, permission
+resolution, events, close, and, where declared, transcript retrieval.
 It makes no claim about what semantic work a model or agent can perform.
 
 The workspace contains:
 
 - a policy-free ACP host library built on the authoritative Rust SDK;
-- independently identified OpenCode and Codex harness plugins;
+- independently identified OpenCode, Codex, and DeepSeek Harness plugins;
 - a development ACP reference plugin;
 - a continuous worker that composes inbox reservation, durable session
   acquisition, owner epochs, dispatch fencing, turn drain, atomic completion,
@@ -176,6 +184,34 @@ cp examples/worker.opencode.example.json .fleetd/worker.json
 cargo run --bin fleetd -- worker run --db .fleetd/fleetd.db \
   --config .fleetd/worker.json
 ```
+
+For the conversation product, use an owner-only catalog of approved runtime
+profiles and let one local supervisor reconcile every configured agent:
+
+```sh
+cp examples/worker-profiles.example.json .fleetd/worker-profiles.json
+chmod 600 .fleetd/worker-profiles.json
+cargo run --bin fleetd -- worker supervise \
+  --profiles /absolute/path/to/.fleetd/worker-profiles.json
+```
+
+The agent directory can then select a profile, set standing instructions,
+start, stop, or restart the identity. The page never receives launch details;
+it stores only a reference to a machine-approved profile. Membership remains
+conversation, not a workflow graph: an active identity listens for its exact
+inbound message kinds wherever it participates and keeps a native session per
+channel.
+
+Catalog schema 2 may also declare shared inference backends. A profile names
+one backend ID; the supervisor starts that backend once, waits until its health
+and exact `/v1/models` route pass, injects the resolved loopback route into the
+harness plugin, and reuses the model load across every agent selecting it. The
+workspace includes strict MLX-VLM and llama.cpp integrations for the draft
+`fleetd.inference-openai@0.1.0` interface. Their executable-shaped contract
+tests pass, and MLX-VLM has completed one real-runtime Qwen qualification;
+llama.cpp remains open, so the interface is not yet stable. See
+[ADR 0037](docs/adr/0037-inference-is-a-shared-machine-resource.md) and the
+[draft contract](docs/contracts/inference-openai-v0.1-draft.md).
 
 One seat is serialized and defaults to one native harness session per channel
 and working-directory identity. Compatible restarts adopt that session under a
@@ -251,7 +287,10 @@ polling fallback. Open it in an ordinary browser and connect explicitly, or
 build the [Electrobun desktop host](apps/conversation-desktop/README.md), which
 loads the same page in a native system webview and sources its two authorities
 from separate owner-only files. Neither target adds conversation semantics to
-the daemon. The
+the daemon. Desktop profile schema 2 also starts the machine-local agent
+supervisor and publishes only safe runtime-profile descriptors to the page, so
+agents can be configured directly from the directory without granting the
+webview arbitrary process-launch authority. The
 [served-presentation qualification](docs/qualification/live-conversation-presentation-reference-2026-08-25.md)
 drives the actual page through trusted WebKit input across browser, daemon,
 worker, and plugin replacement; its

@@ -15,6 +15,9 @@ grep 'fleetd-v0.1.0-aarch64-apple-darwin.tar.gz' SHA256SUMS | sha256sum -c -
 tar -xzf fleetd-v0.1.0-aarch64-apple-darwin.tar.gz
 install -m 0755 fleetd-v0.1.0-aarch64-apple-darwin/bin/fleetd /usr/local/bin/fleetd
 install -m 0755 fleetd-v0.1.0-aarch64-apple-darwin/bin/fleetd-harness-opencode /usr/local/bin/fleetd-harness-opencode
+install -m 0755 fleetd-v0.1.0-aarch64-apple-darwin/bin/fleetd-harness-deepseek /usr/local/bin/fleetd-harness-deepseek
+install -m 0755 fleetd-v0.1.0-aarch64-apple-darwin/bin/fleetd-inference-mlx-vlm /usr/local/bin/fleetd-inference-mlx-vlm
+install -m 0755 fleetd-v0.1.0-aarch64-apple-darwin/bin/fleetd-inference-llama-cpp /usr/local/bin/fleetd-inference-llama-cpp
 ```
 
 On macOS, replace the checksum command with
@@ -69,7 +72,43 @@ fleetd channel create --name project-001 \
   --member SUBMITTER_ID --member PILER_ID
 ```
 
-## Configure and start a worker
+## Configure and start agent execution
+
+The conversation desktop can make membership executable without exposing
+launch authority to its page. Copy `examples/worker-profiles.example.json`, set
+the absolute workspace, approved harness details, and one backend block, then
+protect it:
+
+```sh
+cp examples/worker-profiles.example.json .fleetd/worker-profiles.json
+chmod 600 .fleetd/worker-profiles.json
+fleetd worker supervise \
+  --profiles /absolute/path/to/.fleetd/worker-profiles.json
+```
+
+Point the desktop profile at that catalog, the fleet configuration, and the
+absolute `fleetd` executable. In the agent directory choose **Set up**, select
+an approved runtime profile, write the agent's standing instructions, and save
+it as running. The same controls stop or restart it. Executable paths, model
+configuration, tool grants, and credentials remain private to the host.
+
+Catalog schema 2 separates agent profiles from shared machine inference. The
+example contains MLX-VLM and llama.cpp backend shapes. Keep only the backend and
+profile you have installed, pin the exact runtime versions and model paths, and
+leave its endpoint on the explicit loopback address. The supervisor starts one
+backend for every running profile that references it, verifies health plus the
+exact model route, then starts the dependent harnesses. Several agents using
+the same backend ID share the model-server process but retain independent
+harness sessions and Fleetd identities.
+
+The example profiles also enable conversational interruption. If another
+accepted message is addressed to the same agent and channel after its turn has
+started, the worker cancels that turn, retires the cancellation-tainted native
+session, and handles the newer message in a fresh session built from refreshed
+durable channel history. Set `turn.interrupt_on_new_message` to `false` when a
+profile consumes independent queued jobs instead.
+
+For a one-seat terminal qualification instead, use the original manual path.
 
 Copy `examples/worker.opencode.example.json` from the source or release
 archive. Set the exact worker agent ID, absolute workspace and executable
@@ -103,6 +142,16 @@ Watch the immutable conversation or list its current history:
 ```sh
 fleetd --token-file .fleetd/submitter.token message watch --channel CHANNEL_ID
 fleetd --token-file .fleetd/submitter.token message list --channel CHANNEL_ID
+```
+
+Read personal attention state with the participant credential, then advance
+one channel after its messages have been observed. The cursor is monotonic and
+survives daemon and client restarts:
+
+```sh
+fleetd --token-file .fleetd/submitter.token message attention
+fleetd --token-file .fleetd/submitter.token message read \
+  --channel CHANNEL_ID --through MESSAGE_SEQ
 ```
 
 The worker publishes a causally linked result and atomically acknowledges the

@@ -18,6 +18,51 @@ The configuration file contains locations, never credentials. Operator and
 agent token files must remain owner-only. Worker desired state must not contain
 a Fleetd bearer or provider secret.
 
+An approved worker-profile catalog is launch authority and must also be an
+owner-only regular file. `fleetd worker supervise --profiles ABSOLUTE_PATH`
+resolves durable agent-seat profile references against that local file. The
+public surface never returns or accepts an executable, arguments, environment,
+tool grants, or harness credentials. It accepts only a profile ID, standing
+instructions, desired state, and explicit restart. Unknown profile IDs remain
+stopped on that machine.
+
+Catalog schema 2 may contain a private `inference_backends` registry. Backend
+entries are launch authority just like harness entries and never cross the
+browser boundary. A running agent profile may reference one backend ID. The
+supervisor starts one instance shared by all current consumers, admits it only
+after version, health, and exact model-route checks, and stops dependent seats
+if that resource becomes unavailable. An unused backend is stopped after its
+last dependent seat. Model-server logs and provider-native metrics are not
+copied into SQLite.
+
+The conversation desktop profile schema 2 can start this supervisor beside the
+native window. It names the absolute fleet config, `fleetd` executable, and
+worker-profile catalog; the webview receives only safe profile labels and
+descriptions. Schema 1 remains valid but provides no in-product setup choices.
+
+## Participant attention
+
+Attention is participant-owned rather than operator-owned. Use an agent token
+to list the exact unread state for every channel that participant belongs to:
+
+```sh
+fleetd --token-file .fleetd/human.token message attention
+```
+
+After presenting messages through an exact channel sequence, advance that
+membership's durable cursor:
+
+```sh
+fleetd --token-file .fleetd/human.token message read \
+  --channel CHANNEL_ID --through MESSAGE_SEQ
+```
+
+The update is monotonic, so a stale device cannot erase newer progress. A
+sequence beyond the newest committed message in that channel is rejected.
+Unread and explicitly addressed counts are derived from immutable envelopes;
+Fleetd does not infer urgency from content. The operator credential cannot read
+or change a participant's personal cursor.
+
 ## Health and traces
 
 `fleetd status` reads `/v1/fleet-health`: the latest durable plugin generation
@@ -41,10 +86,23 @@ Plugin health has three exact values:
 - `stale`: the generation still claims active ownership but missed that bound;
 - `stopped`: Fleetd recorded terminal shutdown evidence.
 
+These durable generation values currently describe harness plugins. The new
+inference backend lifecycle is machine-supervisor state and appears in the
+supervisor log; it does not yet have a durable operator read model. Do not infer
+backend health from a harness generation alone. Durable backend generations and
+live operator events are follow-on work after the experimental interface is
+qualified against real runtimes.
+
 A hard-killed worker initially leaves a stale generation. Its replacement
 creates a new generation and, when compatible, adopts the native-session lane
 under a higher owner epoch. `fleetd trace --invocation ID` joins the exact
 invocation to the generation and binding that executed it.
+
+`Ctrl-C` and `SIGTERM` request bounded worker shutdown. If a harness turn is
+active, Fleetd sends fenced cancellation and drains terminal evidence before
+stopping the plugin generation. A known quiescent cancellation is settled as
+`host_worker_shutdown`; a cancellation that cannot prove its outcome is
+blocked for operator review rather than replayed.
 
 ## Reading what an agent actually did
 

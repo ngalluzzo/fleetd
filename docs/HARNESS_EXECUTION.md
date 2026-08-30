@@ -485,7 +485,9 @@ Cancellation is a protocol, not a signal:
 1. controller fences the invocation as cancelling;
 2. ACP host sends ACP `session/cancel`;
 3. ACP host continues accepting final `session/update` tool events;
-4. permission requests are answered as cancelled;
+4. permission requests are answered by the configured controller policy;
+   `deny` cancels, while `allow_once` can select only one typed ACP one-shot
+   option and is invalid without an OS sandbox;
 5. original prompt reaches a cancelled terminal response;
 6. only then is the session quiescent and reusable.
 
@@ -536,8 +538,10 @@ There are three different credential classes:
 The preferred privileged-action path is a controller-spawned MCP sidecar with
 an invocation grant. The harness can call it, but model-run shell commands do
 not inherit the fleet credential. This is authority minimization, not an OS
-sandbox: same-UID processes may still inspect user-readable files unless a
-stronger sandbox is added.
+sandbox. A profile may additionally wrap the complete plugin process group in
+the macOS Seatbelt boundary described in
+[ADR 0034](adr/0034-os-level-harness-sandboxing.md). Omission retains the
+legacy same-UID reach and therefore cannot be combined with one-shot approval.
 
 The outer harness plugin starts with an empty environment. Its shared host
 launches an absolute ACP executable without a shell, while the vendor plugin
@@ -620,7 +624,8 @@ The first vertical slice now implements:
    record. A content-addressed artifact sink remains pending.
 6. **Managed settlement.** The turn controller arms before prompt dispatch,
    independently enforces the wall deadline, denies permission requests by
-   default, atomically completes known quiescent output, and parks every
+   default, can select only a typed ACP `allow_once` option for an OS-sandboxed
+   profile, atomically completes known quiescent output, and parks every
    post-arm protocol ambiguity.
 7. **Durable session ownership.** Session references, lane configuration,
    generations, controller-instance owners, owner epochs, active turns,

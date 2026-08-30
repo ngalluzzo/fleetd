@@ -3,6 +3,20 @@
 - Status: accepted
 - Date: 2026-08-28
 
+Implementation began on 2026-08-29 with a macOS Seatbelt boundary around the
+complete plugin process group. The later, deliberately separate decision to
+resolve only typed ACP `allow_once` options when that boundary is present is
+recorded in
+[ADR 0038](0038-one-shot-acp-permission-requires-an-os-boundary.md). Linux,
+Windows, and destination-level network policy remain open.
+
+The strict profile also admits writes to the literal `/dev/null` device. A
+real Claude/Git dogfood turn showed that Git opens this sink with `O_RDWR`
+while sanitizing inherited standard descriptors; denying it made even
+read-only `git status` fail before repository access. The policy still denies
+all other undeclared writes, and the changed profile bytes rotate the sandbox
+compatibility digest.
+
 ## Context
 
 Fleetd launches a harness as a supervised child process and is careful about how.

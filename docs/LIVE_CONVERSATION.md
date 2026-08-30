@@ -46,12 +46,56 @@ an immutable operational membership property and never infers it from agent
 metadata. See [ADR 0023](adr/0023-membership-delivery-mode.md) and the
 [stable membership contract](contracts/channel-membership-delivery-v1.md).
 
-Channel visibility follows the familiar team-room model: every member sees the
+Channel visibility follows the shared-channel model: every member sees the
 same ordered log, including messages addressed to a particular teammate.
 `recipient_id` affects inbox delivery, not channel visibility. Private exchange
 uses a two-member direct conversation rather than a hidden message inside a
 shared channel. See
 [ADR 0027](adr/0027-channel-visible-addressed-messages.md).
+
+## Addressing and mentions
+
+An inline `@name` is presentation sugar over the existing structured
+`recipient_id`; the client resolves a suggestion from current membership and
+sends the exact stable agent ID. The visible text remains ordinary message
+content. In a shared channel, no selected mention sends a broadcast and every
+current `inbox` member receives durable work. One selected mention creates work
+only for that member. Direct conversations resolve their single peer without a
+mention. Deleting or clearing a selected mention returns the shared-channel
+composer to broadcast.
+
+Agent turns receive the complementary read-only projection: a bounded current
+member roster with exact IDs and a bounded window of shared history immediately
+before the triggering message. The source message remains separate and exact.
+An agent with the invocation-scoped messaging grant can therefore address a
+peer already in the channel; Fleetd still derives sender, channel, correlation,
+causation, and idempotency. Only the deliberate addressed message creates new
+peer work. No workflow state or assignment graph is introduced.
+
+## Durable human attention
+
+The human participant's membership carries one monotonic read cursor. Existing
+members and members joining an established channel begin at that channel's
+current end, so introducing attention does not turn the archive into unread
+work. Unread state is derived from later messages by other participants and the
+immutable channel log; direct attention is the strict subset whose structured
+`recipient_id` is the human. Fleetd does not classify prose, infer importance,
+or expose one participant's read state through operator authority.
+
+The presentation reads all personal conversation attention on connection,
+periodically while attended, and when the window regains focus. Channel
+navigation shows exact unread counts and visually distinguishes explicit
+addressing. Opening a conversation retains its first unread boundary and moves
+the message view there. The durable cursor advances only through messages whose
+leading edge has entered the visible message pane while the authoritative
+stream is live and the document is visible and focused. A stale client cannot
+rewind a cursor advanced on another machine; messages committed after an
+advance remain unread.
+
+This is return-to-work state, not execution telemetry. It adds no typing,
+working, waiting, task, or priority inference, and it does not poll operator
+observations. Native notifications remain a presentation concern above this
+durable source.
 
 ## Human-to-agent turn
 
@@ -81,6 +125,17 @@ Native harness sessions remain scoped to the agent, channel, and working
 directory. Follow-up messages in one channel therefore resume the same durable
 conversation lane without making the channel log depend on a harness's private
 transcript.
+
+If an accepted follow-up is committed after that agent's turn begins, the
+default conversational worker asks the harness to cancel the active turn. A
+known quiescent cancellation is recorded as an interrupted result linked to
+the newer message. The worker then retires that native session generation and
+opens a fresh one for the newer message; continuity comes from fresh durable
+channel history, not from trusting private state after cancellation. Humans
+and other agents can keep appending throughout; only the addressed seat's
+active turn is replaced. Pre-existing backlog is still processed in durable
+order, and a cancellation whose external outcome is uncertain blocks instead
+of being silently replayed.
 
 ## Live transport requirements
 

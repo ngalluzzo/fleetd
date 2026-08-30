@@ -53,17 +53,27 @@ kind establishes eligibility only. The envelope adapter preserves the payload
 without inferring semantics; an external adapter that interprets it remains
 responsible for validating its exact contract.
 
+Before the envelope adapter prepares the turn, execution reads a bounded
+projection of the same channel: up to 64 current members, prioritized to retain
+the worker and source sender, and the newest contiguous history before the
+source message, limited to 32 messages and 64 KiB of exact encoded envelopes.
+The prompt names either truncation explicitly. The source message remains a
+separate exact field and is never replaced by the context window. This is a
+read-only projection of existing membership and immutable messages, not copied
+workflow state. It lets a worker discover exact peer IDs for an
+invocation-scoped durable send while preserving channel-wide visibility.
+
 The public unfiltered inbox claim and invocation-reservation APIs retain their
 existing behavior. Exact-kind reservation is an internal trusted-worker path,
 not a new bearer-authorized API.
 
 ## Session compatibility
 
-The acceptance schema version and sorted exact kind set participate in the
-worker's session compatibility digest. Changing either rotates the binding
-generation instead of silently resuming native conversational state under a
-different input policy. Reordering an otherwise identical set does not rotate
-the generation.
+The acceptance schema version, sorted exact kind set, and envelope presentation
+generation participate in the worker's session compatibility digest. Changing
+any of them rotates the binding generation instead of silently resuming native
+conversational state under a different input or context policy. Reordering an
+otherwise identical set does not rotate the generation.
 
 The emitted `result_kind` is independent. A result is not automatically added
 to inbound acceptance; a seat consumes it only when its adapter explicitly

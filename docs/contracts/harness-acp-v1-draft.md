@@ -5,12 +5,13 @@ acceptance matrix passes.
 
 This typed protocol adapter is carried over Fleetd's plugin lifecycle JSON-RPC
 transport. It wraps one ACP client connection with Fleetd ownership, fencing,
-deadlines, and evidence. Plugins advertise the exact operational interfaces
-`fleetd.harness-acp@0.1.0` and `fleetd.harness-acp@0.2.0`; the `harness.acp.*`
-names below are their typed methods. Interface identity is matched by equality
-rather than by SemVer range, so both are declared and a host requiring either
-negotiates. `0.2.0` adds transcript retrieval and nothing else; it stays
-unstable until two independent integrations have qualified against it.
+deadlines, and evidence. Plugins advertise the exact operational interface
+`fleetd.harness-acp@0.1.0`; a runtime that advertises ACP `session/load` also
+advertises `fleetd.harness-acp@0.2.0`. The `harness.acp.*` names below are their
+typed methods. Interface identity is matched by equality rather than by SemVer
+range. `0.2.0` adds transcript retrieval and nothing else, so a resumable
+runtime without replay must not declare it. It stays unstable until two
+independent integrations have qualified against it.
 The adapter is deliberately smaller than ACP and is not an arbitrary protocol
 tunnel. It makes no semantic claim about the work an agent can perform.
 
@@ -381,6 +382,11 @@ the host reason and the native response's claim is preserved separately as
 that drain, or after the drain deadline classifies the outcome as unknown and
 the ACP process group is terminated.
 
+The current host reasons are `wall_deadline`, `worker_shutdown`, and
+`newer_message`. Reasons are operational diagnostics rather than workflow
+semantics; a driver must preserve and enforce cancellation for any valid reason
+instead of maintaining an allowlist.
+
 ## `harness.acp.turn.terminal`
 
 Plugin notification:
@@ -584,6 +590,13 @@ Close is allowed only when the binding is not active. If the inner ACP runtime
 does not support session close, the driver may still report
 `ownership_retired: true` with `native_resources_released: false`. That
 distinction is retained as evidence.
+
+After a known-quiescent `newer_message` cancellation, the host retires the
+exact durable binding and closes this native session before handling the newer
+delivery. A new binding generation and `harness.acp.session.open` provide the
+replacement; durable channel history carries continuity across that boundary.
+If close does not confirm ownership retirement, the host replaces the plugin
+generation rather than reusing cancellation-tainted session state.
 
 ## Supervisor-synthesized terminal evidence
 

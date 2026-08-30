@@ -20,9 +20,11 @@
 - [x] Durable unknown-outcome parking with operator-only resolution.
 - [ ] Qualify two independently versioned vendor harness plugins against the
   complete `fleetd.harness-acp@0.1.0` and `@0.2.0` matrix. OpenCode is the first
-  production-shaped integration; Codex still needs real-runtime qualification.
-  `0.2.0` adds transcript retrieval and has so far only been exercised against a
-  mock ACP runtime, so it raises this bar rather than clearing any of it.
+  production-shaped integration; Codex and DeepSeek Harness still need
+  real-runtime qualification. DeepSeek currently omits ACP `session/load` and
+  therefore truthfully implements only `0.1.0`; `0.2.0` adds transcript
+  retrieval and has so far only been exercised against a mock ACP runtime, so
+  it raises this bar rather than clearing any of it.
 - [x] Persist plugin-generation and bounded invocation-event evidence rather
   than keeping it only in controller memory and harness transcripts.
 
@@ -32,8 +34,15 @@
   credentials in the harness.
 - [x] Bounded A → B → A run with exact correlation and causation lineage.
 - [x] Resume the originating native session after worker restart.
+- [x] Interrupt an active conversational turn when newer accepted input is
+  committed in the same channel, retire the interrupted native session, then
+  continue the durable lane in a fresh session from refreshed history without
+  blocking other participants.
 - [x] Explicit inbound message-kind acceptance so results do not recursively
   become new work.
+- [x] Make agent membership executable through durable desired state and a
+  machine-private approved runtime catalog, with in-product start, stop, and
+  restart controls rather than a workflow graph.
 - [ ] Run several real seats continuously against one daemon for a full night
   while recording restart, latency, throughput, and ambiguity evidence.
 - [x] Add operator-visible plugin-generation, session, and invocation
@@ -48,6 +57,13 @@
   semantic compiler dependency in Fleetd.
 - Stabilize the plugin authoring SDK only after two independent integrations
   pass the same operational-interface suite.
+- [x] Introduce the experimental `fleetd.inference-openai@0.1.0` lifecycle and
+  route interface, with independently identified MLX-VLM and llama.cpp plugin
+  packages, strict vendor-owned configuration, shared machine supervision, and
+  executable-shaped contract tests.
+- [ ] Complete the remaining llama.cpp real-runtime qualification; MLX-VLM's
+  Qwen3.8 27B lifecycle, real turn, direct follow-up, and restart-resumption
+  proof passed on 2026-08-28.
 - Keep Git, GitHub, GitLab, issue trackers, and model servers in external
   adapters or agent tools; do not add repository or workflow semantics to the
   daemon.
@@ -82,6 +98,8 @@
   daemon, worker, and harness restart.
 - [x] Qualify the served conversation presentation through trusted WebKit user
   input, exact rendered envelopes, and credential-free ephemeral storage.
+- [x] Durable participant-owned read cursors with exact unread and explicitly
+  addressed projections across client and daemon restarts.
 - [ ] A separately versioned live operator-event subscription for bounded
   invocation activity; do not encode activity as synthetic channel messages.
 - [x] Productized local initialization, worker/plugin status, delivery views,
@@ -103,8 +121,13 @@
   invocations, where compaction, pruning, or a rewritten prompt could break the
   key that makes it exact.
 - [ ] Bound a harness at the OS level rather than by its own good behaviour
-  ([ADR 0034](adr/0034-os-level-harness-sandboxing.md)). Fleetd is careful about
-  what it hands a harness and enforces nothing about what the harness then
-  reaches; the permission refusal holds only as far as a harness chooses to ask.
-  Deliberately not next: nothing outside this machine feeds a seat yet.
+  ([ADR 0034](adr/0034-os-level-harness-sandboxing.md)). The macOS Seatbelt
+  foundation now wraps the complete plugin process group, and a real syscall
+  test proves declared writes succeed while a sibling write is denied. Typed
+  ACP `allow_once` resolution is available only under that boundary
+  ([ADR 0038](adr/0038-one-shot-acp-permission-requires-an-os-boundary.md)).
+  This remains open until a real vendor write turn passes, outbound provider
+  traffic is destination-bounded, and the non-macOS posture is explicit. The
+  first Claude qualification failed closed before any event because its local
+  subscription credential had expired; no repository or canary write occurred.
 - Remote workers only after authenticated encrypted transport and enrollment.

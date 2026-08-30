@@ -5,6 +5,62 @@ controller process that opens the same SQLite database as `fleetd serve`, owns
 one harness plugin generation, and serially consumes one agent inbox. It does
 not add harness concepts to the public API or messaging kernel.
 
+For the conversation product, `fleetd worker supervise` is the normal host. It
+reconciles every durable agent-seat configuration against a private local
+catalog of approved profiles. Adding an agent to a channel does not prescribe a
+sequence or create a task: it gives that stable identity a place to converse.
+Selecting a profile makes the identity executable wherever it participates,
+while its native harness session remains separate per channel.
+
+## Supervise configured agents
+
+Copy the approved-profile example, replace every placeholder, and keep it
+owner-only because it controls which local executables and tools may run:
+
+```sh
+cp examples/worker-profiles.example.json .fleetd/worker-profiles.json
+chmod 600 .fleetd/worker-profiles.json
+fleetd worker supervise \
+  --profiles /absolute/path/to/.fleetd/worker-profiles.json
+```
+
+The catalog owns executable paths, plugin configuration, model selection,
+working directories, inbound message kinds, and tool grants. The operator API
+and conversation page can only store and send a profile ID, standing
+instructions, `running` or `stopped`, and a restart revision. Consequently a
+browser-held operator credential cannot turn a request body into an arbitrary
+process launch. A configured profile absent from the host catalog does not run
+and is reported in the supervisor log.
+
+Schema 2 can separate inference from the harness profile. Its private
+`inference_backends` list contains strict backend plugin configuration; a
+profile selects one by `inference_backend` ID. The supervisor starts the model
+server before any dependent harness, waits for the configured loopback health
+and exact OpenAI-compatible model route, and injects only the typed description
+into the harness plugin. It starts one backend per ID, so several agent
+identities can share an expensive model load without sharing a native harness
+session. When that backend fails, dependent workers stop before bounded backend
+restart.
+
+The first integrations are `fleetd.inference.mlx-vlm` and
+`fleetd.inference.llama-cpp`. They share
+`fleetd.inference-openai@0.1.0`, while each owns its native flags, version
+probe, environment allowlist, profile digest, health URL, and metrics format.
+The MLX-VLM integration additionally owns explicit `enable_thinking` and
+`thinking_budget` launch settings. They are backend defaults and therefore
+apply to every profile sharing that backend ID.
+No generic argument or environment field exists. The interface remains a draft
+until both pass fresh real-runtime qualification. MLX-VLM's first Qwen proof is
+[recorded](qualification/inference-mlx-vlm-qwen-2026-08-28.md); see the
+[contract](contracts/inference-openai-v0.1-draft.md) for the remaining bar.
+
+The supervisor owns at most one reconciler per database on a machine. A real
+configuration change or explicit restart advances the durable revision; the
+supervisor drains the old worker safely and starts the selected profile with
+the same agent identity. Stopping cancels between turns, preserving the
+worker's existing conservative settlement rules. The manual `worker run`
+command remains useful for qualification and transcript operations.
+
 ## Start one seat
 
 Build the daemon and the selected harness plugin, copy its desired-state
@@ -35,8 +91,16 @@ compatibility and changing it rotates the binding generation. See the
 The worker configuration schema is versioned and rejects unknown fields. Each
 harness plugin then validates its own opaque configuration with a strict
 plugin-owned schema. Never put a fleetd bearer credential, provider key, or
-other secret in this file. The plugin process starts with an empty environment;
-the selected plugin constructs only the native settings its integration owns.
+other secret in this file. The plugin process starts with an empty environment.
+A vendor plugin may point its harness at an explicit private state directory;
+that harness, not Fleetd desired state, owns any provider credentials stored
+there.
+
+An optional `instructions` string supplies standing guidance to the envelope
+adapter. It is bounded to 32 KiB, remains outside the kernel and immutable
+message history, and is presented alongside the adapter's fixed safety and
+addressing preamble. In the supervised path it comes from the durable seat
+configuration; a profile may not preselect either the agent ID or instructions.
 
 Harness configuration is plugin-owned. The OpenCode plugin accepts a typed
 model route and exact executable/version, constructs native configuration
@@ -47,6 +111,32 @@ use it as a production vendor adapter. By default the worker resumes only an
 exact observed profile digest. Set `compatibility_digest` only after a
 separately qualified set of profiles has proven native-session compatibility.
 
+The DeepSeek Harness plugin has two mutually exclusive model routes. For a
+DSH-owned remote provider, configure the exact native pair directly:
+
+```json
+{
+  "provider": "zai",
+  "model": "glm-5.3"
+}
+```
+
+The private `dsh_home` must already contain the DSH-managed provider settings
+and credential created through DSH. Fleetd preserves `settings.yaml` and
+`.credentials.yaml`, passes no raw provider key in plugin configuration or the
+child environment, and pins the selected provider/model in the generated ACP
+profile. Provider protocol, model metadata, reasoning levels, and credential
+resolution remain DSH-owned. Changing the selected provider/model changes the
+Fleetd profile identity.
+
+The other DSH route consumes a supervisor-injected `inference` descriptor for a
+Fleetd-managed local model server. In that mode, `provider` and `model` are
+absent, DSH settings and credentials are disabled, and the profile must supply
+the exact local `reasoning_effort`, `max_output_tokens`, `context_window`, and
+`stream_idle_timeout_ms`. The two modes cannot be combined. This keeps remote
+provider credentials in their native harness while retaining one shared local
+model load for Qwen and other machine-hosted models.
+
 For a local OpenAI-compatible model server, the OpenCode plugin also accepts a
 typed `openai_compatible` block. It requires a credential-free explicit
 loopback HTTP address, constructs the native
@@ -56,6 +146,27 @@ version participate in the effective profile digest. The plugin denies
 OpenCode's nested `task` permission: nested subagent activity is not admitted
 until its tools, progress, cancellation, and budgets are visible through the
 same typed Fleetd evidence boundary.
+
+For one of those compatible routes, optional `reasoning_effort` is a typed
+OpenCode harness setting with the exact values `none`, `minimal`, `low`,
+`medium`, `high`, or `xhigh`. OpenCode sends it on every model request. The
+backend still owns its concrete behavior: for MLX-VLM, an effort other than
+`none` enables thinking, while `thinking_budget` supplies the enforceable
+thinking-token ceiling. Both settings participate in their owning plugin's
+profile digest; changing either conservatively rotates the native session.
+The qualified Qwen3.8 MLX template accepts `low`, `medium`, or `xhigh`; it
+rejects `high`, so the MLX Qwen example uses `xhigh`.
+MLX-VLM 0.6.15 rejects a hard `thinking_budget` when a speculative draft model
+is active. The MLX integration rejects that combination during initialization;
+choose the budget ceiling or speculative decoding rather than silently losing
+either control.
+
+In a supervised schema-2 profile, do not write that block. A referenced backend
+plugin supplies `inference` only after readiness, and OpenCode maps it to the
+same native provider mechanism under the fixed `fleetd-inference` provider ID.
+The resolved backend identity and profile digest participate in OpenCode's
+effective profile digest, so changing backend composition follows the existing
+conservative session-generation rules.
 
 `mcp_grants` is an allowlist of invocation-scoped runtime grant names, not MCP
 commands, URLs, credentials, or semantic claims. The current worker accepts
@@ -74,6 +185,94 @@ the same committed message. The agent cannot choose sender, channel,
 correlation, causation, or the durable idempotency key. See the
 [OpenCode qualification](qualification/message-grant-opencode-2026-08-24.md).
 
+## Sandbox and permission policy
+
+Mutation-capable seats can declare a macOS Seatbelt boundary in private worker
+desired state:
+
+```json
+{
+  "working_directory": "/absolute/isolated/checkout",
+  "additional_directories": [],
+  "sandbox": {
+    "kind": "macos_seatbelt",
+    "posture": "strict",
+    "read_access": "declared_and_system",
+    "read_only_directories": [
+      "/absolute/path/to/pinned/runtime"
+    ],
+    "writable_directories": [],
+    "network": "allow_outbound"
+  },
+  "turn": {
+    "permission_policy": "allow_once"
+  }
+}
+```
+
+Omitting `posture` and `read_access` preserves this existing `strict` shape.
+Strict remains deny-by-default: declared writable roots are read/write,
+explicit runtime roots are read-only, and `network` is `deny` or
+`allow_outbound`. Strict also permits writes to the literal device
+`/dev/null`; Git opens it read/write while sanitizing inherited standard file
+descriptors, and granting that single sink does not admit another filesystem
+path.
+
+Some local harnesses need ambient dependency reads and a private localhost
+listener before their ACP adapter can initialize. An operator may instead
+declare the narrower write-only claim explicitly:
+
+```json
+{
+  "sandbox": {
+    "kind": "macos_seatbelt",
+    "posture": "write_scoped",
+    "read_access": "unrestricted",
+    "network": "unrestricted",
+    "private_state_directory": "/absolute/seat-private/state",
+    "private_temp_directory": "/absolute/seat-private/tmp",
+    "writable_directories": []
+  }
+}
+```
+
+`write_scoped` is not hermetic and provides no read or network confidentiality.
+It starts from allow-default, denies every file write, then restores writes only
+to `/dev/null`, the working and additional directories, explicit writable
+directories, and the two private per-seat roots. The posture name and effective
+profile digest participate in session compatibility. Use it only when that
+write-confinement-only boundary is intentional; see
+[ADR 0039](adr/0039-write-scoped-seatbelt-is-write-confinement-only.md).
+
+`working_directory`, every `additional_directories` entry, and every explicit
+`writable_directories` entry are writable. `read_only_directories` exists for
+pinned runtimes and other exact launch dependencies. All paths must already be
+absolute directories; the filesystem root is refused. The plugin and every
+descendant it launches share the selected process-group sandbox. Only `strict`
+is deny-by-default; `write_scoped` is allow-default with deny-by-default writes.
+
+Under `strict`, `network` is either `deny` or `allow_outbound`. The latter is needed by a
+hosted model provider but currently permits every outbound destination; it is
+not a provider-domain allowlist. Do not claim network isolation for such a
+profile. `write_scoped` requires the honest value `unrestricted`, because its
+allow-default profile does not constrain inbound or outbound operations.
+Destination-filtered egress and non-macOS sandbox implementations are not yet
+available.
+
+The permission policy defaults to `deny`. `allow_once` is accepted only for an
+OS-sandboxed profile and selects exactly one ACP option whose typed kind is
+`allow_once`. Fleetd does not parse tool names, command text, paths, URLs, or
+adapter-specific option IDs, and never selects `allow_always`. Missing or
+ambiguous one-shot options are cancelled. The sandbox digest and permission
+policy participate in session compatibility, so changing either prevents
+silent native-session reuse. See
+[ADR 0038](adr/0038-one-shot-acp-permission-requires-an-os-boundary.md).
+
+Use a fully isolated clone for a Git-writing seat. A linked Git worktree keeps
+its object store, refs, and administrative files in the parent repository;
+granting enough access to commit would therefore widen the write boundary
+beyond the seat checkout.
+
 ## Turn and lane behavior
 
 The built-in envelope adapter passes the full immutable Fleetd message envelope
@@ -88,10 +287,26 @@ validation, implementation selection, prompt construction, result parsing, and
 conformance. See the [integration boundary](INTEGRATION_BOUNDARY.md).
 
 The lease must cover the configured wall timeout, cancellation drain timeout,
-and a 60-second settlement margin. Permission requests are denied by the
-controller, tool use is observed and cancelled at the configured budget, token
-budgets are not claimed, output capture is capped at 512 KiB, and all policy
-bounds are validated before a process starts.
+and a 60-second settlement margin. Permission requests are denied by default;
+an explicitly sandboxed seat may instead select only typed one-shot options.
+Tool use is observed and cancelled at the configured budget, token budgets are
+not claimed, output capture is capped at 512 KiB, and all policy bounds are
+validated before a process starts.
+
+Turns are interruptible by default. `turn.interrupt_on_new_message` controls
+whether a newer claimable message of an accepted kind, committed in the same
+channel after the active turn began, requests cancellation.
+`turn.interrupt_poll_interval_ms` controls the authoritative SQLite
+reconciliation cadence and defaults to 250 milliseconds. Existing backlog is
+not treated as an interruption: messages already present when a turn begins
+continue to drain in durable order. A clean cancellation settles the old turn
+with `status: "interrupted"`, `stop_reason: "host_newer_message"`, and the
+`interrupted_by_message_id`; the worker then retires that native session and
+opens a fresh generation for the newer message with refreshed shared history.
+The durable channel, rather than cancellation-tainted private session state,
+carries conversational continuity. Set the boolean to `false` for adapters
+whose accepted messages are independent queued jobs rather than conversational
+follow-ups.
 
 ## Failure semantics
 
@@ -123,11 +338,13 @@ bounds are validated before a process starts.
   shutdown outcome. Arming a turn atomically creates one fixed-size
   observation; ordered updates fold into counters, byte totals, and a chain
   digest rather than a second transcript store.
-- `Ctrl-C` is observed between turns. An armed turn is allowed to finish or
-  block before the child process group is shut down.
+- `Ctrl-C` and `SIGTERM` interrupt an armed turn through the same bounded
+  cancel-and-drain path. A known quiescent cancellation settles with
+  `host_worker_shutdown`; ambiguous cancellation blocks before the child
+  process group is shut down.
 
 The final JSON report includes generations, restarts, reservations,
-completions, blocks, safe pre-arm retries, and idle polls. Inspect durable
+completions, interruptions, blocks, safe pre-arm retries, and idle polls. Inspect durable
 ambiguity with `fleetd inbox blocked`; only an operator can requeue or abandon
 it. Operator credentials can inspect generation, session, and invocation
 evidence at `/v1/plugin-generations`, `/v1/session-bindings`, and
